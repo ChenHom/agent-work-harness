@@ -187,7 +187,8 @@ export class Orchestrator {
     // Codex 執行（§21）
     this.log(`attempt #${attempt.number} 執行中（${contract.mode}）…`);
     const skillPaths = admissions.filter((a) => a.allowed)
-      .map((a) => `${this.policy.skillsDir}/${a.skillId}`);
+      .map((a) => a.path)
+      .filter((p): p is string => Boolean(p));
     const prepared = this.driver.prepare({
       attemptId, workspace: work.workspace, mode: contract.mode,
       promptText: prompt.text, approvedSkillPaths: skillPaths,
@@ -211,7 +212,9 @@ export class Orchestrator {
       runWrite: contract.mode === 'write',
     });
 
-    const retryBudgetRemaining = Math.max(0, work.retryBudget - countRetries(attempts));
+    // 本次若是 retry，必須把自己算進已用次數，否則 budget 永遠用不完
+    const usedRetries = countRetries(attempts) + (opts?.retryOf ? 1 : 0);
+    const retryBudgetRemaining = Math.max(0, work.retryBudget - usedRetries);
     const decision = decideOutcome({
       mode: contract.mode, skillAdmissions: admissions,
       protocolOk: parsedResult.ok,

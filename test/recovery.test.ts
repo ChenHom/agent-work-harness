@@ -87,3 +87,37 @@ test('trace 記錄關鍵事件', () => {
   assert.ok(types.includes('decision.recorded'));
   h.store.close(); rmSync(h.base, { recursive: true, force: true });
 });
+
+test('Gate 5：process restart 後 work 狀態仍在（persistence）', () => {
+  const h = harness();
+  const work = h.orch.createWork({ request: '修東西，不要碰 secret', workspace: h.repo });
+  h.store.setWorkState(work.id, 'WAITING_USER');
+  h.store.close();
+
+  // 模擬 harness 重啟：重新開同一個 state dir
+  const reopened = new Store(h.policy.stateDir);
+  const after = reopened.getWork(work.id)!;
+  assert.equal(after.state, 'WAITING_USER');
+  assert.equal(reopened.getContract(work.id, 1)!.request, '修東西，不要碰 secret');
+
+  const orch2 = new Orchestrator(h.policy, reopened);
+  orch2.answer(work.id, '可以改 src/token');
+  assert.equal(reopened.getWork(work.id)!.state, 'ACTIVE');
+  assert.equal(reopened.getWork(work.id)!.currentContractVersion, 2);
+  reopened.close();
+  rmSync(h.base, { recursive: true, force: true });
+});
+
+test('Gate 2 C2：attempt 綁定 repository revision 與 contract snapshot hash', () => {
+  const h = harness();
+  const work = h.orch.createWork({ request: '修東西', workspace: h.repo });
+  h.store.insertAttempt({
+    id: 'A-1', workId: work.id, number: 1, mode: 'write', contractVersion: 1,
+    contractSnapshotHash: 'deadbeef', baseRevision: 'abc123', promptArtifactId: '',
+    runtime: 'codex', status: 'CREATED', startedAt: new Date().toISOString(),
+  });
+  const a = h.store.getAttempt('A-1')!;
+  assert.equal(a.baseRevision, 'abc123');
+  assert.equal(a.contractSnapshotHash, 'deadbeef');
+  h.store.close(); rmSync(h.base, { recursive: true, force: true });
+});

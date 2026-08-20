@@ -6,7 +6,7 @@ import type { GlobalPolicy } from '../types.ts';
 // §20.2/§20.3：Harness 宣告的 authority 必須對應 runtime 真正 enforce 的限制。
 // 本檔的設定全部來自 docs/spikes/2026-08-21-isolation-spike.md 的實測結果。
 
-const CODEX_CONFIG = (model?: string): string => [
+const CODEX_CONFIG = (model: string | undefined, skillMainFiles: readonly string[]): string => [
   model ? `model = "${model}"` : '',
   'approval_policy = "never"',
   '',
@@ -19,14 +19,16 @@ const CODEX_CONFIG = (model?: string): string => [
   '[shell_environment_policy]',
   'inherit = "core"',
   '',
+  // 只有 admission 通過的 skill 會出現在這裡；操作者的個人 skills 因 HOME 隔離而看不到。
+  ...skillMainFiles.flatMap((f) => ['[[skills.config]]', `path = "${f}"`, 'enabled = true', '']),
 ].filter(Boolean).join('\n');
 
 /** 建立 production 專用 HOME / CODEX_HOME（§21）。CODEX_HOME 不可放在 /tmp：codex 會拒絕建立 helper binaries。 */
-export function ensureRuntimeDirs(policy: GlobalPolicy): void {
+export function ensureRuntimeDirs(policy: GlobalPolicy, skillMainFiles: readonly string[] = []): void {
   for (const d of [policy.stateDir, policy.agentHome, policy.codexHome, policy.verificationHome, policy.skillsDir]) {
     mkdirSync(d, { recursive: true });
   }
-  writeFileSync(join(policy.codexHome, 'config.toml'), CODEX_CONFIG(policy.codexModel));
+  writeFileSync(join(policy.codexHome, 'config.toml'), CODEX_CONFIG(policy.codexModel, skillMainFiles));
   const operatorAuth = join(homedir(), '.codex', 'auth.json');
   const runtimeAuth = join(policy.codexHome, 'auth.json');
   // 已知取捨（DECISIONS D-08）：codex 需要自己的憑證，因此 agent 仍可讀到這一份，

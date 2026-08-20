@@ -50,6 +50,11 @@ export function compilePrompt(input: {
   if (contract.constraints.length) {
     authorityLines.push('', 'Constraints (verbatim from user):', ...contract.constraints.map((c) => `- ${c}`));
   }
+  const checks = input.snapshot.contract.verification.checks;
+  if (checks.length) {
+    authorityLines.push('', 'Harness will independently run these verification checks after you finish:',
+      ...checks.map((c) => `- ${c.id}: ${c.argv.join(' ')}${c.required ? ' (required)' : ''}`));
+  }
   if (contract.successCriteria.length) {
     authorityLines.push('', 'Success criteria (guidance; acceptance is decided by Harness verification):',
       ...contract.successCriteria.map((c) => `- ${c}`));

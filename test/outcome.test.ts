@@ -63,3 +63,10 @@ test('read attempt 不要求變更', () => {
     evidence: [gitEv([])], retryBudgetRemaining: 1 });
   assert.equal(d.outcome, 'SUCCESS');
 });
+
+test('retry budget 用盡後 RETRYABLE 轉 FAILED', () => {
+  const base = { mode: 'write' as const, skillAdmissions: [], protocolOk: true, runtimeResult: done,
+    evidence: [gitEv(['src/a.ts']), ev({ status: 'FAIL' })] };
+  assert.equal(decideOutcome({ ...base, retryBudgetRemaining: 1 }).outcome, 'RETRYABLE_FAILURE');
+  assert.equal(decideOutcome({ ...base, retryBudgetRemaining: 0 }).outcome, 'FAILED');
+});

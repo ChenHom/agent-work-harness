@@ -46,3 +46,11 @@ test('預設拒絕腳本與外部參照', () => {
   assert.match(a.reason, /腳本/);
   rmSync(base, { recursive: true, force: true });
 });
+
+test('admission 回傳 registry 中的實際路徑，供 driver 複製', () => {
+  const { base, skillDir, policy } = fixture();
+  approveSkill(policy, 'debugging', skillDir);
+  const a = admitSkills(policy, ['debugging'])[0]!;
+  assert.equal(a.path, skillDir);
+  rmSync(base, { recursive: true, force: true });
+});

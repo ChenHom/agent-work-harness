@@ -192,6 +192,7 @@ export interface SkillAdmission {
   allowed: boolean;
   reason: string;
   actualHash?: string;
+  path?: string;   // registry 中登記的實際路徑（driver 由此複製）
 }
 
 // Harness global policy —— authority 來源之一（§36.2 C1），不可由 repo 提供

@@ -81,13 +81,13 @@ export function admitSkills(policy: GlobalPolicy, requestedIds: readonly string[
   return requestedIds.map((id) => {
     const skill = registry.find((s) => s.id === id);
     if (!skill) return { skillId: id, allowed: false, reason: '不在 approved skill registry 中' };
-    if (!existsSync(skill.path)) return { skillId: id, allowed: false, reason: `skill 路徑不存在：${skill.path}` };
+    if (!existsSync(skill.path)) return { skillId: id, allowed: false, path: skill.path, reason: `skill 路徑不存在：${skill.path}` };
     const actual = hashSkillDir(skill.path);
     if (actual !== skill.approvedHash) {
-      return { skillId: id, allowed: false, actualHash: actual, reason: `hash 不符（approved=${skill.approvedHash.slice(0, 12)} actual=${actual.slice(0, 12)}）：這是未核准的新版本` };
+      return { skillId: id, allowed: false, path: skill.path, actualHash: actual, reason: `hash 不符（approved=${skill.approvedHash.slice(0, 12)} actual=${actual.slice(0, 12)}）：這是未核准的新版本` };
     }
     const bad = contentViolations(skill);
-    if (bad.length) return { skillId: id, allowed: false, actualHash: actual, reason: bad.join('；') };
-    return { skillId: id, allowed: true, actualHash: actual, reason: 'ok' };
+    if (bad.length) return { skillId: id, allowed: false, path: skill.path, actualHash: actual, reason: bad.join('；') };
+    return { skillId: id, allowed: true, path: skill.path, actualHash: actual, reason: 'ok' };
   });
 }

@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process';
-import { mkdirSync, writeFileSync, readFileSync, existsSync, cpSync, rmSync } from 'node:fs';
+import { mkdirSync, writeFileSync, readFileSync, existsSync, cpSync, rmSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import type { GlobalPolicy, Mode } from '../types.ts';
 import { agentEnv, ensureRuntimeDirs } from './isolation.ts';
@@ -69,14 +69,23 @@ export class CodexDriver {
   }
 
   /** approved skill 複製進 production CODEX_HOME；未核准的一律不出現在該目錄（§19 fail-closed）。 */
-  private syncSkills(approvedSkillPaths: readonly string[]): void {
+  private syncSkills(approvedSkillPaths: readonly string[]): string[] {
     const dst = join(this.policy.codexHome, 'skills');
-    rmSync(dst, { recursive: true, force: true });
-    if (!approvedSkillPaths.length) return;
     mkdirSync(dst, { recursive: true });
-    for (const src of approvedSkillPaths) {
-      if (existsSync(src)) cpSync(src, join(dst, src.split('/').filter(Boolean).pop()!), { recursive: true });
+    // 只清掉 harness 上次放進去的，保留 codex 自己 populate 的 `.system`
+    for (const name of readdirSync(dst)) {
+      if (!name.startsWith('.')) rmSync(join(dst, name), { recursive: true, force: true });
     }
+    if (!approvedSkillPaths.length) return [];
+    const mains: string[] = [];
+    for (const src of approvedSkillPaths) {
+      if (!existsSync(src)) continue;
+      const target = join(dst, src.split('/').filter(Boolean).pop()!);
+      cpSync(src, target, { recursive: true });
+      const main = join(target, 'SKILL.md');
+      if (existsSync(main)) mains.push(main);
+    }
+    return mains;
   }
 
   prepare(input: {
@@ -86,8 +95,9 @@ export class CodexDriver {
     promptText: string;
     approvedSkillPaths: readonly string[];
   }): PreparedCodexRun {
-    ensureRuntimeDirs(this.policy);
-    this.syncSkills(input.approvedSkillPaths);
+    ensureRuntimeDirs(this.policy);                       // 先建目錄才能複製 skill
+    const skillMainFiles = this.syncSkills(input.approvedSkillPaths);
+    ensureRuntimeDirs(this.policy, skillMainFiles);        // 再把 approved skill 寫進 codex config
 
     const attemptDir = join(this.policy.stateDir, 'attempts', input.attemptId);
     mkdirSync(attemptDir, { recursive: true });

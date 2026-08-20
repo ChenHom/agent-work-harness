@@ -96,9 +96,21 @@ CLI 每次啟動先把殘留 `RUNNING` 的 attempt 標成 `RECOVERY_REQUIRED`、
 ### D-21 [實測] `--output-schema` 的 JSON Schema 必須讓 `required` 涵蓋所有 properties
 OpenAI structured outputs 的限制；optional 欄位改用 nullable 型別。不照做會 400 且整個 attempt 失敗。
 
+### D-22 [實測] Skill 以 `[[skills.config]]` 送進 codex
+approved skill 複製到 `CODEX_HOME/skills/<id>/`，並在 `CODEX_HOME/config.toml` 寫入
+`[[skills.config]] path=".../SKILL.md" enabled=true`。已用一個含暗號的 skill 實跑驗證
+agent 確實讀到內容。清理時只刪除非 `.` 開頭的項目 —— codex 會自己 populate `.system` 內建 skills，
+整個刪掉會破壞它。操作者個人的 `~/.agents/skills` 因 HOME 隔離而看不到，這是預期行為。
+
+### D-23 [實測] 已知限制：read-only attempt 可讀 workspace 以外的檔案
+codex 的 `read-only` 只限制寫入，讀取範圍是整個檔案系統。實測中 agent 讀到了 workspace 外的檔案。
+寫入邊界、network、HOME 都有 enforcement，但「讀取範圍」目前只靠 prompt 約束。
+要收斂需要把 codex 本身也放進 bwrap（agent 執行與 verification 用同一套 mount 白名單）——
+可行但會影響 codex 自身的運作（helper binaries、session 檔案），不在 MVP 範圍。
+`~/.ssh`、`~/.secrets` 等操作者憑證不受此影響，因為 HOME 已被隔離。
+
 ## 尚未實作 / 待驗證
 
-- **Skill 載入方式未驗證**：approved skill 會複製進 `CODEX_HOME/skills/`，
-  但尚未確認本版 codex 是否會自動載入該目錄。Skill admission（registry + hash + fail-closed）本身已可用。
-- **Gate 6 portability**：已用第二個 repo（不同技術棧）驗證，見 `docs/e2e-scenarios.md`。
-- **Gate 1 dogfood**：文件要求 10 個真實 Coding Work，尚未累積。
+- **Gate 1 dogfood**：文件要求 10 個真實 Coding Work（3 read / 5 write / 2 blocker），尚未累積。
+- **Gate 2 C5（pointer-first 在大型 repo）**：目前只在小型 fixture 驗證過。
+- **§22 的 in-session 協議重試**：見 D-20，MVP 直接走 retry attempt。
