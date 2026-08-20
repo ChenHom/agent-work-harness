@@ -388,7 +388,7 @@ export class Orchestrator {
 }
 
 /** §20 / §34.3：Effective Authority = Global Policy ∩ Repository Contract ∩ User Decisions ∩ Attempt Mode。 */
-function buildAuthority(contract: WorkContract, snapshot: RepositoryContractSnapshot): AttemptAuthority {
+export function buildAuthority(contract: WorkContract, snapshot: RepositoryContractSnapshot): AttemptAuthority {
   return {
     filesystem: contract.mode === 'read' ? 'read-only' : 'workspace-write',
     writablePaths: contract.mode === 'write' ? contract.allowedPaths : undefined,

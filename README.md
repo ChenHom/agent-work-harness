@@ -100,10 +100,16 @@ src/
 - 決策記錄：`DECISIONS.md`
 - 隔離實測：`docs/spikes/2026-08-21-isolation-spike.md`
 - E2E 場景：`docs/e2e-scenarios.md`
+- §38 驗收條件對照：`docs/acceptance.md`
 
 ## 測試
 
 ```bash
-npm test        # node:test，不需要 codex
+npm test          # 63 個測試，不需要 codex
 npm run typecheck
+
+bash scripts/e2e.sh          # §37 九個 E2E scenario（會實際呼叫 codex）
+bash scripts/e2e.sh G I      # 只跑不需要 codex 的
 ```
+
+`docs/acceptance.md` 列出 §38 的 30 條 invariant 各自由哪個測試或 scenario 覆蓋。
