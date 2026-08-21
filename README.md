@@ -101,6 +101,8 @@ src/
 - 隔離實測：`docs/spikes/2026-08-21-isolation-spike.md`
 - E2E 場景：`docs/e2e-scenarios.md`
 - §38 驗收條件對照：`docs/acceptance.md`
+- Gate 1 dogfood：`docs/dogfood.md`
+- Evidence 四層模型（設計，未實作）：`docs/evidence-model.md`
 
 ## 測試
 

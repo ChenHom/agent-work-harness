@@ -1391,6 +1391,20 @@ read Attempt：
 
 Agent 可以建議額外 verification，但不能任意執行不可信 shell 字串。
 
+### 23.4 Evidence 可信度分層（延伸設計）
+
+MVP 的 evidence 判定是 `exitCode == 0 → PASS`。真實 dogfood 顯示這只解掉第一層不等式：
+
+```text
+Agent claim        ≠ truth               ← MVP 已解
+Verification PASS  ≠ Verification 完整    ← 缺口
+Verification 完整   ≠ 需求真的正確          ← 刻意不宣稱能解
+```
+
+四層模型（E1 Integrity / E2 Completeness / E3 Independence / E4 Sufficiency）、
+pre-flight baseline、evidence state binding 與 test provenance 的完整設計，
+見 `docs/evidence-model.md`。該文件目前是設計，尚未實作。
+
 ---
 
 ## 24. Outcome 與 Retry
