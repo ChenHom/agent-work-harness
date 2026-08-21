@@ -72,3 +72,12 @@ test('§16：budget 先砍 pointer，authority 一律保留', () => {
   assert.equal(manifest.control.length, m.control.length, 'P0 control 不可被裁切');
   assert.equal(manifest.decisions.length, m.decisions.length, 'P0 decisions 不可被裁切');
 });
+
+test('§16：P2 user context 只截內容不刪項目，且保留來源', () => {
+  const long = 'x'.repeat(5000);
+  const m = buildManifest({ contract, attempt, authority, decisions, snapshot, userContext: [long] });
+  const { manifest } = applyBudget(m, 500);
+  assert.equal(manifest.userContext.length, 1, 'P2 項目不得被刪除');
+  assert.match(manifest.userContext[0]!.content!, /內容因 budget 截斷，來源 user:context:0/);
+  assert.ok(manifest.userContext[0]!.content!.length < long.length);
+});

@@ -109,6 +109,13 @@ codex 的 `read-only` 只限制寫入，讀取範圍是整個檔案系統。實�
 可行但會影響 codex 自身的運作（helper binaries、session 檔案），不在 MVP 範圍。
 `~/.ssh`、`~/.secrets` 等操作者憑證不受此影響，因為 HOME 已被隔離。
 
+### D-24 [實測] read-only attempt 中 agent 無法執行任何需要寫入的測試
+codex 的 read-only sandbox 擋掉所有寫入，包括 `mkdtemp` / 寫 `/tmp`。
+第一次 dogfood 時 agent 在 read attempt 裡自己跑 `npm test`，10 個測試檔有 5 個因此失敗，
+它據實回報為「測試未通過」—— 對它而言那是真的觀察，但原因是 sandbox 而非程式碼。
+Harness 自己在 read attempt 不執行 verification（§23.3），所以 outcome 不受影響。
+使用者要留意 read-only 調查的 agent claim 中可能出現這類假失敗。
+
 ## 尚未實作 / 待驗證
 
 - **Gate 1 dogfood**：文件要求 10 個真實 Coding Work（3 read / 5 write / 2 blocker），尚未累積。
