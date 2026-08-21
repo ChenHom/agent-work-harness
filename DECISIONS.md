@@ -189,10 +189,46 @@ codex 的 read-only sandbox 擋掉所有寫入，包括 `mkdtemp` / 寫 `/tmp`�
 Harness 自己在 read attempt 不執行 verification（§23.3），所以 outcome 不受影響。
 使用者要留意 read-only 調查的 agent claim 中可能出現這類假失敗。
 
-## 尚未實作 / 待驗證
+## Observed Limitations（watch list，不是 backlog）
 
-- **Gate 1 dogfood**：文件要求 10 個真實 Coding Work（3 read / 5 write / 2 blocker），尚未累積。
-- **Gate 2 C5（pointer-first 在大型 repo）**：目前只在小型 fixture 驗證過。
-- **§22 的 in-session 協議重試**：見 D-20，MVP 直接走 retry attempt。
+以下都是已經觀察到、但**還沒有造成實際損害**的限制。它們留在這裡是為了被認出來，
+不是為了被做完。
+
+| 項目 | 觀察到的形態 | 目前影響 |
+|---|---|---|
+| D-26 host-service network | Cross-Repo #2 B1：連 `127.0.0.1:8010` 失敗 → 正確 BLOCKED | 無誤判，fail-closed 正確 |
+| D-27 execution parity | 三次：agent 環境沒有可寫 `/tmp`、沒有暫存目錄，claim 出現假失敗 | evidence 仍然正確，但使用者會看到兩邊說法不一致 |
+| E2 unknown completeness | task-tracker 自訂 runner、rag-stack `unittest` 都解析不出執行規模 | 保護退化為 exit code fallback，無 false positive |
+| E3 provenance | Cross-Repo #1 B1：agent 改了 test runner 與 build script | 人工檢查為良性，無 false positive |
+| baseline 成本 | 兩站測試分別 12 秒與 0.567 秒 | 翻倍完全無感，cache 沒有必要 |
+| Gate 2 C5 上限 | 最大驗證到 36.6k 行 | 更大的 repo 未知 |
+
+### 升級為實作項目的條件
+
+只有出現下列情況，才把上面任何一項移出 watch list：
+
+```text
+false ACCEPT        evidence 判 PASS 但實際上壞了
+false BLOCK         正當的工作被錯誤擋下
+大量 retry          context 或 evidence 不足導致重跑成為常態
+無法完成重要 Work    某類真實工作因為該限制根本做不了
+明顯操作成本         使用者為了繞過它必須反覆做額外的事
+```
+
+不符合以上任一條，就維持觀察。**不為了把清單清空而實作。**
+
+### 尚未證明的假設
+
+```text
+slow verification economics   required checks 要跑數分鐘時，baseline ×2 是否還可接受
+C 型依賴（Docker network）     需要什麼 capability
+E 型依賴（Internet）           需要什麼 capability
+```
+
+這三項需要一個天然符合條件的真實 repo 才驗得到。**不為了測試而找測試** ——
+沒有這樣的 repo 出現前，維持未知。
+
+## 已排除的方向
+
 - **Evidence E3 provenance / E4 sufficiency**：仍是後續候選，見 `docs/evidence-model.md`。
   E3 要等到出現真實的 false positive 案例才做。

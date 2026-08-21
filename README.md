@@ -6,6 +6,18 @@
 
 線上流程 0 額外 LLM：唯一的 reasoning LLM 是外部的 Codex Runtime。
 
+## 目前狀態
+
+```text
+MVP                    ✅ 完成（Gate 1–6，見 docs/acceptance.md）
+Cross-Repo Validation  ✅ task-tracker（36.6k 行 TS）✅ rag-stack（10k 行 Python）
+Core abstraction       ✅ 跨兩種語言 / domain / runner，Core 0 修改
+需要修改 Core 的證據      無
+```
+
+已觀察到但尚未造成實際損害的限制，記在 `DECISIONS.md` 的 watch list ——
+連同「什麼情況才把它升級成實作項目」的判準。不為了把清單清空而實作。
+
 ## 需求
 
 - Node 24+（直接執行 `.ts`，無 build step）
@@ -16,6 +28,7 @@
 
 ```bash
 npm install                       # 只有 typescript / @types/node（開發用）
+npm link                          # 選用：讓 `harness` 直接可用（bin 指向 src/cli.ts）
 node src/cli.ts doctor            # 確認隔離真的生效
 node src/cli.ts init /path/to/repo   # 產生候選 .harness/config.json（要人工確認）
 
