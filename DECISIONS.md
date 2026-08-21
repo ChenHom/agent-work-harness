@@ -123,6 +123,25 @@ MVP 不做 baseline 快取 —— 快取需要持久化與失效邏輯，等真�
 `err.code` 是字串常數導致 `exitCode` 變 `null`、原本被誤判成 FAIL 且原因不可見；
 保留的是輸出開頭，所以 evidence 的 `tail` 會明確標示那不是真正的結尾。
 
+### D-27 [實測] agent 的執行環境比 verification 更受限，會產生假失敗 claim
+Cross-Repo Validation 第一站發現：
+
+```text
+agent execution:  codex sandbox，exclude_slash_tmp = true  → /tmp 唯讀
+verification:     bwrap --tmpfs /tmp                       → /tmp 可寫
+```
+
+後果一：agent 跑 `npm test` 會因為寫不了暫存檔而中止，於是在 claim 裡回報「測試沒跑完」，
+而 Harness 的 verification 判 PASS。實測手動連跑三次都 exit 0，**Harness 是對的，
+agent 看到的是環境假象**。使用者會看到兩邊說法不一致。
+
+後果二：嚴格說這違反 §20.3（verification 隔離必須 ≥ agent execution），
+因為 verification 的 `/tmp` 比 agent 寬鬆。實質風險不高（tmpfs 不持久），但規則上不一致。
+
+理想解是給 agent 一個私有的可寫 tmpfs，但 codex 的 `exclude_slash_tmp` 只有開關兩種，
+關掉會讓 agent 看到主機的 `/tmp`，那更危險。這是 runtime 限制，不是 Harness 的選擇。
+現在只記錄，見 `docs/cross-repo-validation.md` 發現 2。
+
 ### D-26 [實測] verification sandbox 內連不到主機上既有的服務
 `bwrapArgv` 用 `--unshare-all`，其中包含 `--unshare-net`，沙箱裡是全新的 network namespace。
 實測：
