@@ -1,0 +1,50 @@
+{
+  "schemaVersion": "1",
+  "repositoryId": "harness",
+  "context": {
+    "entryPoints": [
+      "src/",
+      "test/",
+      "README.md"
+    ]
+  },
+  "filesystem": {
+    "protectedPaths": [
+      ".git/**",
+      ".harness/**"
+    ]
+  },
+  "verification": {
+    "checks": [
+      {
+        "id": "test",
+        "kind": "test",
+        "argv": [
+          "npm",
+          "test"
+        ],
+        "required": true
+      },
+      {
+        "id": "typecheck",
+        "kind": "typecheck",
+        "argv": [
+          "npm",
+          "run",
+          "typecheck"
+        ],
+        "required": true
+      },
+      {
+        "id": "diff-check",
+        "kind": "custom",
+        "argv": [
+          "git",
+          "diff",
+          "--check"
+        ],
+        "required": true
+      }
+    ]
+  }
+}

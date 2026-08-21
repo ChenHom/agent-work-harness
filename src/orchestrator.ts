@@ -8,7 +8,7 @@ import { applyBudget } from './context/budget.ts';
 import { compilePrompt } from './prompt/compiler.ts';
 import { CodexDriver } from './runtime/codex-driver.ts';
 import { parseRuntimeResult } from './runtime/result.ts';
-import { baseRevision, observeGit, gitDiffEvidence, pathPolicyEvidence } from './evidence/git.ts';
+import { baseRevision, snapshotDirty, observeGit, gitDiffEvidence, pathPolicyEvidence } from './evidence/git.ts';
 import { runVerification } from './evidence/verification.ts';
 import { decideOutcome } from './evidence/outcome.ts';
 import { buildResponse } from './response.ts';
@@ -144,12 +144,17 @@ export class Orchestrator {
     }
 
     const base = await baseRevision(this.policy, work.workspace);
+    // attempt 開始前就存在的未提交變更不能算到 agent 頭上
+    const preExistingDirty = await snapshotDirty(this.policy, work.workspace);
+    if (preExistingDirty.length) {
+      this.store.event('evidence.collected', { preExistingDirty: preExistingDirty.map((d) => d.path) }, workId);
+    }
     const attempts = this.store.listAttempts(workId);
     const attemptId = newId('A');
     const attempt: Attempt = {
       id: attemptId, workId, number: attempts.length + 1, mode: contract.mode,
       contractVersion: contract.version, contractSnapshotHash: snapshot.hash,
-      baseRevision: base, promptArtifactId: '', runtime: 'codex', status: 'CREATED',
+      baseRevision: base, preExistingDirty, promptArtifactId: '', runtime: 'codex', status: 'CREATED',
       retryOf: opts?.retryOf, startedAt: nowIso(),
     };
 
@@ -253,7 +258,7 @@ export class Orchestrator {
     const { work, contract, snapshot, attempt, base } = input;
     const evidence: EvidenceRecord[] = [];
 
-    const obs = await observeGit(this.policy, work.workspace, base);
+    const obs = await observeGit(this.policy, work.workspace, base, attempt.preExistingDirty ?? []);
     const diffArtifact = this.store.putArtifact('git_diff', obs.diff, 'diff');
     const gitEv = gitDiffEvidence(work.id, attempt.id, obs, diffArtifact.id);
     evidence.push(gitEv);

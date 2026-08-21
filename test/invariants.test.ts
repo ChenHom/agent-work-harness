@@ -44,6 +44,7 @@ const ev = (o: Partial<EvidenceRecord>): EvidenceRecord => ({
   status: 'PASS', data: { required: true }, observedAt: 'now', ...o,
 });
 const gitEv = (paths: string[]) => ev({ type: 'git_diff', label: 'git diff', data: { changedPaths: paths } });
+const pathOk = () => ev({ type: 'path_policy', label: 'denied path check', status: 'PASS', data: {} });
 const completed: RuntimeResult = {
   schemaVersion: '1', workId: 'W', attemptId: 'A', status: 'completed',
   summary: '完成', claims: [{ type: 'verification', text: '我跑過測試，全過' }],
@@ -118,7 +119,7 @@ test('10+11. successCriteria 不參與 outcome；SUCCESS 只來自 mechanical ev
   // 自然語言 criterion 說「測試通過」，但 required evidence FAIL → 不得 SUCCESS
   const d = decideOutcome({
     mode: 'write', skillAdmissions: [], protocolOk: true, runtimeResult: completed,
-    evidence: [gitEv(['src/a.ts']), ev({ status: 'FAIL' })], retryBudgetRemaining: 0,
+    evidence: [gitEv(['src/a.ts']), pathOk(), ev({ status: 'FAIL' })], retryBudgetRemaining: 0,
   });
   assert.equal(d.outcome, 'FAILED');
   assert.ok(!d.reasons.join().includes('測試通過'), 'outcome 理由不得引用自然語言 criterion');
@@ -182,7 +183,7 @@ test('19. agent 宣稱 test PASS 但實際 exit code 非 0 → 不可 SUCCESS', 
   const d = decideOutcome({
     mode: 'write', skillAdmissions: [], protocolOk: true,
     runtimeResult: completed,   // claim 說「我跑過測試，全過」
-    evidence: [gitEv(['src/a.ts']), ev({ status: 'FAIL', data: { required: true, exitCode: 1 } })],
+    evidence: [gitEv(['src/a.ts']), pathOk(), ev({ status: 'FAIL', data: { required: true, exitCode: 1 } })],
     retryBudgetRemaining: 0,
   });
   assert.equal(d.outcome, 'FAILED');

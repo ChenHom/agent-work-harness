@@ -29,7 +29,13 @@ export function decideOutcome(i: OutcomeInput): OutcomeDecision {
     return push('POLICY_VIOLATION', `變更落在禁止範圍：${v.map((x) => `${x.path}(${x.rule})`).join('、')}`);
   }
 
-  // 3. Protocol 失敗 → 可重試
+  // 3. runtime 逾時／被砍：即使留下可解析的結果也不得判成功
+  if (i.runtimeCrashed) {
+    const r = 'runtime 逾時或被中止，無法確認 agent 是否完成工作';
+    return i.retryBudgetRemaining > 0 ? push('RETRYABLE_FAILURE', r) : push('FAILED', r);
+  }
+
+  // 4. Protocol 失敗 → 可重試
   if (!i.protocolOk) {
     const r = `runtime 輸出不符 RuntimeResult v1：${i.protocolError ?? 'unknown'}`;
     return i.retryBudgetRemaining > 0 ? push('RETRYABLE_FAILURE', r) : push('FAILED', r);
@@ -37,7 +43,7 @@ export function decideOutcome(i: OutcomeInput): OutcomeDecision {
 
   const result = i.runtimeResult!;
 
-  // 4. Agent 明確要求決策 / 表示被擋
+  // 5. Agent 明確要求決策 / 表示被擋
   if (result.status === 'needs_user_decision') {
     return push('NEEDS_USER_DECISION', result.questions.map((q) => q.text).join(' / ') || result.summary);
   }
@@ -48,7 +54,17 @@ export function decideOutcome(i: OutcomeInput): OutcomeDecision {
       : push('FAILED', `agent 回報失敗：${result.summary}`);
   }
 
-  // 5. 機械 acceptance（§7.1）
+  // 6. 機械 acceptance（§7.1）
+  // fail-closed：path policy evidence 必須存在且 PASS，缺失或 INCONCLUSIVE 都不得判成功
+  const pathPass = pathEvidence.filter((e) => e.status === 'PASS');
+  if (pathPass.length === 0) {
+    const detail = pathEvidence.length
+      ? `path policy evidence 狀態為 ${pathEvidence.map((e) => e.status).join('/')}`
+      : 'path policy evidence 缺失';
+    const r = `無法確認變更是否落在授權範圍內：${detail}`;
+    return i.retryBudgetRemaining > 0 ? push('RETRYABLE_FAILURE', r) : push('FAILED', r);
+  }
+
   const required = i.evidence.filter((e) => (e.data as { required?: boolean }).required === true);
   const failedRequired = required.filter((e) => e.status !== 'PASS');
   if (failedRequired.length) {
