@@ -20,7 +20,7 @@ node src/cli.ts doctor            # 確認隔離真的生效
 node src/cli.ts init /path/to/repo   # 產生候選 .harness/config.json（要人工確認）
 
 node src/cli.ts new "修正 token 過期回傳負數的 bug，不要碰 payment，也不要部署" --dir /path/to/repo
-node src/cli.ts run  <workId>
+node src/cli.ts run  <workId>     # --no-baseline 可跳過 pre-flight baseline（測試很慢時）
 node src/cli.ts show <workId>     # contract / decisions / attempts / evidence
 node src/cli.ts trace <workId>    # append-only 事件流
 ```

@@ -10,6 +10,12 @@ export interface IsolatedRun {
   exitCode: number | null;
   signal: string | null;
   timedOut: boolean;
+  /**
+   * 輸出超過 maxBuffer。實測：execFile 此時會殺掉行程（不是截斷輸出），
+   * err.code 是字串常數，保留下來的是輸出「開頭」而非結尾。
+   * 所以這代表執行沒跑完，語意接近 timeout。
+   */
+  outputTruncated: boolean;
   stdout: string;
   stderr: string;
   durationMs: number;
@@ -50,6 +56,7 @@ export function runIsolated(policy: GlobalPolicy, argv: readonly string[], opts:
         exitCode: e ? (typeof e.code === 'number' ? e.code : null) : 0,
         signal: e?.signal ?? null,
         timedOut,
+        outputTruncated: e?.code === 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER',
         stdout: String(stdout), stderr: String(stderr),
         durationMs: Date.now() - started,
       });

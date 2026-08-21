@@ -46,6 +46,7 @@ export interface Attempt {
   contractSnapshotHash: string;  // §34.1.1 RepositoryContractSnapshot hash
   baseRevision: string;          // §36.2 C2
   preExistingDirty?: Array<{ path: string; hash: string | null }>;  // attempt 開始前就髒的檔案
+  baseline?: VerificationBaseline[];                                 // pre-flight baseline（write attempt）
   contextDropped?: Array<{ priority: number; count: number }>;      // prompt budget 裁切統計
   promptArtifactId: string;
   resultArtifactId?: string;
@@ -152,6 +153,38 @@ export interface RuntimeResult {
   claims: RuntimeClaim[];
   questions: RuntimeQuestion[];
   declaredChangedPaths: string[];
+}
+
+/**
+ * pre-flight baseline：attempt 開始前、agent 動手之前的同一組 check 結果。
+ * 只用來回答一件事 —— 這次有沒有比 agent 動手前變差或少跑。
+ */
+export interface VerificationBaseline {
+  checkId: string;
+  exitCode: number | null;
+  executed?: number;
+  skipped?: number;
+}
+
+/** verification evidence 的 data 形狀（原本是 inline cast，收斂成型別）。 */
+export interface VerificationEvidenceData {
+  checkId: string;
+  kind: VerificationCheck['kind'];
+  argv: string[];
+  required: boolean;
+  // 綁定觀察對象：這份 evidence 驗的是哪個 revision、哪一份驗收規則
+  baseRevision: string;
+  headRevision: string;
+  contractHash: string;
+  exitCode: number | null;
+  timedOut: boolean;
+  outputTruncated: boolean;
+  durationMs: number;
+  tail: string;
+  executed?: number;
+  skipped?: number;
+  baseline?: VerificationBaseline;
+  reason?: string;
 }
 
 // §23.2

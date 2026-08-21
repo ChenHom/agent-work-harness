@@ -9,7 +9,7 @@ import { compilePrompt } from './prompt/compiler.ts';
 import { CodexDriver } from './runtime/codex-driver.ts';
 import { parseRuntimeResult } from './runtime/result.ts';
 import { baseRevision, snapshotDirty, observeGit, gitDiffEvidence, pathPolicyEvidence } from './evidence/git.ts';
-import { runVerification } from './evidence/verification.ts';
+import { runVerification, collectBaseline } from './evidence/verification.ts';
 import { decideOutcome } from './evidence/outcome.ts';
 import { buildResponse } from './response.ts';
 import type {
@@ -115,7 +115,7 @@ export class Orchestrator {
 
   // ---------------------------------------------------------------- attempt
 
-  async runAttempt(workId: string, opts?: { retryOf?: string }): Promise<AttemptReport> {
+  async runAttempt(workId: string, opts?: { retryOf?: string; noBaseline?: boolean }): Promise<AttemptReport> {
     const work = this.requireWork(workId);
     const contract = this.currentContract(work);
 
@@ -184,6 +184,13 @@ export class Orchestrator {
       hash: prompt.hash, compilerVersion: prompt.compilerVersion,
       chars: prompt.text.length, artifactId: promptArtifact.id,
     }, workId, attemptId);
+
+    // §23.4：pre-flight baseline —— agent 動任何東西之前先跑一次 required checks，
+    // 之後才能判斷「有沒有比動手前變差或少跑」。read attempt 不跑 verification，也就不需要。
+    if (contract.mode === 'write' && !opts?.noBaseline) {
+      this.log('收集 pre-flight baseline（agent 尚未執行）…');
+      attempt.baseline = await collectBaseline(this.policy, snapshot, work.workspace, this.log);
+    }
 
     this.store.insertAttempt(attempt);
     attempt.status = 'RUNNING';
@@ -279,7 +286,8 @@ export class Orchestrator {
     // §23.3：read attempt 不跑 verification；越界時也不跑（先讓使用者處理）
     if (input.runWrite && pathEv.status === 'PASS' && obs.changedPaths.length > 0) {
       const v = await runVerification(this.policy, snapshot, work.workspace,
-        { workId: work.id, attemptId: attempt.id }, this.log);
+        { workId: work.id, attemptId: attempt.id, baseRevision: base, headRevision: obs.head },
+        attempt.baseline, this.log);
       for (const e of v.evidence) { evidence.push(e); this.store.insertEvidence(e); }
     }
     return evidence;
@@ -287,7 +295,7 @@ export class Orchestrator {
 
   // ---------------------------------------------------------------- retry / recovery
 
-  async retry(workId: string): Promise<AttemptReport> {
+  async retry(workId: string, opts?: { noBaseline?: boolean }): Promise<AttemptReport> {
     const work = this.requireWork(workId);
     const attempts = this.store.listAttempts(workId);
     const last = attempts.at(-1);
@@ -299,7 +307,7 @@ export class Orchestrator {
       this.applyWorkState(workId, decision);
       return { attempt: last, decision, evidence: this.store.listEvidence(last.id), response: buildResponse({ attempt: last, decision, evidence: this.store.listEvidence(last.id), notExecuted: [] }) };
     }
-    return this.runAttempt(workId, { retryOf: last.id });
+    return this.runAttempt(workId, { retryOf: last.id, noBaseline: opts?.noBaseline });
   }
 
   /** §D5：不得直接 auto-rerun 同一 Attempt。啟動時把殘留 RUNNING 標成 RECOVERY_REQUIRED。 */

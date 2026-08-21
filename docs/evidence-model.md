@@ -1,7 +1,12 @@
 # Evidence 四層模型
 
-> 狀態：設計，**尚未實作**。本文件定義 Evidence 可信度的分層與演進方向，
-> 對應設計文件 §23（Evidence-first 驗證）的延伸。
+> 狀態：**第一版（E2 Completeness）已實作**，E3/E4 仍是設計。
+> 本文件定義 Evidence 可信度的分層與演進方向，對應設計文件 §23（Evidence-first 驗證）的延伸。
+>
+> 已實作範圍：evidence 綁定 revision / contract hash、pre-flight baseline、
+> 與 baseline 比較的判定規則、`outputTruncated`。
+> 對應 `src/evidence/verification.ts`、`test/verification.test.ts`、
+> `test/verification-integration.test.ts`。
 
 ## 為什麼需要分層
 
@@ -47,8 +52,8 @@ Repository Contract → argv → isolated execution → exitCode == 0 → PASS
 
 | 層級 | 狀態 |
 |---|---|
-| E1 | 大致成立。`EvidenceRecord.data` 已記 `exitCode`、`timedOut`、`argv`、`durationMs`；attempt 記 `baseRevision` 與 `contractSnapshotHash`。**已知缺口**：stdout/stderr 超過 `maxOutputBytes`（2MB）會被截斷，但 evidence 沒有記錄「被截斷」這件事，`tail` 取的是截斷後的末段，看起來像完整結尾。 |
-| E2 | **缺口**。只看 exit code。 |
+| E1 | 成立。verification evidence 記 `exitCode`、`timedOut`、`outputTruncated`、`durationMs`、`baseRevision`、`headRevision`、`contractHash`。輸出超限時 `tail` 會明確標示「這是保留段的末端，不是真正結尾」。 |
+| E2 | **已實作**。exit 0 之外還比對 pre-flight baseline 的執行數與 skip 數；解析不出來的 runner 標為未知而不是失敗。 |
 | E3 | 部分。`path_policy` 能擋 denied path，`.harness/**` 預設 protected（agent 改不了自己的驗收規則），但無法區分「既存測試通過」與「agent 剛寫的測試通過」。**降級為後續候選** —— 見方向三。 |
 | E4 | 刻意不宣稱能解。見下文。 |
 

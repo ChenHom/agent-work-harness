@@ -1,4 +1,4 @@
-import type { EvidenceRecord, RuntimeResult, OutcomeDecision, Attempt } from './types.ts';
+import type { EvidenceRecord, RuntimeResult, OutcomeDecision, Attempt, VerificationEvidenceData } from './types.ts';
 
 // §25：模板，不使用 Presenter LLM。
 // 「Agent 判斷」來自 claim；「實際修改／驗證」只能來自 evidence。
@@ -14,6 +14,26 @@ const OUTCOME_TITLE: Record<OutcomeDecision['outcome'], string> = {
 
 export function formatPromptChars(prompt: string | null): string {
   return `    promptChars: ${prompt?.length ?? 0}`;
+}
+
+/** §23.4：讓 PASS 的「完整性」可見 —— exit 0 不等於該跑的都跑了。 */
+function verificationDetail(e: EvidenceRecord): string {
+  if (e.type === 'path_policy') return '';
+  const d = e.data as Partial<VerificationEvidenceData> | null;
+  if (!d || typeof d !== 'object') return '';
+  const parts: string[] = [];
+  if (d.executed !== undefined) {
+    parts.push(`執行 ${d.executed}${d.skipped ? `、skip ${d.skipped}` : ''}`);
+    if (d.baseline?.executed !== undefined) {
+      parts.push(`baseline ${d.baseline.executed}${d.baseline.skipped ? `/skip ${d.baseline.skipped}` : ''}`);
+    } else {
+      parts.push('無 baseline');
+    }
+  } else if (d.exitCode !== undefined) {
+    parts.push('執行規模未知');
+  }
+  if (d.reason) parts.push(d.reason);
+  return parts.length ? `（${parts.join('；')}）` : '';
 }
 
 export function buildResponse(input: {
@@ -54,7 +74,7 @@ export function buildResponse(input: {
 
   const verifications = evidence.filter((e) => e.type !== 'git_diff');
   out.push('', '驗證（Harness 執行）');
-  if (verifications.length) for (const e of verifications) out.push(`- ${e.label}：${e.status}`);
+  if (verifications.length) for (const e of verifications) out.push(`- ${e.label}：${e.status}${verificationDetail(e)}`);
   else out.push('- 未執行');
 
   const failed = verifications.filter((e) => e.status !== 'PASS');

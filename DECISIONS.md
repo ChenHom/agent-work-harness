@@ -109,6 +109,20 @@ codex 的 `read-only` 只限制寫入，讀取範圍是整個檔案系統。實�
 可行但會影響 codex 自身的運作（helper binaries、session 檔案），不在 MVP 範圍。
 `~/.ssh`、`~/.secrets` 等操作者憑證不受此影響，因為 HOME 已被隔離。
 
+### D-25 [實測] pre-flight baseline：verification 時間翻倍，換掉一個真實的 false positive
+dogfood 中 agent 新增的錯誤斷言沒被抓到，因為該測試檔在隔離環境被 skip、`npm test` 仍 exit 0。
+現在 write attempt 會在 agent 動手前先跑一次 required checks 當基準，post 與它比較執行數與 skip 數。
+
+代價是 required checks 跑兩次。`harness run/retry --no-baseline` 可關閉，代價是失去這個判斷。
+MVP 不做 baseline 快取 —— 快取需要持久化與失效邏輯，等真的痛了再說。
+
+兩條原則寫進判定規則：**未知不等於失敗**（runner 解析不出 completeness、或 baseline 跑不起來，
+都退回現行行為）、**不完整不等於通過**（timeout 與輸出超限一律 INCONCLUSIVE）。
+
+同時修正 `outputTruncated`：實測 `execFile` 超過 `maxBuffer` 是殺掉行程而非截斷輸出，
+`err.code` 是字串常數導致 `exitCode` 變 `null`、原本被誤判成 FAIL 且原因不可見；
+保留的是輸出開頭，所以 evidence 的 `tail` 會明確標示那不是真正的結尾。
+
 ### D-24 [實測] read-only attempt 中 agent 無法執行任何需要寫入的測試
 codex 的 read-only sandbox 擋掉所有寫入，包括 `mkdtemp` / 寫 `/tmp`。
 第一次 dogfood 時 agent 在 read attempt 裡自己跑 `npm test`，10 個測試檔有 5 個因此失敗，
@@ -121,8 +135,5 @@ Harness 自己在 read attempt 不執行 verification（§23.3），所以 outco
 - **Gate 1 dogfood**：文件要求 10 個真實 Coding Work（3 read / 5 write / 2 blocker），尚未累積。
 - **Gate 2 C5（pointer-first 在大型 repo）**：目前只在小型 fixture 驗證過。
 - **§22 的 in-session 協議重試**：見 D-20，MVP 直接走 retry attempt。
-- **Evidence 可信度分層**：E2 Completeness 有實際缺口（dogfood 中 skip 掉的測試讓 SUCCESS 失真）。
-  E1 有兩個缺口：輸出超過 `maxOutputBytes` 時 `execFile` 會直接殺掉行程（不是截斷），
-  目前被誤判成 FAIL 且原因不可見；`tail` 取的是保留段的末端而非真正結尾，具誤導性。
-  第一版範圍收斂為三步（evidence 綁 revision → pre-flight baseline → 比較），
-  E3 provenance 降為後續候選。見 `docs/evidence-model.md`，尚未實作。
+- **Evidence E3 provenance / E4 sufficiency**：仍是後續候選，見 `docs/evidence-model.md`。
+  E3 要等到出現真實的 false positive 案例才做。

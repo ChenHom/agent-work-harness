@@ -16,8 +16,8 @@ const USAGE = `harness — Agent Work Harness (MVP)
 
   harness init [dir]                    產生候選 .harness/config.json（需人工確認後才生效）
   harness new "<需求>" [--dir .] [--title T] [--retry N]
-  harness run <workId>                  執行下一個 attempt
-  harness retry <workId>                以 previous evidence 建立 retry attempt
+  harness run <workId> [--no-baseline]  執行下一個 attempt
+  harness retry <workId> [--no-baseline]  以 previous evidence 建立 retry attempt
   harness answer <workId> "<回覆>"       記錄使用者決策（不累積對話）
   harness recover <workId>              重新收集中斷 attempt 的 evidence
   harness list                          列出所有 work
@@ -81,8 +81,11 @@ async function main(argv: string[]): Promise<number> {
     case 'run': case 'retry': case 'recover': {
       const workId = rest[0];
       if (!workId) { console.error('需要 workId'); return 1; }
-      const report = cmd === 'run' ? await orch.runAttempt(workId)
-        : cmd === 'retry' ? await orch.retry(workId)
+      // pre-flight baseline 讓 verification 時間翻倍；測試很慢的 repo 可以關掉，
+      // 代價是失去「有沒有比動手前少跑」這個判斷。
+      const noBaseline = rest.includes('--no-baseline');
+      const report = cmd === 'run' ? await orch.runAttempt(workId, { noBaseline })
+        : cmd === 'retry' ? await orch.retry(workId, { noBaseline })
         : await orch.recover(workId);
       console.log(`\n${report.response}\n`);
       return report.decision.outcome === 'SUCCESS' ? 0 : 3;
