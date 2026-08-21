@@ -123,6 +123,30 @@ MVP 不做 baseline 快取 —— 快取需要持久化與失效邏輯，等真�
 `err.code` 是字串常數導致 `exitCode` 變 `null`、原本被誤判成 FAIL 且原因不可見；
 保留的是輸出開頭，所以 evidence 的 `tail` 會明確標示那不是真正的結尾。
 
+### D-26 [實測] verification sandbox 內連不到主機上既有的服務
+`bwrapArgv` 用 `--unshare-all`，其中包含 `--unshare-net`，沙箱裡是全新的 network namespace。
+實測：
+
+```text
+測試自己起 server 再連自己（純 loopback）  → 可以（新 netns 自帶 lo）
+連主機上已在跑的服務（127.0.0.1:<port>）   → Connection refused
+```
+
+因此**測試需要外部 DB / redis / docker-compose 服務的專案，目前跑不了 verification**。
+
+這不是 bug，是 §20.3「verification 隔離必須 ≥ agent execution」的直接後果 ——
+agent 是 network deny，verification 就不能比它寬。三者無法同時成立：
+
+```text
+verification 隔離 ≥ agent
+agent network deny
+整合測試需要連服務
+```
+
+未來若真的撞到，選項大致是：放寬 verification 的 network（破壞第一條）、
+由 Repository Contract 提供依賴服務的啟動方式並在同一個 netns 內拉起（複雜）、
+或承認這類 repo 不適用（縮小適用範圍）。**現在不預先決定**，等有真實案例再談。
+
 ### D-24 [實測] read-only attempt 中 agent 無法執行任何需要寫入的測試
 codex 的 read-only sandbox 擋掉所有寫入，包括 `mkdtemp` / 寫 `/tmp`。
 第一次 dogfood 時 agent 在 read attempt 裡自己跑 `npm test`，10 個測試檔有 5 個因此失敗，
