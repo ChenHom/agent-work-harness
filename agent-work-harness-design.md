@@ -1401,9 +1401,18 @@ Verification PASS  ≠ Verification 完整    ← 缺口
 Verification 完整   ≠ 需求真的正確          ← 刻意不宣稱能解
 ```
 
-四層模型（E1 Integrity / E2 Completeness / E3 Independence / E4 Sufficiency）、
-pre-flight baseline、evidence state binding 與 test provenance 的完整設計，
-見 `docs/evidence-model.md`。該文件目前是設計，尚未實作。
+四層模型（E1 Integrity / E2 Completeness / E3 Independence / E4 Sufficiency）見
+`docs/evidence-model.md`。該文件目前是設計，尚未實作。
+
+第一版只解已經有真實失敗案例的那一層（E2 Completeness），範圍收斂為：
+
+```text
+1. Evidence 綁定 baseRevision / headRevision / contractHash
+2. Attempt 前跑一次 baseline
+3. post verification 與 baseline 比較（變差或少跑 → 不是 PASS）
+```
+
+E3 Test Provenance 降為後續候選 —— 它沒有解任何已經發生的 false positive。
 
 ---
 

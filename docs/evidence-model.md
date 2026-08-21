@@ -49,7 +49,7 @@ Repository Contract → argv → isolated execution → exitCode == 0 → PASS
 |---|---|
 | E1 | 大致成立。`EvidenceRecord.data` 已記 `exitCode`、`timedOut`、`argv`、`durationMs`；attempt 記 `baseRevision` 與 `contractSnapshotHash`。**已知缺口**：stdout/stderr 超過 `maxOutputBytes`（2MB）會被截斷，但 evidence 沒有記錄「被截斷」這件事，`tail` 取的是截斷後的末段，看起來像完整結尾。 |
 | E2 | **缺口**。只看 exit code。 |
-| E3 | 部分。`path_policy` 能擋 denied path，`.harness/**` 預設 protected（agent 改不了自己的驗收規則），但無法區分「既存測試通過」與「agent 剛寫的測試通過」。 |
+| E3 | 部分。`path_policy` 能擋 denied path，`.harness/**` 預設 protected（agent 改不了自己的驗收規則），但無法區分「既存測試通過」與「agent 剛寫的測試通過」。**降級為後續候選** —— 見方向三。 |
 | E4 | 刻意不宣稱能解。見下文。 |
 
 這個邊界是合理的：**Harness 能保證的上限，等於它能獨立取得的觀察的上限。**
@@ -93,69 +93,148 @@ post-agent:  total 63, pass 55, skip 8
 正解是 **pre-flight baseline**：attempt 開始前、agent 動任何東西之前，
 Harness 自己先跑一次 required checks。
 
-它一次解掉三件事：
+MVP 只用它回答一件事：**這次有沒有比 agent 動手前變差或少跑？**
 
 ```text
-1. completeness 的比較基準
-   skip 從 0 變 8 → INCONCLUSIVE
-
-2. 區分「agent 弄壞的」與「本來就壞的」
-   pre-flight 就 FAIL 的 3 個測試，post-agent 仍 FAIL
-   → 不是 agent 造成的，不該讓 agent 背這個鍋
-
-3. E3 最強的單一指標（見方向三）
-   pre-flight FAIL 的既存測試在 post-agent 變 PASS
+本來 PASS   → 現在 FAIL
+本來跑 63   → 現在只跑 55
+本來 skip 0 → 現在 skip 8
 ```
 
-第二點修掉一個目前存在的真實問題：在一個測試本來就有失敗的 repo 上跑 write attempt，
-agent 就算把該修的修好了，Harness 仍會判 required verification FAIL。
+它還會順帶產出兩個副產品，但**刻意不在 MVP 使用**：
+
+```text
+副產品 1：區分「agent 弄壞的」與「本來就壞的」
+  pre-flight 就 FAIL 的測試，post-agent 仍 FAIL → 不是 agent 造成的
+  → 屬於「既存 failing repo 如何仍能接受工作」，是另一個需求
+
+副產品 2：E3 最強的指標
+  pre-flight FAIL 的既存測試在 post-agent 變 PASS
+  → 等到 provenance 有真實需求時再取用（見方向三）
+```
+
+先把它們記下來，等有真實案例時取用的成本很低。
 
 ### 最小資料模型
 
+只保留有真實失敗案例支撐的欄位。
+
 ```ts
-interface VerificationEvidenceData {
+interface VerificationEvidence {
   checkId: string;
-  kind: VerificationCheck['kind'];
-  argv: string[];
-  required: boolean;
 
-  execution: {
-    exitCode: number | null;
-    timedOut: boolean;
-    durationMs: number;
-    outputTruncated: boolean;      // E1 的缺口
-  };
+  status: 'PASS' | 'FAIL' | 'INCONCLUSIVE';
 
-  completeness?: {                  // 只有解析得出來的 runner 才填
-    executed?: number;
-    passed?: number;
-    failed?: number;
-    skipped?: number;
-    baseline?: { executed: number; skipped: number };
-  };
+  exitCode: number | null;
+  timedOut: boolean;
+  outputTruncated: boolean;
+
+  baseRevision: string;
+  headRevision: string;
+  contractHash: string;
+
+  executed?: number;    // runner 解析得出來才填
+  skipped?: number;     // 同上
 }
 ```
 
-**不要為了填滿欄位而猜**。解析不出來就是 `completeness: undefined`，
-response 誠實顯示 `completeness: unknown`。這跟 §3.2「能安全機械處理的才結構化」是同一條原則。
+| 項目 | 必填 | 原因 |
+|---|---:|---|
+| `checkId` | ✓ | 知道是哪個 verification |
+| `status` | ✓ | PASS / FAIL / INCONCLUSIVE |
+| `exitCode` | ✓ | 最基本的機械證據 |
+| `timedOut` | ✓ | timeout 不能算 PASS |
+| `baseRevision` | ✓ | 防 stale evidence |
+| `headRevision` | ✓ | 確認驗證的是哪份修改 |
+| `contractHash` | ✓ | 確認驗證規則沒換 |
+| `outputTruncated` | ✓ | 避免把不完整輸出當完整證據 |
+| `executed` / `skipped` | 選填 | runner 能解析才填 |
+| provenance | 後續候選 | 沒有解已發生的 false positive |
+| `environmentHash` | 不做 | 太早 |
+| `workspaceStateHash` | 不做 | 不值得增加複雜度 |
+| numeric confidence | 不做 | 沒必要 |
+
+**不要為了填滿欄位而猜**。解析不出來就是 `undefined`，response 顯示 `completeness: unknown`。
+這跟 §3.2「能安全機械處理的才結構化」是同一條原則。
 
 第一批只需要支援少數 runner 的輸出格式（`node:test` 的 `ℹ tests/pass/fail/skipped`、
 pytest 的結尾摘要），其他一律 unknown。
 
+### `outputTruncated` 的實際機制
+
+名字容易誤導。實測（`execFile` + `maxBuffer`）的行為是：
+
+```text
+輸出超過 maxBuffer
+→ 行程被殺掉
+→ err.code = 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER'（字串，不是數字）
+→ 保留的是輸出的「開頭」，結尾丟失
+```
+
+所以它不是「輸出被截短但行程正常結束」，而是**執行根本沒跑完**，語意上更接近 timeout。
+三個後果：
+
+1. 判為 INCONCLUSIVE 的理由比「證據不完整」更強 —— 是執行不完整。
+2. 目前的實作會把它誤判成 FAIL：`err.code` 是字串，`exitCode` 變成 `null`，
+   落到「其他 → FAIL」，而且 evidence 上看不出原因。
+3. 測試摘要在結尾，必然丟失，所以這種情況下 `executed` / `skipped` 一定解析不到 ——
+   兩條規則天然一致，不會互相打架。
+
+順帶：evidence 的 `tail` 目前取的是「保留下來那段的末端」，也就是輸出開頭 2MB 的尾巴，
+不是真正的結尾。對使用者極具誤導性（看起來像測試跑到一半卡住），應一併修正為明確標示。
+
+### Baseline
+
+不需要先設計一整套狀態機（`FIXED_BASELINE_FAILURE` / `UNCHANGED_BASELINE_FAILURE` /
+`REGRESSION` …）。MVP 只需要回答一件事：
+
+> **這次 verification 有沒有比執行 Agent 前變差或少跑？**
+
+```ts
+interface VerificationBaseline {
+  checkId: string;
+  exitCode: number | null;
+  executed?: number;
+  skipped?: number;
+}
+```
+
 ### 判定規則
 
 ```text
-exitCode != 0                          → FAIL
-timedOut                               → INCONCLUSIVE
-completeness unknown                   → PASS（維持現狀，不假裝知道）
-skipped > baseline.skipped             → INCONCLUSIVE
-executed < baseline.executed           → INCONCLUSIVE
-否則                                    → PASS
+post timedOut                    → INCONCLUSIVE
+post outputTruncated             → INCONCLUSIVE
+baseline 不可用                   → 退回現行行為（exit 0 → PASS），evidence 標明 baseline unavailable
+baseline PASS 且 post FAIL       → FAIL
+executed < baseline.executed     → INCONCLUSIVE
+skipped  > baseline.skipped      → INCONCLUSIVE
+post exit 0                      → PASS
+其他                              → FAIL
 ```
 
-注意 `completeness unknown → PASS` 是刻意的：不能因為 Harness 解析不了某個 runner 的輸出，
-就讓所有用該 runner 的 repo 永遠無法通過驗收。**未知不等於失敗**，
-但它應該在 response 中可見。
+兩條原則貫穿其中：
+
+- **未知不等於失敗**。runner 解析不出 completeness、或 baseline 本身跑不起來，
+  都退回現行行為而不是判失敗。否則 Harness 解析能力的缺口會變成 repo 的驗收障礙。
+- **不完整不等於通過**。timeout 與 outputTruncated 代表執行沒跑完，一律 INCONCLUSIVE。
+
+### 「本來就 FAIL」怎麼辦
+
+```text
+baseline FAIL + post FAIL → FAIL
+```
+
+就這樣，不加狀態。這最簡單也最安全。
+
+baseline 在 MVP 的用途只有三個，都是抓「變差」：
+
+```text
+本來 PASS   → 現在 FAIL
+本來跑 63   → 現在只跑 55
+本來 skip 0 → 現在 skip 8
+```
+
+「既存 failing 的 repo 要如何仍能接受工作」是另一個需求，不要在這裡順便解。
 
 ---
 
@@ -204,74 +283,57 @@ pre-flight baseline 的成本是 verification 時間翻倍。要負擔得起就�
 
 ---
 
-## 方向三：Independence
+## 方向三：Independence —— 後續候選，先不做
 
-### 真正該問的問題
+**降級理由：它沒有解任何已經發生的 false positive。**
 
-不是「agent 有沒有改測試」，而是：
+真正已經發生的問題只有一個：
 
-> **把這次 attempt 新增和修改的測試全部拿掉之後，還剩下什麼證據？**
+```text
+測試被 skip → exit 0 → Harness 誤以為完整 PASS
+```
 
-如果一個 bug fix 的證據全部來自 agent 本次新寫的測試，那是自己出題自己答。
-反過來，如果有一個**既存**的失敗測試在這次變成通過，那是強得多的證據 ——
-因為那個測試在 agent 介入之前就存在，它不可能是為了配合這次修改而寫的。
+provenance 解不了這個。它要解的是另一種尚未在真實案例中造成誤判的情況
+（agent 改測試來配合自己的實作）。dogfood 確實觀察到 agent 會迎合寫錯的測試，
+但那是**使用者提供的測試本來就寫錯**，不是 agent 竄改測試 —— provenance 對前者無效。
+
+因此以下暫不加入：
+
+```text
+testPaths（Repository Contract 新欄位）
+pre-existing / agent-added / agent-modified 分類
+```
+
+### 若未來要做，設計要點先記著
+
+真正該問的問題不是「agent 有沒有改測試」，而是：
+
+> 把這次 attempt 新增和修改的測試全部拿掉之後，還剩下什麼證據？
+
+最強的單一指標是**既存的失敗測試轉綠**：
 
 ```text
 pre-flight:  test_login_500  FAIL
 post-agent:  test_login_500  PASS
 ```
 
-**這是 E3 最強的單一指標，而且是 pre-flight baseline 的免費副產品**，不需要額外成本。
+那個測試在 agent 介入前就存在，不可能是為了配合這次修改而寫的。
+而它是 pre-flight baseline 的免費副產品 —— 等到有真實案例證明需要時再取用，成本很低。
 
-### Provenance 分類
+分類依據必須是 git 觀察到的 changedPaths，不採信 agent 宣告；
+而「哪些檔案是測試」必須由 Repository Contract 提供（`testPaths`），
+Core 不該內建各語言的路徑慣例（§34）。
 
-```text
-pre-existing test        既存測試
-agent-added test         本次 attempt 新增
-agent-modified test      本次 attempt 修改
-harness-generated check  Harness 自己產生的檢查
-external readback        外部狀態回讀
-```
-
-分類依據是 git 觀察到的 changedPaths 與測試路徑的交集 —— 不採信 agent 宣告。
-
-### Core 不能猜哪些檔案是測試
-
-`test/**` 是 Node 慣例、`tests/test_*.py` 是 Python 慣例、`*_test.go` 是 Go 慣例。
-讓 Core 內建這些規則，正是 §34 要避免的 domain 洩漏。應該由 Repository Contract 提供：
-
-```ts
-verification: {
-  checks: VerificationCheck[];
-  testPaths?: string[];      // 例如 ["test/**", "tests/**"]
-}
-```
-
-沒有宣告就是 `provenance: unknown`，不假裝知道 —— 與 completeness 同一原則。
-
-### 呈現，而不是阻擋
-
-agent 修改測試不該一律視為不可信 —— 正當的測試更新非常常見。
-應該做的是讓 response 顯示可信度的組成：
+呈現方式應該是攤開組成而不是壓成分數：
 
 ```text
-驗證（Harness 執行）
 - test (npm test)：PASS
     63 個測試全部執行，0 skip（baseline: 63 / 0）
-    既存測試 58 通過，其中 1 個在本次由 FAIL 轉 PASS
+    既存測試 58 通過，其中 1 個由 FAIL 轉 PASS
     本次新增測試 3 個通過
-    本次修改既存測試 2 個
 ```
 
-比單純一行 `npm test: PASS` 的資訊量高得多，而且使用者能自己判斷。
-
-MVP 不需要 numeric confidence score。把組成攤開來就夠了；
-把它壓成一個 0.87 反而丟失資訊。
-
-未來若要更嚴，可以由 Repository Contract 宣告策略（例如「證明 bug fix 的測試若全部是
-本次新寫的，則不接受」），但那是 repo 的政策選擇，不是 Core 的預設。
-
----
+MVP 不需要 numeric confidence score。
 
 ## 方向四：Sufficiency —— 刻意不做通用 Engine
 
@@ -324,16 +386,41 @@ repo 想要更高的 sufficiency，就在 contract 裡多寫 checks。
 
 ## 實作順序
 
-| 順序 | 內容 | 影響範圍 |
-|---|---|---|
-| 1 | Evidence subject（state binding） | 新增欄位，是 2 的前提 |
-| 2 | Pre-flight baseline + completeness | orchestrator、verification、outcome |
-| 3 | 輸出截斷旗標（補 E1 缺口） | `exec.ts`，數行 |
-| 4 | Test provenance | Repository Contract schema（會動到 §38 invariant 21 的測試） |
-| 5 | `SUCCESS` → `ACCEPTED_BY_EVIDENCE` | 純命名，掃過多個檔案但無風險 |
+第一版只有三步，加一個順手的修正：
 
-1–3 是同一組改動，建議一起做。4 動 contract schema，需要 schema 版本相容考量。
-5 隨時可做。
+```text
+1. Evidence 綁定 baseRevision / headRevision / contractHash
+   ↓
+2. Attempt 前跑一次 baseline（agent 動手之前）
+   ↓
+3. post verification 與 baseline 比較
+```
+
+同時補 `outputTruncated`（含前述的 exitCode 誤判與 tail 誤導）。
+
+這樣就完成第一版。
+
+### 成本
+
+pre-flight baseline 讓每個 write attempt 的 verification 時間翻倍。
+用 `baseRevision + contractHash + commandHash` 當快取鍵可以重用，
+但第一次仍然是實打實的額外時間。需要 `--no-baseline` 逃生口，
+並在 evidence 中標明本次沒有 baseline（走「baseline 不可用」那條規則）。
+
+### 後續候選
+
+| 項目 | 條件 |
+|---|---|
+| Test provenance（E3） | 出現真實的 false positive 案例 |
+| `SUCCESS` → `ACCEPTED_BY_EVIDENCE` | 純命名，隨時可做 |
+| 既存 failing repo 的接受策略 | 有真實需求時 |
+
+## 最小 Evidence 原則
+
+> **Evidence 必須證明它驗的是正確 revision、命令確實執行完成，
+> 而且相較 Agent 執行前沒有少跑或增加 skip。**
+
+其餘先不做。這符合 Harness 一貫的方向：**只加已經有真實失敗案例證明需要的機制。**
 
 ## 明確不做
 

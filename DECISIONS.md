@@ -121,5 +121,8 @@ Harness 自己在 read attempt 不執行 verification（§23.3），所以 outco
 - **Gate 1 dogfood**：文件要求 10 個真實 Coding Work（3 read / 5 write / 2 blocker），尚未累積。
 - **Gate 2 C5（pointer-first 在大型 repo）**：目前只在小型 fixture 驗證過。
 - **§22 的 in-session 協議重試**：見 D-20，MVP 直接走 retry attempt。
-- **Evidence 可信度分層**：E2 Completeness 有實際缺口（dogfood 中 skip 掉的測試讓 SUCCESS 失真），
-  E1 有一個小缺口（輸出截斷未記錄）。四層模型與實作順序見 `docs/evidence-model.md`，尚未實作。
+- **Evidence 可信度分層**：E2 Completeness 有實際缺口（dogfood 中 skip 掉的測試讓 SUCCESS 失真）。
+  E1 有兩個缺口：輸出超過 `maxOutputBytes` 時 `execFile` 會直接殺掉行程（不是截斷），
+  目前被誤判成 FAIL 且原因不可見；`tail` 取的是保留段的末端而非真正結尾，具誤導性。
+  第一版範圍收斂為三步（evidence 綁 revision → pre-flight baseline → 比較），
+  E3 provenance 降為後續候選。見 `docs/evidence-model.md`，尚未實作。
