@@ -16,7 +16,8 @@ export type EventType =
   | 'prompt.compiled' | 'attempt.started' | 'attempt.completed'
   | 'runtime.protocol_failed' | 'evidence.collected' | 'outcome.decided'
   | 'work.completed' | 'work.blocked' | 'work.state_changed'
-  | 'recovery.required';
+  | 'recovery.required'
+  | 'usage.note';   // 人對結果的判讀 —— 機器不知道 evidence 判錯了，只有人知道
 
 const SCHEMA = `
 create table if not exists works(
@@ -78,6 +79,41 @@ export class Store {
   events(workId: string): Array<{ seq: number; type: string; data: string; created_at: string; attempt_id: string | null }> {
     return this.db.prepare('select seq, type, data, created_at, attempt_id from events where work_id = ? order by seq')
       .all(workId) as never;
+  }
+
+  /** 跨 work 的 note 查詢。watch list 的升級判準需要看趨勢，不是單一 work。 */
+  notes(kind?: string): Array<{ seq: number; workId: string | null; kind: string; text: string; createdAt: string; title: string | null }> {
+    const rows = this.db.prepare(`
+      select e.seq, e.work_id, e.data, e.created_at, w.title
+      from events e left join works w on w.id = e.work_id
+      where e.type = 'usage.note' order by e.seq desc`).all() as Array<Record<string, unknown>>;
+    return rows.map((r) => {
+      const d = JSON.parse(r.data as string) as { kind: string; text: string };
+      return {
+        seq: Number(r.seq), workId: (r.work_id as string) ?? null,
+        kind: d.kind, text: d.text,
+        createdAt: r.created_at as string, title: (r.title as string) ?? null,
+      };
+    }).filter((n) => !kind || n.kind === kind);
+  }
+
+  /** 彙總：回答「大量 retry」「outcome 分佈」這類趨勢問題。 */
+  stats(): {
+    works: number; attempts: number; retries: number;
+    outcomes: Array<{ outcome: string; count: number }>;
+    notes: Array<{ kind: string; count: number }>;
+  } {
+    const one = (sql: string): number => (this.db.prepare(sql).get() as { n: number }).n;
+    return {
+      works: one('select count(*) as n from works'),
+      attempts: one('select count(*) as n from attempts'),
+      retries: one(`select count(*) as n from attempts where json_extract(json, '$.retryOf') is not null`),
+      outcomes: this.db.prepare(`
+        select outcome, count(*) as count from outcomes group by outcome order by count desc`).all() as never,
+      notes: this.db.prepare(`
+        select json_extract(data, '$.kind') as kind, count(*) as count
+        from events where type = 'usage.note' group by kind order by count desc`).all() as never,
+    };
   }
 
   // ---- artifacts (§29 大內容不進 event) ----

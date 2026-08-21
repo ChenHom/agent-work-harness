@@ -121,3 +121,22 @@ test('Gate 2 C2：attempt 綁定 repository revision 與 contract snapshot hash'
   assert.equal(a.contractSnapshotHash, 'deadbeef');
   h.store.close(); rmSync(h.base, { recursive: true, force: true });
 });
+
+test('usage note：跨 work 查詢與彙總', () => {
+  const h = harness();
+  const w1 = h.orch.createWork({ request: '修東西', workspace: h.repo });
+  const w2 = h.orch.createWork({ request: '修別的東西', workspace: h.repo });
+  h.store.event('usage.note', { kind: 'false-accept', text: 'PASS 但其實壞了' }, w1.id);
+  h.store.event('usage.note', { kind: 'friction', text: '每次都要手動裝依賴' }, w2.id);
+
+  const all = h.store.notes();
+  assert.equal(all.length, 2);
+  assert.equal(all[0]!.kind, 'friction');          // 最新的在前
+  assert.equal(all[0]!.workId, w2.id);
+  assert.equal(h.store.notes('false-accept').length, 1);
+
+  const st = h.store.stats();
+  assert.equal(st.works, 2);
+  assert.deepEqual(st.notes.map((n) => n.kind).sort(), ['false-accept', 'friction']);
+  h.store.close(); rmSync(h.base, { recursive: true, force: true });
+});

@@ -24,9 +24,22 @@ const USAGE = `harness — Agent Work Harness (MVP)
   harness show <workId>                 contract / decisions / attempts / evidence
   harness trace <workId>                append-only 事件流
   harness prompt <attemptId>            印出該 attempt 實際送出的 prompt
+  harness note <workId> <kind> "<說明>"  記錄使用中發現的問題（見下方 kind）
+  harness notes [kind]                  列出所有記錄
+  harness stats                         work / attempt / retry / outcome 彙總
   harness skills list|approve <id> <dir>
   harness doctor [dir]                  檢查 runtime 與隔離是否真的生效
+
+note 的 kind 對應 DECISIONS.md 的升級判準：
+  false-accept   evidence 判 PASS，但實際上是壞的
+  false-block    正當的工作被錯誤擋下
+  retry-churn    因 context 或 evidence 不足而反覆重跑
+  blocked-work   某類工作因為已知限制根本做不了
+  friction       為了繞過某個限制必須反覆做額外的事
+  other          其他值得記下來的觀察
 `;
+
+const NOTE_KINDS = ['false-accept', 'false-block', 'retry-churn', 'blocked-work', 'friction', 'other'];
 
 async function main(argv: string[]): Promise<number> {
   const [cmd, ...rest] = argv;
@@ -150,6 +163,46 @@ async function main(argv: string[]): Promise<number> {
       const attempt = attemptId ? store.getAttempt(attemptId) : null;
       if (!attempt) { console.error('找不到 attempt'); return 1; }
       console.log(store.readArtifact(attempt.promptArtifactId) ?? '(prompt artifact 不存在)');
+      return 0;
+    }
+
+    case 'note': {
+      const [workId, kind, text] = rest;
+      if (!workId || !kind || !text) { console.error('用法：harness note <workId> <kind> "<說明>"'); return 1; }
+      if (!NOTE_KINDS.includes(kind)) { console.error(`kind 必須是：${NOTE_KINDS.join(' / ')}`); return 1; }
+      if (!store.getWork(workId)) { console.error(`找不到 work ${workId}`); return 1; }
+      store.event('usage.note', { kind, text }, workId);
+      console.log(`已記錄 [${kind}] ${workId}`);
+      // false-accept / false-block 是 watch list 的前兩條升級判準，出現就該被看見
+      if (kind === 'false-accept' || kind === 'false-block') {
+        console.log('這一類直接對應 DECISIONS.md 的升級判準 —— 累積出模式時，該把對應的 observed limitation 移出 watch list。');
+      }
+      return 0;
+    }
+
+    case 'notes': {
+      const kind = rest[0];
+      const notes = store.notes(kind);
+      if (!notes.length) { console.log(kind ? `(沒有 ${kind} 的記錄)` : '(還沒有任何記錄)'); return 0; }
+      for (const n of notes) {
+        console.log(`${n.createdAt.slice(0, 16).replace('T', ' ')}  ${n.kind.padEnd(13)} ${n.workId ?? '-'}`);
+        console.log(`    ${n.text}`);
+        if (n.title) console.log(`    work: ${n.title.slice(0, 70)}`);
+      }
+      return 0;
+    }
+
+    case 'stats': {
+      const st = store.stats();
+      console.log(`works: ${st.works}   attempts: ${st.attempts}   retries: ${st.retries}` +
+        (st.attempts ? `   (retry 率 ${Math.round((st.retries / st.attempts) * 100)}%)` : ''));
+      console.log('\noutcome 分佈');
+      if (!st.outcomes.length) console.log('  (無)');
+      for (const o of st.outcomes) console.log(`  ${o.outcome.padEnd(22)} ${o.count}`);
+      if (st.notes.length) {
+        console.log('\n使用中記錄的問題');
+        for (const n of st.notes) console.log(`  ${String(n.kind).padEnd(22)} ${n.count}`);
+      }
       return 0;
     }
 

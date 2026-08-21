@@ -24,6 +24,8 @@ Core abstraction       ✅ 跨兩種語言 / domain / runner，Core 0 修改
 - `codex` CLI（已登入）
 - `bwrap`（bubblewrap）—— verification 與 git evidence 的隔離執行
 
+**使用手冊：`docs/usage.md`** —— 安裝、新專案設定、日常流程、出問題怎麼查、如何記錄使用中發現的問題。
+
 ## 快速開始
 
 ```bash
@@ -67,6 +69,7 @@ WorkContract + Decision Ledger + Repository Contract snapshot
 | Harness 觀察到什麼 | `node src/cli.ts show <workId>` |
 | codex 原始輸出 | `~/.local/share/agent-work-harness/attempts/<attemptId>/runtime.log` |
 | 隔離是否還有效 | `node src/cli.ts doctor <repo>` |
+| 使用中發現判錯了 | `harness note <workId> <kind> "<說明>"`，見 `docs/usage.md` |
 
 state 全部在 `~/.local/share/agent-work-harness/`（`HARNESS_STATE_DIR` 可覆蓋）：
 `harness.db`（SQLite）、`artifacts/`（prompt、diff、stdout）、`attempts/`。
