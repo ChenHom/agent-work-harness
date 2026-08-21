@@ -37,3 +37,17 @@ test('不解析自然語言語意，只保留原文 constraint', () => {
   assert.deepEqual(p.deniedPaths, []);
   assert.equal(p.constraints.length, 0); // 不硬拆；由 caller 原文保留
 });
+
+test('「不要改動 X」是限制，不是 read-only 宣告（dogfood W1 回歸）', () => {
+  const w1 = parseRequest('harness list 目前只印 work id / state / repo / title，看不出上一次的判定結果。請讓它同時顯示最後一次 outcome。不要改動其他指令的輸出格式，npm test 與 typecheck 必須通過。');
+  assert.equal(w1.mode, 'write');
+  assert.equal(parseRequest('修 bug，但不要修改 public API').mode, 'write');
+  assert.equal(parseRequest('please fix it, but don\'t change the CLI output').mode, 'write');
+});
+
+test('整體性的 read-only 宣告仍然生效', () => {
+  for (const s of ['只看不要改', '不要改，先幫我分析', '這次不要修改。只要找原因', 'read-only 調查',
+                   '不要修改任何檔案', 'just investigate the failure', "don't modify anything"]) {
+    assert.equal(parseRequest(s).mode, 'read', `應判為 read: ${s}`);
+  }
+});

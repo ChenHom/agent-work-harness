@@ -12,9 +12,22 @@ export interface ParsedRequest {
   matched: Array<{ rule: string; text: string }>;
 }
 
+// read-only 宣告必須是「整體性」的：動詞後面不得再接受詞。
+// 「只看不要改」是宣告；「不要改動其他指令的輸出格式」是限制某個對象，不是 read-only
+// （dogfood W1 真的踩到：整個 write attempt 被降級成 read）。
+const NO_OBJECT = '(?!\\s*[^\\s，。；,.;])';   // 後面跳過空白後只能是標點或句末
 const READ_ONLY_PATTERNS = [
-  /只看/, /不要改/, /不要修改/, /不要更動/, /別改/, /不用改/, /只分析/, /只調查/, /先不要改/,
-  /\bread[- ]?only\b/i, /\bdon'?t\s+(modify|change|edit)\b/i, /\bjust\s+(look|investigate|analy[sz]e)\b/i,
+  /只看/, /只分析/, /只調查/, /唯讀/,
+  new RegExp(`(?:先)?不要改${NO_OBJECT}`),
+  new RegExp(`不要修改${NO_OBJECT}`),
+  new RegExp(`不要更動${NO_OBJECT}`),
+  new RegExp(`別改${NO_OBJECT}`),
+  new RegExp(`不用改${NO_OBJECT}`),
+  /不要修改任何|不要動任何|不修改任何/,
+  /\bread[- ]?only\b/i,
+  /\bdon'?t\s+(?:modify|change|edit)\b(?!\s+\S)/i,
+  /\bdon'?t\s+(?:modify|change|edit)\s+anything\b/i,
+  /\bjust\s+(?:look|investigate|analy[sz]e)\b/i,
 ];
 
 // 「不要碰 payment」「不要動 src/x」「不要改 a/b」

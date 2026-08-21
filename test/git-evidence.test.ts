@@ -3,9 +3,26 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, execFileSync as run } from 'node:child_process';
 import { snapshotDirty, observeGit, baseRevision, pathPolicyEvidence } from '../src/evidence/git.ts';
 import { DEFAULT_POLICY } from '../src/policy.ts';
+
+/**
+ * verification 本身就跑在 bwrap 裡（§20.3），而這些測試會再開一層 bwrap。
+ * 巢狀 sandbox 建不起來，所以在隔離環境中要跳過，不是靜默失敗。
+ * dogfood 時這件事讓五個 write work 全部誤判成測試失敗。
+ */
+function sandboxUsable(): string | false {
+  try {
+    run('bwrap', ['--unshare-all', '--ro-bind', '/usr', '/usr',
+      '--ro-bind-try', '/lib', '/lib', '--ro-bind-try', '/lib64', '/lib64',
+      '--', '/usr/bin/true'], { stdio: 'ignore' });
+    return false;
+  } catch {
+    return '巢狀 bwrap 不可用（本測試需要在未隔離的環境執行）';
+  }
+}
+const skip = sandboxUsable();
 
 function repo(): string {
   const base = mkdtempSync(join(tmpdir(), 'harness-git-'));
@@ -18,7 +35,7 @@ function repo(): string {
   return r;
 }
 
-test('attempt 前就存在的未提交變更不算 agent 的變更', async () => {
+test('attempt 前就存在的未提交變更不算 agent 的變更', { skip }, async () => {
   const r = repo();
   // attempt 之前就髒（例如使用者剛跑過 harness init）
   writeFileSync(join(r, 'preexisting.json'), '{}\n');
@@ -38,7 +55,7 @@ test('attempt 前就存在的未提交變更不算 agent 的變更', async () =>
   rmSync(join(r, '..'), { recursive: true, force: true });
 });
 
-test('agent 若動了本來就髒的檔案，仍算這次的變更', async () => {
+test('agent 若動了本來就髒的檔案，仍算這次的變更', { skip }, async () => {
   const r = repo();
   writeFileSync(join(r, 'preexisting.json'), '{}\n');
   const dirty = await snapshotDirty(DEFAULT_POLICY, r);
@@ -51,7 +68,7 @@ test('agent 若動了本來就髒的檔案，仍算這次的變更', async () =>
   rmSync(join(r, '..'), { recursive: true, force: true });
 });
 
-test('乾淨 worktree 下觀察不到變更', async () => {
+test('乾淨 worktree 下觀察不到變更', { skip }, async () => {
   const r = repo();
   const base = await baseRevision(DEFAULT_POLICY, r);
   const obs = await observeGit(DEFAULT_POLICY, r, base, []);
