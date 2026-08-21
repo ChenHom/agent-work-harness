@@ -12,6 +12,10 @@ const OUTCOME_TITLE: Record<OutcomeDecision['outcome'], string> = {
   FAILED: '失敗',
 };
 
+export function formatPromptChars(prompt: string | null): string {
+  return `    promptChars: ${prompt?.length ?? 0}`;
+}
+
 export function buildResponse(input: {
   attempt: Attempt;
   decision: OutcomeDecision;
@@ -35,6 +39,18 @@ export function buildResponse(input: {
   out.push('', '實際修改（Harness 觀察）');
   if (changed.length) for (const p of changed) out.push(`- ${p}`);
   else out.push('- 無');
+
+  if (decision.outcome === 'POLICY_VIOLATION') {
+    const violations = evidence
+      .filter((e) => e.type === 'path_policy' && e.status === 'FAIL')
+      .flatMap((e) => (e.data as { violations?: Array<{ path: string; rule: string }> }).violations ?? []);
+    out.push('', '禁止範圍內的變更（已擋下）');
+    if (violations.length) {
+      for (const v of violations) out.push(`- ${v.path}（規則：${v.rule}）`);
+    } else {
+      out.push('- path policy 驗證失敗，但證據未提供違規路徑');
+    }
+  }
 
   const verifications = evidence.filter((e) => e.type !== 'git_diff');
   out.push('', '驗證（Harness 執行）');

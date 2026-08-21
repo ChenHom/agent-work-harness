@@ -46,6 +46,7 @@ export interface Attempt {
   contractSnapshotHash: string;  // §34.1.1 RepositoryContractSnapshot hash
   baseRevision: string;          // §36.2 C2
   preExistingDirty?: Array<{ path: string; hash: string | null }>;  // attempt 開始前就髒的檔案
+  contextDropped?: Array<{ priority: number; count: number }>;      // prompt budget 裁切統計
   promptArtifactId: string;
   resultArtifactId?: string;
   runtime: 'codex';

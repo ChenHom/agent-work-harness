@@ -40,9 +40,9 @@
 
 | Gate | 狀態 |
 |---|---|
-| 1 Usable | 部分：CLI 全流程可用，使用者不需碰 codex；但 10 個真實 dogfood work 尚未累積 |
-| 2 Context-correct | C1–C4 有測試覆蓋；C5（大型 repo 的 pointer-first）只在小 fixture 驗過 |
+| 1 Usable | 通過：10 個真實 dogfood work 全部正確完成或正確收斂，無人工修改 prompt/state。見 `docs/dogfood.md` |
+| 2 Context-correct | C1–C4 有測試覆蓋；C5 已在 harness 自己的 repo（~3.5k 行）驗過，更大的 repo 尚未壓測 |
 | 3 Governed | G1–G4 皆有實測或 E2E 證據 |
-| 4 Evidence-correct | 有測試與 E2E 覆蓋 |
+| 4 Evidence-correct | 有測試與 E2E 覆蓋。已知盲區：verification 若在執行環境靜默 skip 部分測試，SUCCESS 的強度會跟著降低（見 `docs/dogfood.md`） |
 | 5 Recoverable | 有測試覆蓋（restart persistence + crash recovery） |
 | 6 Portable | E2E H：Python repo 只加 `.harness/config.json` 即通過 write+verify |

@@ -9,6 +9,8 @@ import { detectCandidate, loadSnapshot, CONTRACT_REL_PATH, ContractError } from 
 import { approveSkill, loadRegistry, admitSkills } from './security/skills.ts';
 import { ensureRuntimeDirs } from './runtime/isolation.ts';
 import { runIsolated } from './evidence/exec.ts';
+import { formatContextDropped, formatPreExistingDirty, formatWorkListRow } from './cli-format.ts';
+import { formatPromptChars } from './response.ts';
 
 const USAGE = `harness — Agent Work Harness (MVP)
 
@@ -98,7 +100,7 @@ async function main(argv: string[]): Promise<number> {
 
     case 'list': {
       for (const w of store.listWorks()) {
-        console.log(`${w.id}  ${w.state.padEnd(12)} ${w.repositoryId.padEnd(16)} ${w.title}`);
+        console.log(formatWorkListRow(w, store.lastOutcome(w.id)?.outcome ?? null));
       }
       return 0;
     }
@@ -121,6 +123,9 @@ async function main(argv: string[]): Promise<number> {
       console.log('\n[attempts]');
       for (const a of store.listAttempts(work.id)) {
         console.log(`- #${a.number} ${a.id} ${a.mode} ${a.status} base=${a.baseRevision.slice(0, 8)} contract=v${a.contractVersion} snapshot=${a.contractSnapshotHash.slice(0, 8)}${a.retryOf ? ` retryOf=${a.retryOf}` : ''}`);
+        console.log(formatPromptChars(store.readArtifact(a.promptArtifactId)));
+        console.log(formatPreExistingDirty(a));
+        console.log(formatContextDropped(a));
         for (const e of store.listEvidence(a.id)) console.log(`    · ${e.type} ${e.label}: ${e.status}`);
       }
       const last = store.lastOutcome(work.id);

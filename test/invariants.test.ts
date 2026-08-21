@@ -190,16 +190,19 @@ test('19. agent 宣稱 test PASS 但實際 exit code 非 0 → 不可 SUCCESS', 
 });
 
 test('20. tests PASS 但 denied path 有變更 → POLICY_VIOLATION', () => {
+  const evidence = [
+    gitEv(['src/a.ts', 'payment/x.ts']),
+    ev({ status: 'PASS' }),
+    ev({ type: 'path_policy', label: 'denied path check', status: 'FAIL', data: { violations: [{ path: 'payment/x.ts', rule: 'denied' }] } }),
+  ];
   const d = decideOutcome({
     mode: 'write', skillAdmissions: [], protocolOk: true, runtimeResult: completed,
-    evidence: [
-      gitEv(['src/a.ts', 'payment/x.ts']),
-      ev({ status: 'PASS' }),
-      ev({ type: 'path_policy', label: 'denied path check', status: 'FAIL', data: { violations: [{ path: 'payment/x.ts', rule: 'denied' }] } }),
-    ],
+    evidence,
     retryBudgetRemaining: 5,
   });
   assert.equal(d.outcome, 'POLICY_VIOLATION');
+  const text = buildResponse({ attempt, decision: d, result: completed, evidence, notExecuted: [] });
+  assert.match(text, /禁止範圍內的變更（已擋下）\n- payment\/x\.ts（規則：denied）/);
 });
 
 test('21. verification command 只能是 trusted contract 的 argv，不吃 shell 字串', () => {

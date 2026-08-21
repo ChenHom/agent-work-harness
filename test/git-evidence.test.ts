@@ -17,6 +17,24 @@ import { DEFAULT_POLICY } from '../src/policy.ts';
 const probe = await runIsolated(DEFAULT_POLICY, ['git', '--version'], { workspace: tmpdir(), timeoutMs: 20_000 });
 const skip = probe.exitCode === 0 ? false : '隔離執行不可用（多半是巢狀 bwrap），本測試需要未隔離的環境';
 
+test('被執行程式自行收到 SIGKILL 不會誤判為逾時', { skip }, async () => {
+  const run = await runIsolated(DEFAULT_POLICY, ['sh', '-c', 'kill -KILL $$'], {
+    workspace: tmpdir(), timeoutMs: 20_000,
+  });
+  // bwrap 才是被 spawn 的行程：內層自殺時 bwrap 以 128+9 正常結束，
+  // 所以 signal 是 null 而不是 'SIGKILL'。這裡要驗的是「沒有被誤判成逾時」。
+  assert.equal(run.timedOut, false);
+  assert.notEqual(run.exitCode, 0);
+});
+
+test('超過期限時會標記為逾時', { skip }, async () => {
+  const run = await runIsolated(DEFAULT_POLICY, ['sh', '-c', 'while :; do :; done'], {
+    workspace: tmpdir(), timeoutMs: 50,
+  });
+  assert.equal(run.signal, 'SIGKILL');
+  assert.equal(run.timedOut, true);
+});
+
 function repo(): string {
   const base = mkdtempSync(join(tmpdir(), 'harness-git-'));
   const r = join(base, 'repo');

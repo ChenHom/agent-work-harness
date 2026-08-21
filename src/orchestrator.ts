@@ -170,6 +170,7 @@ export class Orchestrator {
       previousClaims: previous ? this.previousClaims(previous.id) : [],
     });
     const budgeted = applyBudget(manifest, this.policy.promptBudgetChars);
+    attempt.contextDropped = budgeted.dropped;
     if (budgeted.dropped.length) this.store.event('context_manifest.created', { dropped: budgeted.dropped }, workId, attemptId);
 
     const prompt = compilePrompt({

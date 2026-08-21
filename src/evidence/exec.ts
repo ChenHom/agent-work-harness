@@ -36,23 +36,28 @@ export function runIsolated(policy: GlobalPolicy, argv: readonly string[], opts:
   const timeout = opts.timeoutMs ?? policy.verificationTimeoutMs;
 
   return new Promise((resolve) => {
-    execFile('bwrap', wrapped, {
+    let timedOut = false;
+    const child = execFile('bwrap', wrapped, {
       env: verificationEnv(policy),
       shell: false,
-      timeout,
       maxBuffer: policy.maxOutputBytes,
       killSignal: 'SIGKILL',
     }, (err, stdout, stderr) => {
+      clearTimeout(timer);
       const e = err as (NodeJS.ErrnoException & { code?: number | string; killed?: boolean; signal?: string }) | null;
       resolve({
         argv: [...argv],
         exitCode: e ? (typeof e.code === 'number' ? e.code : null) : 0,
         signal: e?.signal ?? null,
-        timedOut: Boolean(e?.killed && e.signal === 'SIGKILL'),
+        timedOut,
         stdout: String(stdout), stderr: String(stderr),
         durationMs: Date.now() - started,
       });
     });
+    const timer = setTimeout(() => {
+      timedOut = true;
+      child.kill('SIGKILL');
+    }, timeout);
   });
 }
 
