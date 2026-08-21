@@ -135,8 +135,10 @@ verification:     bwrap --tmpfs /tmp                       → /tmp 可寫
 而 Harness 的 verification 判 PASS。實測手動連跑三次都 exit 0，**Harness 是對的，
 agent 看到的是環境假象**。使用者會看到兩邊說法不一致。
 
-後果二：嚴格說這違反 §20.3（verification 隔離必須 ≥ agent execution），
-因為 verification 的 `/tmp` 比 agent 寬鬆。實質風險不高（tmpfs 不持久），但規則上不一致。
+後果二：這**不是** isolation 強弱問題。要區分 capability 與 isolation ——
+verification 的 `--tmpfs /tmp` 是 private tmpfs，host `/tmp` 對 agent 與 verification 同樣不可見。
+從 host security boundary 看沒有誰比誰弱，§20.3 沒有被違反。
+準確的說法是 **agent 與 verification 的 execution semantics 不一致**，也就是 execution parity 問題。
 
 理想解是給 agent 一個私有的可寫 tmpfs，但 codex 的 `exclude_slash_tmp` 只有開關兩種，
 關掉會讓 agent 看到主機的 `/tmp`，那更危險。這是 runtime 限制，不是 Harness 的選擇。
