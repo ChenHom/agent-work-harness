@@ -3,26 +3,19 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { execFileSync, execFileSync as run } from 'node:child_process';
+import { execFileSync } from 'node:child_process';
+import { runIsolated } from '../src/evidence/exec.ts';
 import { snapshotDirty, observeGit, baseRevision, pathPolicyEvidence } from '../src/evidence/git.ts';
 import { DEFAULT_POLICY } from '../src/policy.ts';
 
 /**
  * verification 本身就跑在 bwrap 裡（§20.3），而這些測試會再開一層 bwrap。
- * 巢狀 sandbox 建不起來，所以在隔離環境中要跳過，不是靜默失敗。
- * dogfood 時這件事讓五個 write work 全部誤判成測試失敗。
+ * 巢狀 sandbox 建不起來，所以在隔離環境中要明確跳過，不是靜默失敗。
+ * dogfood 第一輪時這件事讓五個 write work 全部誤判成測試失敗。
+ * probe 走的是與測試完全相同的執行路徑，才不會像第一版那樣漏判。
  */
-function sandboxUsable(): string | false {
-  try {
-    run('bwrap', ['--unshare-all', '--ro-bind', '/usr', '/usr',
-      '--ro-bind-try', '/lib', '/lib', '--ro-bind-try', '/lib64', '/lib64',
-      '--', '/usr/bin/true'], { stdio: 'ignore' });
-    return false;
-  } catch {
-    return '巢狀 bwrap 不可用（本測試需要在未隔離的環境執行）';
-  }
-}
-const skip = sandboxUsable();
+const probe = await runIsolated(DEFAULT_POLICY, ['git', '--version'], { workspace: tmpdir(), timeoutMs: 20_000 });
+const skip = probe.exitCode === 0 ? false : '隔離執行不可用（多半是巢狀 bwrap），本測試需要未隔離的環境';
 
 function repo(): string {
   const base = mkdtempSync(join(tmpdir(), 'harness-git-'));
