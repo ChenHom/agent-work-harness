@@ -173,26 +173,147 @@ alternative implementation  =  user intended implementation
 - 沒有 retry，沒有 POLICY_VIOLATION，沒有 protocol 失敗。
 - D-26（network namespace）沒有被撞到 —— task-tracker 的測試不需要外部服務。
 
-## 下一站：rag-stack
+---
 
-第一站刻意選了變因較少的目標。第二站要壓的是這一輪沒碰到的：
+# 第二站：rag-stack
 
-```text
-DB / Redis / service dependency
-Docker / compose
-較長的 verification
-network namespace（D-26）
-environment dependency
+## 目標 Repo
+
+10k 行 Python、100 檔、FastAPI + Qdrant + MinIO，有 docker-compose。
+agent 對這個 domain（RAG / 向量檢索）完全陌生。
+
+## Dependency shape：先分類，不要統稱「needs network」
+
+初步跡象看起來很嚇人 —— 測試檔裡有 `http://restore-qdrant:6333`、`http://api:8010`
+這種 Docker DNS 名稱，README 的執行方式是：
+
+```bash
+docker run --rm --network container:rag-api -v "$PWD/app":/app ... "$IMAGE" python -m unittest
 ```
 
-D-26 會在那裡得到真實資料 —— 而且要分辨它到底是哪一型：
+這需要三件 bwrap 內不可能有的東西：docker daemon socket、加入已在跑容器的 netns、掛載任意路徑。
+而且 `--network container:X` 等於讓 repo 提供的 argv 跳出 Harness 的隔離。
+
+**但實測推翻了這個推論。** 逐一執行 21 個測試檔：
 
 ```text
-A. test 自己 spawn DB
-B. test 連 localhost Redis
-C. test 連 Docker bridge
-D. test 連 host service
-E. test 需要外網 API
+全部 PASS，不需要任何外部服務
 ```
 
-這五種的正確解法完全不同，所以現在不設計 network exception framework 是對的。
+那些 URL 字串只是 mock 參數。README 那段 `docker run` 是**正式環境驗證**
+（`verify_search_quality_runtime.py --api-url`），不是單元測試。
+
+分類結果：
+
+| 層 | 形態 | 可在 sandbox 執行？ |
+|---|---|---|
+| `tests/test_*.py`（125 個測試） | 無外部依賴，全 mock/fixture | **可以** |
+| `scripts/verify_*_runtime.py` | **D 型：host service** | 不行 |
+
+這正是「不要先統稱 needs network」的價值 —— 如果第一眼就下結論，會為了一個不存在的問題
+去設計 network exception framework。
+
+## Verification feasibility：不需要改 Contract schema
+
+測試需要 `PYTHONPATH=app`（容器內的佈局是 `app/` 掛成根），而 `VerificationCheck`
+沒有 env 欄位。看起來像 Contract 缺資訊。
+
+但用 `env(1)` 當 argv[0] 就解決了：
+
+```json
+["env", "PYTHONPATH=app", ".venv/bin/python", "-m", "unittest", "discover", "-s", "tests", "-p", "test_*.py"]
+```
+
+argv[0] 不是絕對路徑、不是 shell 字串、是純 argv 陣列 —— 完全符合現有契約。
+**Contract 沒有少資訊，是我沒想到用 `env(1)`。**
+
+這是「先問是 Core 假設錯還是 Contract 少資訊」的第三種答案：**兩者都不是，現有機制已經夠用。**
+
+## 結果：5 個 Work
+
+| # | 類型 | 任務 | 結果 |
+|---|---|---|---|
+| R1 | read | 文件從上傳到可被搜尋經過哪些步驟 | SUCCESS，零變更，**找到一個補償缺口** |
+| R2 | read | `app/common/` 的邊界條件與錯誤處理 | SUCCESS，零變更，**找到 3 個真問題** |
+| W1 | write | 修 bool 通過數值驗證（`isinstance(True, int)`） | SUCCESS，2 檔 |
+| W2 | write | 修 `max(expected_score or score, score)` 把 0.0 當未設定 | SUCCESS，2 檔 |
+| B1 | blocker | 要求對正在運行的 rag-api 跑品質驗證 | **BLOCKED**（D-26 的第一個真實案例） |
+
+## 六個觀察
+
+| 觀察 | 結果 |
+|---|---|
+| **Dependency shape** | 測試層無依賴；驗證腳本層是 D 型（host service）。見上方分類 |
+| **Verification feasibility** | 可行，`env(1)` 表達環境變數，Contract schema 不變 |
+| **Agent/Verification parity** | **再次矛盾**（D-27 第 2、3 次）。agent 在 read-only sandbox 沒有可用暫存目錄，unittest 中止 |
+| **Baseline cost** | 125 個測試 0.567 秒，成本可忽略 —— 「慢測試」這個假設兩站都沒壓到 |
+| **Context** | prompt 2.1–2.4 KB，0 retry。**陌生 domain 下 pointer-first 仍成立** |
+| **Core changes** | **0** |
+
+## D-26 的第一個真實案例
+
+B1 要求對 `http://127.0.0.1:8010` 跑品質驗證。agent 執行了腳本，10 次請求全部 ConnectError，
+並且**正確識別出陷阱**：
+
+> 腳本顯示的 `stable_ranking=true` 與 `negative_zero_results=true` 只是空結果衍生值，
+> 不能作為品質通過證據。
+
+它沒有因為腳本沒 crash 就宣稱通過，還額外用 curl 交叉驗證。Outcome 是 BLOCKED，零變更。
+
+**形態確認：D 型（host service）。** 不是 Docker network、不是 Internet ——
+就是主機上一個已在跑的 port。這一型如果要支援，需要的是「允許 verification 加入 host netns
+或特定 port 的例外」，跟 C 型（需要 Docker DNS）或 E 型（需要外網）的解法完全不同。
+
+依然不修。一個案例還不足以決定 exception 的形狀。
+
+## E2 的第二個資料點：這次是我的覆蓋不足，不是架構問題
+
+rag-stack 的 `unittest discover` 輸出 `Ran 125 tests in 0.567s` / `OK`，
+`parseCompleteness()` 不認得，所以又是「執行規模未知」。
+
+但這跟 task-tracker 的情況**性質不同**：
+
+```text
+task-tracker:  && 串接的自訂 runner   → 真的沒有標準格式可解析
+rag-stack:     Python 標準庫 unittest → 格式固定，只是我沒支援
+```
+
+`unittest` 跟 `pytest` 一樣是 Python 生態的標準選擇，支援它只需要一個正則。
+所以第二個資料點指向的是**內建格式覆蓋不足**，而不是「解析式 completeness 這個路線錯了」。
+
+仍然不修 —— 但如果第三站又出現，那就不是覆蓋不足而是應該把它排進實作。
+
+## 兩站合計
+
+```text
+Cross-Repo #1 task-tracker   36.6k 行 TypeScript    5/5 收斂   Core 0 修改
+Cross-Repo #2 rag-stack      10k 行 Python/RAG      5/5 收斂   Core 0 修改
+```
+
+10 個真實 Work、兩種語言、兩種 domain、兩種測試 runner、一個有服務依賴，
+Harness Core 一行沒改，也沒有出現 Repository Contract 無法表達的差異。
+
+三個假設在兩站都成立：
+
+```text
+Pointer-first          prompt 2.0–2.4 KB，不隨 repo 大小或 domain 陌生度成長，0 retry
+Repository Contract    承接了語言、runner、佈局、環境變數、protected path 的全部差異
+Read → Write 循環      兩站的 W1/W2 題目都由 R2 產出
+```
+
+## 下一站
+
+
+
+兩站都沒有壓到的假設：
+
+```text
+慢的 verification        兩站的測試分別是 12 秒與 0.567 秒，baseline 翻倍都無感
+C 型 / E 型的服務依賴     只遇到 D 型
+Repository Contract 的極限  還沒出現需要新欄位的情況
+```
+
+如果要繼續，第三站應該刻意選：**測試要跑幾分鐘、且需要 Docker network 或外網的 repo**。
+那才會逼出 baseline cache 與 network exception 的真實需求形狀。
+
+在那之前，Core 沒有任何需要修改的證據。

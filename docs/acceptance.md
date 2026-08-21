@@ -41,8 +41,8 @@
 | Gate | 狀態 |
 |---|---|
 | 1 Usable | 通過：10 個真實 dogfood work 全部正確完成或正確收斂，無人工修改 prompt/state。見 `docs/dogfood.md` |
-| 2 Context-correct | C1–C4 有測試覆蓋；C5 已在 task-tracker（36.6k 行）驗過：prompt 仍是 2KB、0 retry、agent 自行找到正確模組。見 `docs/cross-repo-validation.md` |
+| 2 Context-correct | C1–C4 有測試覆蓋；C5 已在 task-tracker（36.6k 行 TS）與 rag-stack（10k 行 Python/RAG）驗過：prompt 皆 2.0–2.4 KB、0 retry。見 `docs/cross-repo-validation.md` |
 | 3 Governed | G1–G4 皆有實測或 E2E 證據 |
 | 4 Evidence-correct | 有測試與 E2E 覆蓋。dogfood 發現的 skip 盲區已修（pre-flight baseline，見 `docs/evidence-model.md`）；E3 provenance 仍是後續候選 |
 | 5 Recoverable | 有測試覆蓋（restart persistence + crash recovery） |
-| 6 Portable | E2E H：Python repo 只加 `.harness/config.json` 即通過 write+verify。task-tracker（36.6k 行）5 個真實 work 全部收斂，Core 零修改 |
+| 6 Portable | E2E H：Python repo 只加 `.harness/config.json` 即通過 write+verify。Cross-Repo 兩站（task-tracker 36.6k 行 TS、rag-stack 10k 行 Python）各 5 個真實 work 全部收斂，Core 零修改 |

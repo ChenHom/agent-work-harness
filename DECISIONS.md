@@ -144,6 +144,20 @@ verification 的 `--tmpfs /tmp` 是 private tmpfs，host `/tmp` 對 agent 與 ve
 關掉會讓 agent 看到主機的 `/tmp`，那更危險。這是 runtime 限制，不是 Harness 的選擇。
 現在只記錄，見 `docs/cross-repo-validation.md` 發現 2。
 
+Cross-Repo #2 又出現兩次，形態不同（read-only sandbox 中沒有可用暫存目錄，
+unittest 載入失敗後長時間無輸出）。三次的共同根因都是 agent 無法重現 verification 環境。
+
+### D-28 [實測] Repository Contract 用 `env(1)` 表達環境變數需求，不需要新欄位
+rag-stack 的測試需要 `PYTHONPATH=app`，而 `VerificationCheck` 沒有 env 欄位。
+看起來像 Contract 缺資訊，但 `env(1)` 當 argv[0] 就解決了：
+
+```json
+["env", "PYTHONPATH=app", ".venv/bin/python", "-m", "unittest", "discover", "-s", "tests"]
+```
+
+argv[0] 不是絕對路徑、不是 shell 字串、是純 argv 陣列，完全符合現有契約。
+在為 schema 增加表達力之前，先確認現有機制真的不夠。
+
 ### D-26 [實測] verification sandbox 內連不到主機上既有的服務
 `bwrapArgv` 用 `--unshare-all`，其中包含 `--unshare-net`，沙箱裡是全新的 network namespace。
 實測：
