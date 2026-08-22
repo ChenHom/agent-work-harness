@@ -157,7 +157,7 @@ unittest 載入失敗後長時間無輸出）。三次的共同根因都是 agen
 | `tsc` | 已有 | — |
 | ESLint + typescript-eslint | `no-floating-promises`（見 D-29）＋ 架構界線規則 | src 3 個 finding，已修 |
 | Knip | 22 個檔卻有 11 個沒人用的 export；公開面積是要維持穩定的東西 | 11 個全部屬實，已收斂 |
-| StrykerJS | 本專案的整個論點就是「測試通過不等於真的驗到」，mutation 正好回答這題 | outcome.ts 76.42%，29 個行為型 mutant 存活 |
+| StrykerJS | 本專案的整個論點就是「測試通過不等於真的驗到」，mutation 正好回答這題 | 五個檔 71.13%，**抓到一個沒被測到的 security gate**（見下） |
 | Coverage | Node 內建 `--experimental-test-coverage`，零安裝 | line 94.39% / branch 85.51% |
 
 **不裝**
@@ -178,6 +178,34 @@ unittest 載入失敗後長時間無輸出）。三次的共同根因都是 agen
 **兩個要記下來的雜訊來源**：
 - ESLint 會去 lint Stryker 的 sandbox 複本（`.stryker-tmp/`），要在 flat config 加 global ignores，否則 `npm run check` 會噴三百個 `ban-ts-comment`。
 - Knip 把 `@stryker-mutator/command-runner` 報成未列相依 —— 它不是獨立套件，包在 core 裡。已加進 `ignoreDependencies`。
+
+### D-32 [實測] mutation 首跑基準，以及它抓到的第一個真洞
+2026-08-22，679 個 mutant、7 分 57 秒：
+
+| 檔案 | 分數 | 存活 | 這個檔案在守什麼 |
+|---|---|---|---|
+| `repo/paths.ts` | 87.50% | 8 | 越界判定 |
+| `evidence/outcome.ts` | 76.42% | 29 | fail-closed 判定 |
+| `evidence/verification.ts` | 70.09% | 32 | E2 completeness |
+| `runtime/isolation.ts` | 64.71% | 12 | 沙箱 argv |
+| `security/skills.ts` | **58.10%** | **44** | §19.2 skill admission |
+| 全部 | 71.13% | 125 | |
+
+**最值得看的一個**：`skills.ts:70` 一行就有 15 個 mutant 存活 ——
+
+```ts
+if (!skill.externalRefsAllowed && (ext === '.md' || ext === '.txt' || ext === '.json')) {
+```
+
+把 `!` 拿掉、把副檔名清單改空、把整段刪掉，155 條測試**沒有一條**會紅。
+追下去發現：唯一相關的測試叫「預設拒絕腳本與外部參照」，但它只寫了一個 `run.sh`
+然後 `assert.match(a.reason, /腳本/)` —— **只測了腳本那一半**。
+外部參照（也就是 prompt injection 的入口）那一半從來沒被驗證過，而測試名字讓人以為有。
+
+這正是裝 mutation 的理由：coverage 對這一行是 100%（它確實被執行到），
+但「執行到」不等於「被驗證」。這條與整個專案的 E1–E4 論點是同一件事。
+
+125 個存活 mutant 尚未處理，是 watch list 項目而不是 backlog。
 
 ### D-30 [決定] mutation 測試不進 `npm run check`
 Stryker 跑一個檔（171 mutant）要 2 分鐘，五個判定相關的檔（679 mutant）要十幾分鐘。
@@ -260,6 +288,8 @@ Harness 自己在 read attempt 不執行 verification（§23.3），所以 outco
 | E3 provenance | Cross-Repo #1 B1：agent 改了 test runner 與 build script | 人工檢查為良性，無 false positive |
 | baseline 成本 | 兩站測試分別 12 秒與 0.567 秒 | 翻倍完全無感，cache 沒有必要 |
 | Gate 2 C5 上限 | 最大驗證到 36.6k 行 | 更大的 repo 未知 |
+| mutation 存活 | D-32 首跑 125 個，其中 `skills.ts` 的外部參照檢查完全未被驗證 | 尚無實際損害，但這是 §19.2 的 security gate |
+| baseline 例外無降級 | `collectBaseline` 丟例外會炸掉整個 attempt 且不留紀錄 | fail-closed，但使用者只看到 stack trace |
 
 ### 升級為實作項目的條件
 
