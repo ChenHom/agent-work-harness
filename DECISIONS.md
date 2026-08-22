@@ -188,8 +188,8 @@ unittest 載入失敗後長時間無輸出）。三次的共同根因都是 agen
 | `evidence/outcome.ts` | 76.42% | 29 | fail-closed 判定 |
 | `evidence/verification.ts` | 70.09% | 32 | E2 completeness |
 | `runtime/isolation.ts` | 64.71% | 12 | 沙箱 argv |
-| `security/skills.ts` | **58.10%** | **44** | §19.2 skill admission |
-| 全部 | 71.13% | 125 | |
+| `security/skills.ts` | **58.10%** → 78.10% | **44** → 23 | §19.2 skill admission |
+| 全部 | 71.13% → 75.98% | 125 → 104 | |
 
 **最值得看的一個**：`skills.ts:70` 一行就有 15 個 mutant 存活 ——
 
@@ -205,7 +205,17 @@ if (!skill.externalRefsAllowed && (ext === '.md' || ext === '.txt' || ext === '.
 這正是裝 mutation 的理由：coverage 對這一行是 100%（它確實被執行到），
 但「執行到」不等於「被驗證」。這條與整個專案的 E1–E4 論點是同一件事。
 
-125 個存活 mutant 尚未處理，是 watch list 項目而不是 backlog。
+**已處理**：`skills.ts:70` 的 15 個 mutant 全數殺掉，補了 11 條測試涵蓋
+三種外部參照形態（`https://` / `git@` / `ssh://`）、三種正當放行（無參照、
+明確核准 `externalRefsAllowed`、副檔名不在掃描清單）與副檔名解析的邊界
+（檔名本身就是 `.md` 的檔案不能靠命名繞過掃描）。順帶把原本那條名不副實的
+「預設拒絕腳本與外部參照」改名為「預設拒絕腳本」—— 它本來就只測了腳本。
+
+`skills.ts:68` 還剩一個 `dot >= 0` → `true` 的 mutant，這是**等價變異**：
+`dot === -1` 時 `rel.slice(-1)` 取到的是最後一個字元，永遠不會以 `.` 開頭，
+因此不可能命中任何副檔名清單，行為完全相同。沒有測試能殺掉它，也不該為它扭曲測試。
+
+其餘存活的 mutant 仍在 watch list，不是 backlog。
 
 ### D-30 [決定] mutation 測試不進 `npm run check`
 Stryker 跑一個檔（171 mutant）要 2 分鐘，五個判定相關的檔（679 mutant）要十幾分鐘。
@@ -288,7 +298,7 @@ Harness 自己在 read attempt 不執行 verification（§23.3），所以 outco
 | E3 provenance | Cross-Repo #1 B1：agent 改了 test runner 與 build script | 人工檢查為良性，無 false positive |
 | baseline 成本 | 兩站測試分別 12 秒與 0.567 秒 | 翻倍完全無感，cache 沒有必要 |
 | Gate 2 C5 上限 | 最大驗證到 36.6k 行 | 更大的 repo 未知 |
-| mutation 存活 | D-32 首跑 125 個，其中 `skills.ts` 的外部參照檢查完全未被驗證 | 尚無實際損害，但這是 §19.2 的 security gate |
+| mutation 存活 | D-32 首跑 125 個。`skills.ts` 外部參照 gate 已補測（15 個 mutant 殺光），其餘未處理 | 尚無實際損害 |
 | baseline 例外無降級 | `collectBaseline` 丟例外會炸掉整個 attempt 且不留紀錄 | fail-closed，但使用者只看到 stack trace |
 
 ### 升級為實作項目的條件
