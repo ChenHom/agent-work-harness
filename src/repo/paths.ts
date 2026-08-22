@@ -2,7 +2,7 @@
 // 看不懂的 pattern 一律不匹配，不做寬鬆猜測。
 // 支援 **（跨層）、*（單層）、?（單字元）。
 
-export function globToRegExp(glob: string): RegExp {
+function globToRegExp(glob: string): RegExp {
   const g = glob.replace(/^\.\//, '').replace(/^\/+/, '');
   let re = '';
   for (let i = 0; i < g.length; i++) {
@@ -32,7 +32,7 @@ export function matchesGlob(path: string, glob: string): boolean {
   return false;
 }
 
-export function matchesAny(path: string, globs: readonly string[]): string | null {
+function matchesAny(path: string, globs: readonly string[]): string | null {
   for (const g of globs) if (matchesGlob(path, g)) return g;
   return null;
 }

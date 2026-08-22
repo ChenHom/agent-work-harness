@@ -65,7 +65,7 @@ export interface EvidenceCollector {
 }
 
 /** 預設實作：把既有函式綁上 policy，行為完全不變。 */
-export function defaultEvidenceCollector(policy: GlobalPolicy, log?: (m: string) => void): EvidenceCollector {
+function defaultEvidenceCollector(policy: GlobalPolicy, log?: (m: string) => void): EvidenceCollector {
   return {
     baseRevision: (ws) => baseRevision(policy, ws),
     snapshotDirty: (ws) => snapshotDirty(policy, ws),

@@ -58,7 +58,7 @@ export interface Attempt {
 }
 
 // §13
-export type DecisionKind =
+type DecisionKind =
   | 'allow_path' | 'deny_path' | 'allow_change' | 'deny_change' | 'constraint';
 
 export interface DecisionRecord {
@@ -71,8 +71,8 @@ export interface DecisionRecord {
 }
 
 // §14
-export type ContextKind = 'control' | 'user_context' | 'decision' | 'pointer' | 'evidence';
-export type Trust = 'authority' | 'trusted' | 'untrusted';
+type ContextKind = 'control' | 'user_context' | 'decision' | 'pointer' | 'evidence';
+type Trust = 'authority' | 'trusted' | 'untrusted';
 
 export interface ContextItem {
   id: string;
@@ -130,7 +130,7 @@ export interface RepositoryContractSnapshot {
 }
 
 // §22
-export type RuntimeStatus = 'completed' | 'needs_user_decision' | 'blocked' | 'failed';
+type RuntimeStatus = 'completed' | 'needs_user_decision' | 'blocked' | 'failed';
 
 export interface RuntimeClaim {
   type: 'finding' | 'diagnosis' | 'change' | 'verification' | 'limitation';
@@ -188,7 +188,7 @@ export interface VerificationEvidenceData {
 }
 
 // §23.2
-export type EvidenceType =
+type EvidenceType =
   | 'git_diff' | 'path_policy' | 'test_result'
   | 'typecheck_result' | 'build_result' | 'readback';
 

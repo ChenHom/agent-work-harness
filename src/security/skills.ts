@@ -31,7 +31,7 @@ export function hashSkillDir(dir: string): string {
   return h.digest('hex');
 }
 
-export function registryPath(policy: GlobalPolicy): string {
+function registryPath(policy: GlobalPolicy): string {
   return join(policy.skillsDir, 'registry.json');
 }
 
@@ -41,7 +41,7 @@ export function loadRegistry(policy: GlobalPolicy): ApprovedSkill[] {
   return JSON.parse(readFileSync(p, 'utf8')) as ApprovedSkill[];
 }
 
-export function saveRegistry(policy: GlobalPolicy, skills: ApprovedSkill[]): void {
+function saveRegistry(policy: GlobalPolicy, skills: ApprovedSkill[]): void {
   mkdirSync(policy.skillsDir, { recursive: true });
   writeFileSync(registryPath(policy), `${JSON.stringify(skills, null, 2)}\n`);
 }

@@ -124,11 +124,14 @@ src/
 ## 測試
 
 ```bash
-npm run check     # lint + typecheck + test，一次跑完
+npm run check     # lint + typecheck + test + deadcode，提交前跑這個
 
 npm test          # 155 個測試，不需要 codex
 npm run typecheck # tsc --noEmit
-npm run lint      # eslint（只管型別檢查看不到的，見 DECISIONS D-29）
+npm run lint      # eslint：no-floating-promises + 兩條架構界線（D-29 / D-31）
+npm run deadcode  # knip：沒人用的 export / file / dependency
+npm run coverage  # node 內建 coverage，不需要額外工具
+npm run mutation  # stryker：測試到底抓不抓得到 bug。十幾分鐘，定期跑（D-30）
 
 bash scripts/e2e.sh          # §37 九個 E2E scenario（會實際呼叫 codex）
 bash scripts/e2e.sh G I      # 只跑不需要 codex 的

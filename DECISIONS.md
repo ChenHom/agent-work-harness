@@ -147,6 +147,49 @@ verification 的 `--tmpfs /tmp` 是 private tmpfs，host `/tmp` 對 agent 與 ve
 Cross-Repo #2 又出現兩次，形態不同（read-only sandbox 中沒有可用暫存目錄，
 unittest 載入失敗後長時間無輸出）。三次的共同根因都是 agent 無法重現 verification 環境。
 
+### D-31 [實測] 機械檢測工具選型：裝四個、拒四個
+逐項對照常見的 AI 程式碼檢測工具表，用「這個專案真的會犯的錯」當標準，不是「業界標配」。
+
+**裝**
+
+| 工具 | 這裡的具體理由 | 導入時的真實發現 |
+|---|---|---|
+| `tsc` | 已有 | — |
+| ESLint + typescript-eslint | `no-floating-promises`（見 D-29）＋ 架構界線規則 | src 3 個 finding，已修 |
+| Knip | 22 個檔卻有 11 個沒人用的 export；公開面積是要維持穩定的東西 | 11 個全部屬實，已收斂 |
+| StrykerJS | 本專案的整個論點就是「測試通過不等於真的驗到」，mutation 正好回答這題 | outcome.ts 76.42%，29 個行為型 mutant 存活 |
+| Coverage | Node 內建 `--experimental-test-coverage`，零安裝 | line 94.39% / branch 85.51% |
+
+**不裝**
+
+- **Biome** —— 與 ESLint 重疊，且它的主賣點是 formatter。D-29 已決定不加格式規則：縮排爭議不值得一個 CI 步驟。
+- **Vitest** —— `node:test` 跑得好好的，coverage 也內建。把 155 條測試遷過去換不到任何東西。
+- **dependency-cruiser** —— 實測 22 節點 52 邊、**0 個循環**。它真正有價值的是「持續守住分層」，而那兩條界線用 ESLint `no-restricted-imports` 就能表達，不必再多一套 config：
+  - `node:child_process` 只准 `evidence/exec.ts` 與 `runtime/codex-driver.ts` import，其他地方一律走 `runIsolated()`（繞過沙箱是安全問題）
+  - 下層模組不得回頭 import `orchestrator.ts`
+  兩條都實測會擋（故意加違規 import 驗證過）。**升級條件**：src 超過 ~50 檔，或出現第一個循環。
+- **Semgrep** —— 需要另一套 toolchain；本專案想表達的自訂規則（上面那兩條）ESLint 已經夠用。**升級條件**：出現 ESLint 表達不了的跨檔 pattern。
+- **Playwright** —— 沒有 web UI。
+
+**Gitleaks / npm audit** 放進 CI（`.github/workflows/check.yml`），不進本機 `npm run check` —— 它們要掃的是完整 git 歷史與相依樹，不是工作目錄。
+
+**副作用**：Stryker 帶進 `typed-rest-client → qs` 的 moderate 漏洞，用 `overrides.qs` 釘住解決，`npm audit` 回到 0。零 runtime 相依的專案在 devDependencies 上仍要看這個。
+
+**兩個要記下來的雜訊來源**：
+- ESLint 會去 lint Stryker 的 sandbox 複本（`.stryker-tmp/`），要在 flat config 加 global ignores，否則 `npm run check` 會噴三百個 `ban-ts-comment`。
+- Knip 把 `@stryker-mutator/command-runner` 報成未列相依 —— 它不是獨立套件，包在 core 裡。已加進 `ignoreDependencies`。
+
+### D-30 [決定] mutation 測試不進 `npm run check`
+Stryker 跑一個檔（171 mutant）要 2 分鐘，五個判定相關的檔（679 mutant）要十幾分鐘。
+這是**定期稽核**，不是每次提交的關卡。`npm run mutation` 手動跑。
+
+`mutate` 只列五個檔 —— `evidence/outcome.ts`、`evidence/verification.ts`、`repo/paths.ts`、
+`security/skills.ts`、`runtime/isolation.ts`。挑選標準是「一個活下來的 mutant 就代表一條
+fail-open 路徑」；其餘檔案的 mutant 存活多半只代表訊息文字沒被斷言，不值得看。
+
+同理排除 `StringLiteral` 與 `Regex` mutator：`reasons.push("")` 活下來不是測試缺陷，
+是我們本來就不該去斷言錯誤訊息的字面內容。開著會讓分數低估 7 個百分點且全是雜訊。
+
 ### D-29 [決定] ESLint 只留型別檢查看不到的那一類，不當風格工具
 `tsc --noEmit` 已經涵蓋型別。加 ESLint 的理由只有一個：`no-floating-promises`。
 整條 attempt 流程都是 async，漏掉一個 await 會讓 evidence 收集或落地靜默跳過 ——

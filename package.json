@@ -14,12 +14,20 @@
     "test": "node --test test/*.test.ts",
     "typecheck": "tsc --noEmit",
     "lint": "eslint .",
-    "check": "npm run lint && npm run typecheck && npm test"
+    "check": "npm run lint && npm run typecheck && npm test && npm run deadcode",
+    "coverage": "node --test --experimental-test-coverage test/*.test.ts",
+    "deadcode": "knip",
+    "mutation": "stryker run"
   },
   "devDependencies": {
+    "@stryker-mutator/core": "^10.0.0",
     "@types/node": "^26.2.0",
     "eslint": "^10.9.0",
+    "knip": "^6.32.2",
     "typescript": "^5.9.3",
     "typescript-eslint": "^8.67.0"
+  },
+  "overrides": {
+    "qs": "^6.15.2"
   }
 }

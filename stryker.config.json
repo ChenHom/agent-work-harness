@@ -1,0 +1,20 @@
+{
+  "$schema": "./node_modules/@stryker-mutator/core/schema/stryker-schema.json",
+  "_comment": "見 DECISIONS D-31。只跑判定與界線相關的檔案：這些地方一個活下來的 mutant 就是一條 fail-open 路徑。不進 npm run check —— 一次數十分鐘，是定期稽核不是每次提交。",
+  "packageManager": "npm",
+  "testRunner": "command",
+  "commandRunner": { "command": "npm test" },
+  "mutate": [
+    "src/evidence/outcome.ts",
+    "src/evidence/verification.ts",
+    "src/repo/paths.ts",
+    "src/security/skills.ts",
+    "src/runtime/isolation.ts"
+  ],
+  "mutator": { "excludedMutations": ["StringLiteral", "Regex"] },
+  "ignorePatterns": [".spike/**", ".stryker-tmp/**", "node_modules/**", ".git/**", ".harness/**", "docs/**", "reports/**"],
+  "reporters": ["clear-text", "html"],
+  "coverageAnalysis": "off",
+  "concurrency": 4,
+  "tempDirName": ".stryker-tmp"
+}

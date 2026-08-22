@@ -2,3 +2,5 @@ node_modules/
 .spike/
 var/
 *.log
+.stryker-tmp/
+reports/

@@ -1,0 +1,36 @@
+name: check
+
+on:
+  push:
+    branches: [master, main]
+  pull_request:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run typecheck
+      # 需要 bwrap：verification 與 git evidence 都在沙箱裡跑，
+      # 沒有它那些測試會 skip，CI 就驗不到真正要驗的東西。
+      - run: sudo apt-get update && sudo apt-get install -y bubblewrap
+      - run: npm test
+      - run: npm run deadcode
+
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with: { fetch-depth: 0 }   # gitleaks 要掃全部歷史
+      - uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - uses: actions/setup-node@v5
+        with: { node-version: 24 }
+      - run: npm audit --audit-level=moderate
