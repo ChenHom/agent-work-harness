@@ -6,16 +6,54 @@ import { admitSkills } from './security/skills.ts';
 import { buildManifest } from './context/manifest.ts';
 import { applyBudget } from './context/budget.ts';
 import { compilePrompt } from './prompt/compiler.ts';
-import { CodexDriver } from './runtime/codex-driver.ts';
+import { CodexDriver, type PreparedCodexRun, type CodexRunResult } from './runtime/codex-driver.ts';
 import { parseRuntimeResult } from './runtime/result.ts';
-import { baseRevision, snapshotDirty, observeGit, gitDiffEvidence, pathPolicyEvidence } from './evidence/git.ts';
-import { runVerification, collectBaseline } from './evidence/verification.ts';
+import { baseRevision, snapshotDirty, observeGit, gitDiffEvidence, pathPolicyEvidence,
+  type DirtyEntry, type GitObservation } from './evidence/git.ts';
+import { runVerification, collectBaseline, type VerificationOutcome } from './evidence/verification.ts';
 import { decideOutcome } from './evidence/outcome.ts';
 import { buildResponse } from './response.ts';
 import type {
   GlobalPolicy, Work, WorkContract, Attempt, AttemptAuthority, DecisionRecord,
   EvidenceRecord, OutcomeDecision, RuntimeResult, SkillAdmission, RepositoryContractSnapshot,
+  Mode, VerificationBaseline,
 } from './types.ts';
+
+/**
+ * runAttempt 的外部互動點。抽出來不是為了支援第二種 runtime（設計上明確不做），
+ * 而是為了讓流程規則能在沒有 codex 的情況下被測試 —— 那 180 行裡的規則
+ * 目前只能靠真實 attempt 驗證，一次幾分鐘。
+ */
+export interface RuntimeDriver {
+  prepare(input: {
+    attemptId: string; workspace: string; mode: Mode;
+    promptText: string; approvedSkillPaths: readonly string[];
+  }): PreparedCodexRun;
+  run(run: PreparedCodexRun): Promise<CodexRunResult>;
+}
+
+export interface EvidenceCollector {
+  baseRevision(workspace: string): Promise<string>;
+  snapshotDirty(workspace: string): Promise<DirtyEntry[]>;
+  observeGit(workspace: string, base: string, preExisting: readonly DirtyEntry[]): Promise<GitObservation>;
+  collectBaseline(snapshot: RepositoryContractSnapshot, workspace: string): Promise<VerificationBaseline[]>;
+  runVerification(
+    snapshot: RepositoryContractSnapshot, workspace: string,
+    ids: { workId: string; attemptId: string; baseRevision: string; headRevision: string },
+    baseline: readonly VerificationBaseline[] | undefined,
+  ): Promise<VerificationOutcome>;
+}
+
+/** 預設實作：把既有函式綁上 policy，行為完全不變。 */
+export function defaultEvidenceCollector(policy: GlobalPolicy, log?: (m: string) => void): EvidenceCollector {
+  return {
+    baseRevision: (ws) => baseRevision(policy, ws),
+    snapshotDirty: (ws) => snapshotDirty(policy, ws),
+    observeGit: (ws, base, pre) => observeGit(policy, ws, base, pre),
+    collectBaseline: (snap, ws) => collectBaseline(policy, snap, ws, log),
+    runVerification: (snap, ws, ids, baseline) => runVerification(policy, snap, ws, ids, baseline, log),
+  };
+}
 
 export interface AttemptReport {
   attempt: Attempt;
@@ -26,16 +64,21 @@ export interface AttemptReport {
 }
 
 export class Orchestrator {
-  private readonly driver: CodexDriver;
+  private readonly driver: RuntimeDriver;
+  private readonly evidence: EvidenceCollector;
   private readonly policy: GlobalPolicy;
   private readonly store: Store;
   private readonly log: (m: string) => void;
 
-  constructor(policy: GlobalPolicy, store: Store, log: (m: string) => void = () => {}) {
+  constructor(
+    policy: GlobalPolicy, store: Store, log: (m: string) => void = () => {},
+    deps?: { driver?: RuntimeDriver; evidence?: EvidenceCollector },
+  ) {
     this.policy = policy;
     this.store = store;
     this.log = log;
-    this.driver = new CodexDriver(policy);
+    this.driver = deps?.driver ?? new CodexDriver(policy);
+    this.evidence = deps?.evidence ?? defaultEvidenceCollector(policy, log);
   }
 
   // ---------------------------------------------------------------- work
@@ -143,9 +186,9 @@ export class Orchestrator {
       return this.finishWithoutRuntime(work, contract, decision);
     }
 
-    const base = await baseRevision(this.policy, work.workspace);
+    const base = await this.evidence.baseRevision(work.workspace);
     // attempt 開始前就存在的未提交變更不能算到 agent 頭上
-    const preExistingDirty = await snapshotDirty(this.policy, work.workspace);
+    const preExistingDirty = await this.evidence.snapshotDirty(work.workspace);
     if (preExistingDirty.length) {
       this.store.event('evidence.collected', { preExistingDirty: preExistingDirty.map((d) => d.path) }, workId);
     }
@@ -189,7 +232,7 @@ export class Orchestrator {
     // 之後才能判斷「有沒有比動手前變差或少跑」。read attempt 不跑 verification，也就不需要。
     if (contract.mode === 'write' && !opts?.noBaseline) {
       this.log('收集 pre-flight baseline（agent 尚未執行）…');
-      attempt.baseline = await collectBaseline(this.policy, snapshot, work.workspace, this.log);
+      attempt.baseline = await this.evidence.collectBaseline(snapshot, work.workspace);
     }
 
     this.store.insertAttempt(attempt);
@@ -266,7 +309,7 @@ export class Orchestrator {
     const { work, contract, snapshot, attempt, base } = input;
     const evidence: EvidenceRecord[] = [];
 
-    const obs = await observeGit(this.policy, work.workspace, base, attempt.preExistingDirty ?? []);
+    const obs = await this.evidence.observeGit(work.workspace, base, attempt.preExistingDirty ?? []);
     const diffArtifact = this.store.putArtifact('git_diff', obs.diff, 'diff');
     const gitEv = gitDiffEvidence(work.id, attempt.id, obs, diffArtifact.id);
     evidence.push(gitEv);
@@ -285,9 +328,9 @@ export class Orchestrator {
 
     // §23.3：read attempt 不跑 verification；越界時也不跑（先讓使用者處理）
     if (input.runWrite && pathEv.status === 'PASS' && obs.changedPaths.length > 0) {
-      const v = await runVerification(this.policy, snapshot, work.workspace,
+      const v = await this.evidence.runVerification(snapshot, work.workspace,
         { workId: work.id, attemptId: attempt.id, baseRevision: base, headRevision: obs.head },
-        attempt.baseline, this.log);
+        attempt.baseline);
       for (const e of v.evidence) { evidence.push(e); this.store.insertEvidence(e); }
     }
     return evidence;
