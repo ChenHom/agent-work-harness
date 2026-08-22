@@ -69,7 +69,7 @@ function fakeDriver(reply: (ids: { workId: string; attemptId: string }) => strin
       };
     },
   };
-  return d as RuntimeDriver & { calls: number };
+  return d;
 }
 
 interface EvidenceOverrides {
@@ -96,7 +96,7 @@ function fakeEvidence(over: EvidenceOverrides = {}): EvidenceCollector & { verif
       return over.verification ?? { evidence: [], requiredFailed: [], allRequiredPassed: true };
     },
   };
-  return e as EvidenceCollector & { verificationCalls: number; baselineCalls: number };
+  return e;
 }
 
 function setup(opts: { request?: string; retryBudget?: number; checks?: unknown;
@@ -251,7 +251,7 @@ test('protocol 邊界：evidence 仍然照常收集 —— 格式錯不代表沒
   const r = await s.orch.runAttempt(s.work.id);
   const changed = r.evidence.find((e) => e.type === 'git_diff');
   assert.ok(changed, 'protocol 失敗時仍必須觀察 git');
-  assert.deepEqual((changed!.data as { changedPaths: string[] }).changedPaths, ['src/a.ts']);
+  assert.deepEqual((changed.data as { changedPaths: string[] }).changedPaths, ['src/a.ts']);
   s.cleanup();
 });
 

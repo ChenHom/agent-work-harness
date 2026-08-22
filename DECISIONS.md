@@ -147,6 +147,21 @@ verification 的 `--tmpfs /tmp` 是 private tmpfs，host `/tmp` 對 agent 與 ve
 Cross-Repo #2 又出現兩次，形態不同（read-only sandbox 中沒有可用暫存目錄，
 unittest 載入失敗後長時間無輸出）。三次的共同根因都是 agent 無法重現 verification 環境。
 
+### D-29 [決定] ESLint 只留型別檢查看不到的那一類，不當風格工具
+`tsc --noEmit` 已經涵蓋型別。加 ESLint 的理由只有一個：`no-floating-promises`。
+整條 attempt 流程都是 async，漏掉一個 await 會讓 evidence 收集或落地靜默跳過 ——
+型別檢查不會抱怨，測試也未必抓得到（Promise 還是會跑完，只是順序錯了），是 fail-open。
+
+採 `recommendedTypeChecked`（需要 `projectService`），並關掉三條：
+`no-explicit-any`（本專案在 SQLite 邊界刻意用）、`require-await`、
+測試檔的 `no-floating-promises`（node:test 的 `test()` 回傳 Promise 但 top-level
+本來就不該 await，開著只會得到滿螢幕假陽性）。
+
+不加格式規則、不加 prettier —— 縮排與換行的爭議不值得一個 CI 步驟。
+
+導入時 src 只有 3 個 finding（2 個 `JSON.parse` 的 unsafe assignment、
+1 個多餘斷言），全部已修。`npm run check` = lint + typecheck + test。
+
 ### D-28 [實測] Repository Contract 用 `env(1)` 表達環境變數需求，不需要新欄位
 rag-stack 的測試需要 `PYTHONPATH=app`，而 `VerificationCheck` 沒有 env 欄位。
 看起來像 Contract 缺資訊，但 `env(1)` 當 argv[0] 就解決了：

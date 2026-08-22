@@ -39,7 +39,7 @@ function validateCheck(c: unknown, i: number): VerificationCheck {
   assert(!normalize(exe).startsWith('..'), `checks[${i}].argv[0] 不允許跳出 worktree`);
   assert(typeof o.required === 'boolean', `checks[${i}].required 必須是 boolean`);
   return {
-    id: o.id, kind: o.kind as VerificationCheck['kind'], argv: o.argv as string[],
+    id: o.id, kind: o.kind as VerificationCheck['kind'], argv: o.argv,
     required: o.required, timeoutMs: typeof o.timeoutMs === 'number' ? o.timeoutMs : undefined,
   };
 }

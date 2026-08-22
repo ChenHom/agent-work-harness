@@ -124,8 +124,11 @@ src/
 ## 測試
 
 ```bash
-npm test          # 63 個測試，不需要 codex
-npm run typecheck
+npm run check     # lint + typecheck + test，一次跑完
+
+npm test          # 155 個測試，不需要 codex
+npm run typecheck # tsc --noEmit
+npm run lint      # eslint（只管型別檢查看不到的，見 DECISIONS D-29）
 
 bash scripts/e2e.sh          # §37 九個 E2E scenario（會實際呼叫 codex）
 bash scripts/e2e.sh G I      # 只跑不需要 codex 的

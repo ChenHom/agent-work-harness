@@ -12,10 +12,14 @@
   "scripts": {
     "harness": "node src/cli.ts",
     "test": "node --test test/*.test.ts",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint .",
+    "check": "npm run lint && npm run typecheck && npm test"
   },
   "devDependencies": {
     "@types/node": "^26.2.0",
-    "typescript": "^5.9.3"
+    "eslint": "^10.9.0",
+    "typescript": "^5.9.3",
+    "typescript-eslint": "^8.67.0"
   }
 }

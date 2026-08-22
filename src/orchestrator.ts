@@ -7,7 +7,7 @@ import { buildManifest } from './context/manifest.ts';
 import { applyBudget } from './context/budget.ts';
 import { compilePrompt } from './prompt/compiler.ts';
 import { CodexDriver, type PreparedCodexRun, type CodexRunResult } from './runtime/codex-driver.ts';
-import { parseRuntimeResult } from './runtime/result.ts';
+import { parseRuntimeResult, type ParseOutcome } from './runtime/result.ts';
 import { baseRevision, snapshotDirty, observeGit, gitDiffEvidence, pathPolicyEvidence,
   type DirtyEntry, type GitObservation } from './evidence/git.ts';
 import { runVerification, collectBaseline, type VerificationOutcome } from './evidence/verification.ts';
@@ -30,6 +30,26 @@ export interface RuntimeDriver {
     promptText: string; approvedSkillPaths: readonly string[];
   }): PreparedCodexRun;
   run(run: PreparedCodexRun): Promise<CodexRunResult>;
+}
+
+/** prepareAttempt 的三段之間傳遞的東西。attempt 是同一個物件參考被逐段補齊，不複製。 */
+interface ReadyAttempt {
+  kind: 'ready';
+  work: Work;
+  contract: WorkContract;
+  snapshot: RepositoryContractSnapshot;
+  admissions: SkillAdmission[];
+  attempt: Attempt;
+  prompt: ReturnType<typeof compilePrompt>;
+  /** insertAttempt 之前的 attempts —— retry budget 用這份算 */
+  priorAttempts: Attempt[];
+}
+
+type PreparedAttempt = ReadyAttempt | { kind: 'short_circuit'; report: AttemptReport };
+
+interface RuntimeExecution {
+  run: CodexRunResult;
+  parsed: ParseOutcome;
 }
 
 export interface EvidenceCollector {
@@ -158,8 +178,25 @@ export class Orchestrator {
 
   // ---------------------------------------------------------------- attempt
 
+  /**
+   * 一次 Attempt 的三段：準備（凍結 contract、編 prompt、取 baseline）→ 執行 runtime
+   * → 收 evidence 並判定。切開是為了讓每段的前後順序看得見 —— 特別是
+   * baseline 必須在 insertAttempt 之前、retry budget 必須用準備當下的 attempts。
+   */
   async runAttempt(workId: string, opts?: { retryOf?: string; noBaseline?: boolean }): Promise<AttemptReport> {
     const work = this.requireWork(workId);
+    const prepared = await this.prepareAttempt(work, opts);
+    if (prepared.kind === 'short_circuit') return prepared.report;
+    const exec = await this.executeRuntime(prepared);
+    return this.collectAndDecide(prepared, exec, opts);
+  }
+
+  /**
+   * 準備階段。兩條路徑不會進 runtime（contract 無效、skill admission 被拒），
+   * 用 short_circuit 回報，讓 runAttempt 自己決定要不要往下走。
+   */
+  private async prepareAttempt(work: Work, opts?: { retryOf?: string; noBaseline?: boolean }): Promise<PreparedAttempt> {
+    const workId = work.id;
     const contract = this.currentContract(work);
 
     // §34.1.1：每次 Attempt 前重新 load → validate → hash → freeze
@@ -168,7 +205,7 @@ export class Orchestrator {
       snapshot = loadSnapshot(work.workspace, this.policy);
     } catch (e) {
       const err = e as ContractError;
-      return this.blockedReport(work, contract, `${err.code}: ${err.message}`);
+      return { kind: 'short_circuit', report: this.blockedReport(work, contract, `${err.code}: ${err.message}`) };
     }
 
     const authority = buildAuthority(contract, snapshot);
@@ -183,7 +220,7 @@ export class Orchestrator {
         mode: contract.mode, skillAdmissions: admissions, protocolOk: true,
         evidence: [], retryBudgetRemaining: 0,
       });
-      return this.finishWithoutRuntime(work, contract, decision);
+      return { kind: 'short_circuit', report: this.finishWithoutRuntime(work, contract, decision) };
     }
 
     const base = await this.evidence.baseRevision(work.workspace);
@@ -192,10 +229,11 @@ export class Orchestrator {
     if (preExistingDirty.length) {
       this.store.event('evidence.collected', { preExistingDirty: preExistingDirty.map((d) => d.path) }, workId);
     }
-    const attempts = this.store.listAttempts(workId);
+    // retry budget 要用「這次之前」的 attempts；等 insertAttempt 之後再抓會多算自己一次
+    const priorAttempts = this.store.listAttempts(workId);
     const attemptId = newId('A');
     const attempt: Attempt = {
-      id: attemptId, workId, number: attempts.length + 1, mode: contract.mode,
+      id: attemptId, workId, number: priorAttempts.length + 1, mode: contract.mode,
       contractVersion: contract.version, contractSnapshotHash: snapshot.hash,
       baseRevision: base, preExistingDirty, promptArtifactId: '', runtime: 'codex', status: 'CREATED',
       retryOf: opts?.retryOf, startedAt: nowIso(),
@@ -230,6 +268,7 @@ export class Orchestrator {
 
     // §23.4：pre-flight baseline —— agent 動任何東西之前先跑一次 required checks，
     // 之後才能判斷「有沒有比動手前變差或少跑」。read attempt 不跑 verification，也就不需要。
+    // 位置必須在 insertAttempt 之前：這裡失敗代表這次 attempt 根本沒開始。
     if (contract.mode === 'write' && !opts?.noBaseline) {
       this.log('收集 pre-flight baseline（agent 尚未執行）…');
       attempt.baseline = await this.evidence.collectBaseline(snapshot, work.workspace);
@@ -240,13 +279,20 @@ export class Orchestrator {
     this.store.updateAttempt(attempt);
     this.store.setWorkState(workId, 'RUNNING');
 
+    return { kind: 'ready', work, contract, snapshot, admissions, attempt, prompt, priorAttempts };
+  }
+
+  /** runtime 執行 + §22 protocol 解析。這一段是唯一會呼叫外部 agent 的地方。 */
+  private async executeRuntime(p: ReadyAttempt): Promise<RuntimeExecution> {
+    const { work, contract, attempt, admissions, prompt } = p;
+
     // Codex 執行（§21）
     this.log(`attempt #${attempt.number} 執行中（${contract.mode}）…`);
     const skillPaths = admissions.filter((a) => a.allowed)
       .map((a) => a.path)
-      .filter((p): p is string => Boolean(p));
+      .filter((s): s is string => Boolean(s));
     const prepared = this.driver.prepare({
-      attemptId, workspace: work.workspace, mode: contract.mode,
+      attemptId: attempt.id, workspace: work.workspace, mode: contract.mode,
       promptText: prompt.text, approvedSkillPaths: skillPaths,
     });
     const run = await this.driver.run(prepared);
@@ -254,52 +300,62 @@ export class Orchestrator {
     if (run.stderr) this.store.putArtifact('runtime_stderr', run.stderr, 'log');
 
     // §22 protocol
-    const parsedResult = parseRuntimeResult(run.lastMessage || run.stdout, { workId, attemptId });
-    if (!parsedResult.ok) {
+    const parsed = parseRuntimeResult(run.lastMessage || run.stdout, { workId: work.id, attemptId: attempt.id });
+    if (!parsed.ok) {
       this.store.event('runtime.protocol_failed', {
-        error: parsedResult.error, exitCode: run.exitCode, timedOut: run.timedOut,
-      }, workId, attemptId);
+        error: parsed.error, exitCode: run.exitCode, timedOut: run.timedOut,
+      }, work.id, attempt.id);
     }
+    return { run, parsed };
+  }
+
+  /** evidence → 判定 → 落地。agent 說了什麼在這裡只是輸入之一，不是結論。 */
+  private async collectAndDecide(
+    p: ReadyAttempt, exec: RuntimeExecution, opts?: { retryOf?: string },
+  ): Promise<AttemptReport> {
+    const { work, contract, snapshot, attempt, admissions, priorAttempts } = p;
+    const { run, parsed } = exec;
+    const workId = work.id;
 
     // §23 evidence：無論 agent 說什麼都要自己觀察
     this.store.setWorkState(workId, 'VERIFYING');
     const evidence = await this.collectEvidence({
-      work, contract, snapshot, attempt, base,
+      work, contract, snapshot, attempt, base: attempt.baseRevision,
       runWrite: contract.mode === 'write',
     });
 
     // 本次若是 retry，必須把自己算進已用次數，否則 budget 永遠用不完
-    const usedRetries = countRetries(attempts) + (opts?.retryOf ? 1 : 0);
+    const usedRetries = countRetries(priorAttempts) + (opts?.retryOf ? 1 : 0);
     const retryBudgetRemaining = Math.max(0, work.retryBudget - usedRetries);
     const decision = decideOutcome({
       mode: contract.mode, skillAdmissions: admissions,
-      protocolOk: parsedResult.ok,
-      protocolError: parsedResult.ok ? undefined : parsedResult.error,
-      runtimeResult: parsedResult.ok ? parsedResult.result : undefined,
+      protocolOk: parsed.ok,
+      protocolError: parsed.ok ? undefined : parsed.error,
+      runtimeResult: parsed.ok ? parsed.result : undefined,
       evidence, retryBudgetRemaining,
       runtimeCrashed: run.timedOut,
     });
 
-    if (parsedResult.ok) {
-      attempt.resultArtifactId = this.store.putArtifact('runtime_result', JSON.stringify(parsedResult.result, null, 2), 'json').id;
+    if (parsed.ok) {
+      attempt.resultArtifactId = this.store.putArtifact('runtime_result', JSON.stringify(parsed.result, null, 2), 'json').id;
     }
-    attempt.status = parsedResult.ok ? 'COMPLETED' : 'PROTOCOL_FAILED';
+    attempt.status = parsed.ok ? 'COMPLETED' : 'PROTOCOL_FAILED';
     attempt.endedAt = nowIso();
     this.store.updateAttempt(attempt);
     this.store.event('attempt.completed', {
       status: attempt.status, exitCode: run.exitCode, timedOut: run.timedOut, durationMs: run.durationMs,
-    }, workId, attemptId);
+    }, workId, attempt.id);
 
-    this.store.insertOutcome(workId, attemptId, decision.outcome, decision.reasons);
+    this.store.insertOutcome(workId, attempt.id, decision.outcome, decision.reasons);
     this.applyWorkState(workId, decision);
 
     const response = buildResponse({
       attempt, decision,
-      result: parsedResult.ok ? parsedResult.result : undefined,
+      result: parsed.ok ? parsed.result : undefined,
       evidence,
       notExecuted: notExecutedList(contract, decision),
     });
-    return { attempt, decision, result: parsedResult.ok ? parsedResult.result : undefined, evidence, response };
+    return { attempt, decision, result: parsed.ok ? parsed.result : undefined, evidence, response };
   }
 
   private async collectEvidence(input: {

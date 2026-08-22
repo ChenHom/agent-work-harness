@@ -245,7 +245,7 @@ export class Store {
     return rows.map((r) => ({
       id: r.id as string, workId: r.work_id as string, attemptId: r.attempt_id as string,
       type: r.type as EvidenceRecord['type'], label: r.label as string,
-      status: r.status as EvidenceRecord['status'], data: JSON.parse(r.data as string),
+      status: r.status as EvidenceRecord['status'], data: JSON.parse(r.data as string) as unknown,
       observedAt: r.observed_at as string,
     }));
   }
@@ -260,6 +260,6 @@ export class Store {
   lastOutcome(workId: string): { outcome: Outcome; reasons: string[]; attemptId: string } | null {
     const r = this.db.prepare('select outcome, reasons, attempt_id from outcomes where work_id = ? order by created_at desc limit 1')
       .get(workId) as { outcome: string; reasons: string; attempt_id: string } | undefined;
-    return r ? { outcome: r.outcome as Outcome, reasons: JSON.parse(r.reasons), attemptId: r.attempt_id } : null;
+    return r ? { outcome: r.outcome as Outcome, reasons: JSON.parse(r.reasons) as string[], attemptId: r.attempt_id } : null;
   }
 }
