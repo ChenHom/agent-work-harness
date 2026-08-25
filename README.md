@@ -96,22 +96,57 @@ Harness Core 不認識 Node / PHP / Go：
 `argv` + `shell=false`，且在 bwrap 隔離中執行。Attempt 開始前這份 config 會被 hash 並凍結 ——
 agent 改不了自己的驗收規則。
 
-## 專案結構
+## 模組架構
+
+依賴單向往下，無循環。`types.ts`（純型別，零 import）與 `ids.ts` 被幾乎所有模組引用，圖上省略連線。
 
 ```
-src/
-├── types.ts           所有契約型別
-├── policy.ts          Harness Global Policy（authority 上限）
-├── work/parser.ts     §18 deterministic 需求解析
-├── repo/              Repository Contract 載入/凍結、glob path policy
-├── context/           Context Manifest、budget
-├── prompt/compiler.ts 六區 deterministic prompt
-├── security/skills.ts Skill registry + hash + fail-closed admission
-├── runtime/           隔離設定、Codex driver、RuntimeResult 解析
-├── evidence/          隔離執行、git 觀察、verification、outcome 規則
-├── orchestrator.ts    Work / Attempt 生命週期、retry、recovery
-└── cli.ts
+                              cli.ts
+                 指令解析 / 組裝 Orchestrator / 輸出文字
+                                 │
+   ┌─────────┬─────────┬─────────┼─────────┬──────────┬───────────┐
+   ▼         ▼         ▼         ▼         ▼          ▼           ▼
+ policy   trace/    repo/    security/  runtime/   evidence/   cli-format
+          store    contract   skills   isolation     exec      response
+         事件流   config 契約  skill 准入  沙箱/env   跑指令     人看的輸出
+
+                           orchestrator.ts
+                     Work / Attempt 生命週期的唯一主體
+     ┌─────────────────┬──────────────────┬─────────────────────┐
+     │ prepareAttempt  │  executeRuntime  │   collectAndDecide  │
+     ▼                 ▼                  ▼
+ work/parser      runtime/codex-driver   evidence/git
+ context/manifest runtime/result         evidence/verification
+ context/budget   （← runtime/isolation） repo/paths
+ prompt/compiler                         evidence/outcome
+ repo/contract                           → response
+ security/skills
 ```
+
+| 層 | 模組 | 職責 |
+|---|---|---|
+| 入口 | `cli.ts` | 子指令 → Orchestrator / Store，不含業務邏輯 |
+| 流程 | `orchestrator.ts` | attempt 生命週期、retry、recovery；`RuntimeDriver` 與 `EvidenceCollector` 兩個介面注入，測試可替換 |
+| 輸入 | `work/parser`、`context/manifest`、`context/budget`、`prompt/compiler` | 需求 → pointers → 預算裁切 → 六區 prompt |
+| 執行 | `runtime/codex-driver`、`runtime/isolation`、`runtime/result` | prepare/run、bwrap 沙箱與 env、RuntimeResult 解析 |
+| 證據 | `evidence/{git,verification,exec,outcome}`、`repo/paths` | diff 觀察、隔離跑驗證指令、path policy → `OutcomeDecision` |
+| 邊界 | `repo/contract`、`security/skills`、`policy` | `.harness/config.json` 凍結、skill hash 准入、authority 上限 |
+| 儲存 | `trace/store` | append-only 事件流 + work / attempt / evidence 查詢 |
+| 輸出 | `response`、`cli-format` | 給人看的字串，不參與決策 |
+
+一次 attempt 的資料流：
+
+```
+new  →  parseRequest ──→ Work + WorkContract ──→ Store
+run  ┌ prepare  contract 快照 → admitSkills → manifest → budget → compilePrompt
+     │          └ 缺 contract / skill 被擋 → blockedReport（不進 runtime）
+     ├ execute  CodexDriver.prepare → bwrap 沙箱 run → parseRuntimeResult
+     └ collect  baseRevision / snapshotDirty → observeGit → checkPaths
+                → collectBaseline → runVerification → decideOutcome
+                → applyWorkState → buildResponse
+```
+
+## 文件
 
 - 決策記錄：`DECISIONS.md`
 - 隔離實測：`docs/spikes/2026-08-21-isolation-spike.md`
