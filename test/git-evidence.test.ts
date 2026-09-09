@@ -60,3 +60,27 @@ test('乾淨 worktree 下觀察不到變更', { skip }, async () => {
   assert.deepEqual(obs.changedPaths, []);
   rmSync(join(r, '..'), { recursive: true, force: true });
 });
+
+test('非 Git workspace 的觀測失敗必須留下 probe error', { skip }, async () => {
+  const base = mkdtempSync(join(tmpdir(), 'harness-git-nonrepo-'));
+  const obs = await observeGit(DEFAULT_POLICY, base, 'UNKNOWN', []);
+  assert.ok(obs.probeErrors?.length, 'git probe 失敗不可被當成空結果');
+  rmSync(base, { recursive: true, force: true });
+});
+
+test('git diff 觀測不受 repository textconv 影響', { skip }, async () => {
+  const r = repo();
+  writeFileSync(join(r, '.gitattributes'), 'src/constant.txt diff=constant\n');
+  writeFileSync(join(r, 'src/constant.txt'), 'before\n');
+  execFileSync('git', ['add', '-A'], { cwd: r });
+  execFileSync('git', ['-c', 'user.email=t@t', '-c', 'user.name=t', 'commit', '-qm', 'attributes'], { cwd: r });
+  execFileSync('git', ['config', 'diff.constant.textconv', 'printf constant'], { cwd: r });
+
+  const base = await baseRevision(DEFAULT_POLICY, r);
+  writeFileSync(join(r, 'src/constant.txt'), 'after\n');
+  const obs = await observeGit(DEFAULT_POLICY, r, base, []);
+
+  assert.match(obs.diff, /-before/);
+  assert.match(obs.diff, /\+after/);
+  rmSync(join(r, '..'), { recursive: true, force: true });
+});

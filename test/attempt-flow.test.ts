@@ -330,6 +330,21 @@ test('越界檢查 正向：沒有違規且有變更 → verification 照跑', a
   s.cleanup();
 });
 
+test('git observation 不完整：不得 SUCCESS，也不得繼續 verification', async () => {
+  const ev = fakeEvidence({ changedPaths: ['src/a.ts'] });
+  ev.observeGit = async () => ({
+    changedPaths: ['src/a.ts'], preExistingUnchanged: [], diff: '',
+    baseRevision: 'rev-base', head: 'rev-head', clean: false,
+    probeErrors: ['git diff failed'],
+  });
+  const s = setup({ evidence: ev });
+  const r = await s.orch.runAttempt(s.work.id);
+  assert.equal(r.decision.outcome, 'RETRYABLE_FAILURE');
+  assert.equal(ev.verificationCalls, 0);
+  assert.equal(r.evidence.find((e) => e.type === 'git_diff')?.status, 'INCONCLUSIVE');
+  s.cleanup();
+});
+
 test('越界檢查 反向：改到 protected path → POLICY_VIOLATION 且不執行 verification', async () => {
   const ev = fakeEvidence({ changedPaths: ['secret/keys.txt'] });
   const s = setup({ evidence: ev });

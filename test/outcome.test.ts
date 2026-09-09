@@ -65,6 +65,15 @@ test('read attempt 不要求變更', () => {
   assert.equal(d.outcome, 'SUCCESS');
 });
 
+test('fail-closed：git observation INCONCLUSIVE 時 read attempt 不得 SUCCESS', () => {
+  const d = decideOutcome({ mode: 'read', skillAdmissions: [], protocolOk: true, runtimeResult: done,
+    evidence: [
+      ev({ type: 'git_diff', status: 'INCONCLUSIVE', data: { changedPaths: [], probeErrors: ['git status failed'] } }),
+      pathOk(),
+    ], retryBudgetRemaining: 1 });
+  assert.equal(d.outcome, 'RETRYABLE_FAILURE');
+});
+
 test('retry budget 用盡後 RETRYABLE 轉 FAILED', () => {
   const base = { mode: 'write' as const, skillAdmissions: [], protocolOk: true, runtimeResult: done,
     evidence: [gitEv(['src/a.ts']), pathOk(), ev({ status: 'FAIL' })] };

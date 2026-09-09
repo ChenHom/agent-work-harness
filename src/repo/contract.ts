@@ -94,7 +94,7 @@ export function loadSnapshot(workspace: string, policy: GlobalPolicy): Repositor
   };
   return {
     contract: merged,
-    hash: createHash('sha256').update(text).digest('hex'),
+    hash: createHash('sha256').update(JSON.stringify(merged)).digest('hex'),
     loadedAt: nowIso(),
     sourcePath: path,
   };

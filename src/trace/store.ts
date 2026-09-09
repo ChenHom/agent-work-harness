@@ -187,7 +187,7 @@ export class Store {
   }
 
   listDecisions(workId: string): DecisionRecord[] {
-    const rows = this.db.prepare('select * from decisions where work_id = ? order by created_at').all(workId) as Array<Record<string, unknown>>;
+    const rows = this.db.prepare('select * from decisions where work_id = ? order by created_at, id').all(workId) as Array<Record<string, unknown>>;
     return rows.map((r) => ({
       id: r.id as string, workId: r.work_id as string, sourceMessageId: r.source_message_id as string,
       kind: r.kind as DecisionRecord['kind'], value: r.value as string, createdAt: r.created_at as string,
@@ -241,7 +241,7 @@ export class Store {
   }
 
   listEvidence(attemptId: string): EvidenceRecord[] {
-    const rows = this.db.prepare('select * from evidence where attempt_id = ? order by observed_at').all(attemptId) as Array<Record<string, unknown>>;
+    const rows = this.db.prepare('select * from evidence where attempt_id = ? order by observed_at, id').all(attemptId) as Array<Record<string, unknown>>;
     return rows.map((r) => ({
       id: r.id as string, workId: r.work_id as string, attemptId: r.attempt_id as string,
       type: r.type as EvidenceRecord['type'], label: r.label as string,

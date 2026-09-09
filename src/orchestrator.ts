@@ -383,7 +383,7 @@ export class Orchestrator {
     this.store.insertEvidence(pathEv);
 
     // §23.3：read attempt 不跑 verification；越界時也不跑（先讓使用者處理）
-    if (input.runWrite && pathEv.status === 'PASS' && obs.changedPaths.length > 0) {
+    if (input.runWrite && gitEv.status === 'PASS' && pathEv.status === 'PASS' && obs.changedPaths.length > 0) {
       const v = await this.evidence.runVerification(snapshot, work.workspace,
         { workId: work.id, attemptId: attempt.id, baseRevision: base, headRevision: obs.head },
         attempt.baseline);

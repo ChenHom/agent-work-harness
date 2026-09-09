@@ -82,6 +82,22 @@ test('5. 第一批 pointers 只來自 entryPoints + 使用者明確提到的 pat
   assert.deepEqual(p, ['docs/design.md', 'src/', 'src/auth/login.ts', 'src/token/**']);
 });
 
+test('D-4：自動 pointers 避開 denied/protected glob，但保留使用者明確路徑', () => {
+  const guarded = {
+    ...snapshot,
+    contract: {
+      ...snapshot.contract,
+      context: { entryPoints: ['payment/', 'payment-old/', '.harness/', 'src/'] },
+      filesystem: { protectedPaths: ['.harness/**'] },
+    },
+  };
+  const automatic = derivePointers(guarded, { ...contract, request: '修 bug' }, []);
+  assert.deepEqual(automatic, ['payment-old/', 'src/']);
+
+  const explicit = derivePointers(guarded, { ...contract, request: '檢查 payment/src.ts' }, []);
+  assert.deepEqual(explicit, ['payment-old/', 'payment/src.ts', 'src/']);
+});
+
 test('6+7. retry 只帶 decision / evidence / pointer，不帶 transcript', () => {
   const prev: Attempt = { ...attempt, id: 'A-0', number: 1, status: 'COMPLETED' };
   const m = buildManifest({
@@ -281,5 +297,28 @@ test('30. Repository Contract 不能放寬 Global Policy ceiling', () => {
   }));
   execFileSync('git', ['init', '-q'], { cwd: repo });
   assert.ok(loadSnapshot(repo, DEFAULT_POLICY).contract.filesystem.protectedPaths.includes('.git/**'));
+  rmSync(base, { recursive: true, force: true });
+});
+
+test('C-3：contract hash 反映 effective merged contract，而不是原始格式', () => {
+  const base = mkdtempSync(join(tmpdir(), 'harness-contract-hash-'));
+  const repo = join(base, 'repo');
+  mkdirSync(join(repo, '.harness'), { recursive: true });
+  const cfg = {
+    schemaVersion: '1', repositoryId: 'r', context: { entryPoints: ['src/'] },
+    filesystem: { protectedPaths: [] }, verification: { checks: [] },
+  };
+  const policy = { ...DEFAULT_POLICY, defaultProtectedPaths: ['.git/**', '.harness/**'] };
+
+  writeFileSync(join(repo, CONTRACT_REL_PATH), JSON.stringify(cfg));
+  const compact = loadSnapshot(repo, policy);
+  writeFileSync(join(repo, CONTRACT_REL_PATH), JSON.stringify(cfg, null, 2));
+  const pretty = loadSnapshot(repo, policy);
+  assert.equal(pretty.hash, compact.hash, '只改 JSON 排版不應改變 effective contract hash');
+
+  const stricter = loadSnapshot(repo, {
+    ...policy, defaultProtectedPaths: [...policy.defaultProtectedPaths, 'private/**'],
+  });
+  assert.notEqual(stricter.hash, compact.hash, 'global policy 合併後的保護範圍必須進 hash');
   rmSync(base, { recursive: true, force: true });
 });

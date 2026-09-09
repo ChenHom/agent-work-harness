@@ -4,6 +4,7 @@ import type {
   RepositoryContractSnapshot, EvidenceRecord, Attempt, AttemptAuthority,
 } from '../types.ts';
 import { normalizePath } from '../work/parser.ts';
+import { matchesGlob } from '../repo/paths.ts';
 
 // §14/§15：每個 ContextItem 都帶 source 與 trust；Prompt Compiler 只依 kind/trust/priority 決定位置。
 
@@ -31,9 +32,12 @@ export function derivePointers(
   for (const d of decisions) if (d.kind === 'allow_path') explicit.add(d.value);
   contract.allowedPaths?.forEach((p) => explicit.add(p));
 
-  const denied = new Set(contract.deniedPaths);
-  const all = [...snapshot.contract.context.entryPoints, ...explicit];
-  return [...new Set(all)].filter((p) => !denied.has(p)).sort();
+  const guarded = [...contract.deniedPaths, ...snapshot.contract.filesystem.protectedPaths];
+  const isGuarded = (path: string): boolean => guarded.some((pattern) => matchesGlob(path, pattern));
+  // Automatic entry points must not point into guarded areas; an explicit user path
+  // remains visible so the agent can inspect it, while authority still forbids edits.
+  const entryPoints = snapshot.contract.context.entryPoints.filter((p) => !isGuarded(p));
+  return [...new Set([...entryPoints, ...explicit])].sort();
 }
 
 export function buildManifest(input: {

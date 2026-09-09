@@ -2,7 +2,7 @@ import { readFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { createHash } from 'node:crypto';
 import { newId, nowIso } from '../ids.ts';
-import { runIsolated, tail } from './exec.ts';
+import { runIsolated, tail, type IsolatedRun } from './exec.ts';
 import { checkPaths, type PathPolicy } from '../repo/paths.ts';
 import type { EvidenceRecord, GlobalPolicy } from '../types.ts';
 
@@ -10,10 +10,21 @@ import type { EvidenceRecord, GlobalPolicy } from '../types.ts';
 
 export async function baseRevision(policy: GlobalPolicy, workspace: string): Promise<string> {
   const r = await runIsolated(policy, ['git', 'rev-parse', 'HEAD'], { workspace, timeoutMs: 30_000 });
-  return r.exitCode === 0 ? r.stdout.trim() : 'UNKNOWN';
+  const revision = r.exitCode === 0 ? r.stdout.trim() : 'UNKNOWN';
+  return revision || 'UNKNOWN';
 }
 
 export interface DirtyEntry { path: string; hash: string | null }
+
+function probeError(label: string, run: IsolatedRun): string | undefined {
+  if (run.timedOut) return `${label}: timeout`;
+  if (run.outputTruncated) return `${label}: output truncated`;
+  if (run.exitCode !== 0) {
+    const detail = tail(run.stderr, 3);
+    return `${label}: exit ${run.exitCode ?? 'null'}${detail ? ` (${detail})` : ''}`;
+  }
+  return undefined;
+}
 
 /** 讀檔算 hash —— 只讀內容，不執行 repository 的任何程式碼。 */
 function contentHash(workspace: string, rel: string): string | null {
@@ -29,13 +40,15 @@ function contentHash(workspace: string, rel: string): string | null {
  * 導致誤報 POLICY_VIOLATION（實跑 dogfood 時真的踩到）。
  */
 export async function snapshotDirty(policy: GlobalPolicy, workspace: string): Promise<DirtyEntry[]> {
-  const paths = await statusPaths(policy, workspace);
-  return paths.map((p) => ({ path: p, hash: contentHash(workspace, p) }));
+  const status = await statusPaths(policy, workspace);
+  return status.paths.map((p) => ({ path: p, hash: contentHash(workspace, p) }));
 }
 
-async function statusPaths(policy: GlobalPolicy, workspace: string): Promise<string[]> {
+async function statusPaths(policy: GlobalPolicy, workspace: string): Promise<{ paths: string[]; error?: string }> {
   const status = await runIsolated(policy, ['git', 'status', '--porcelain=v1', '--untracked-files=all'], { workspace, timeoutMs: 60_000 });
-  return status.stdout.split('\n')
+  const error = probeError('git status', status);
+  if (error) return { paths: [], error };
+  const paths = status.stdout.split('\n')
     .map((l) => l.trim()).filter(Boolean)
     .map((l) => {
       const p = l.slice(2).trim();
@@ -44,6 +57,7 @@ async function statusPaths(policy: GlobalPolicy, workspace: string): Promise<str
     })
     .flat()
     .map((p) => p.replace(/^"|"$/g, ''));
+  return { paths };
 }
 
 export interface GitObservation {
@@ -53,6 +67,8 @@ export interface GitObservation {
   baseRevision: string;
   head: string;
   clean: boolean;
+  /** git observation 不完整時的原因；空陣列代表所有 probes 成功。 */
+  probeErrors?: string[];
 }
 
 /** 觀察 worktree 相對 baseRevision 的實際變更（含 untracked）。 */
@@ -60,19 +76,29 @@ export async function observeGit(
   policy: GlobalPolicy, workspace: string, base: string,
   preExisting: readonly DirtyEntry[] = [],
 ): Promise<GitObservation> {
-  const worktreePaths = await statusPaths(policy, workspace);
+  const status = await statusPaths(policy, workspace);
+  const probeErrors = status.error ? [status.error] : [];
+  const worktreePaths = status.paths;
+  if (base === 'UNKNOWN') probeErrors.push('git base revision unavailable');
 
   const headRes = await runIsolated(policy, ['git', 'rev-parse', 'HEAD'], { workspace, timeoutMs: 30_000 });
-  const head = headRes.exitCode === 0 ? headRes.stdout.trim() : 'UNKNOWN';
+  const headError = probeError('git rev-parse HEAD', headRes);
+  if (headError) probeErrors.push(headError);
+  const head = headRes.exitCode === 0 ? headRes.stdout.trim() || 'UNKNOWN' : 'UNKNOWN';
+  if (head === 'UNKNOWN' && !headError) probeErrors.push('git rev-parse HEAD returned no revision');
 
   // base 之後若有 commit，也要算進變更（agent 可能自行 commit）
   let committed: string[] = [];
   if (base !== 'UNKNOWN' && head !== 'UNKNOWN' && head !== base) {
-    const r = await runIsolated(policy, ['git', 'diff', '--name-only', `${base}..${head}`], { workspace, timeoutMs: 60_000 });
-    committed = r.stdout.split('\n').map((s) => s.trim()).filter(Boolean);
+    const r = await runIsolated(policy, ['git', 'diff', '--no-ext-diff', '--no-textconv', '--name-only', `${base}..${head}`], { workspace, timeoutMs: 60_000 });
+    const error = probeError('git diff --name-only', r);
+    if (error) probeErrors.push(error);
+    else committed = r.stdout.split('\n').map((s) => s.trim()).filter(Boolean);
   }
 
-  const diffRes = await runIsolated(policy, ['git', 'diff', base === 'UNKNOWN' ? 'HEAD' : base], { workspace, timeoutMs: 120_000 });
+  const diffRes = await runIsolated(policy, ['git', 'diff', '--no-ext-diff', '--no-textconv', base === 'UNKNOWN' ? 'HEAD' : base], { workspace, timeoutMs: 120_000 });
+  const diffError = probeError('git diff', diffRes);
+  if (diffError) probeErrors.push(diffError);
   const all = [...new Set([...worktreePaths, ...committed])].sort();
 
   // attempt 開始前就髒、且內容至今未再變動的檔案，不算這次 attempt 的變更
@@ -87,18 +113,19 @@ export async function observeGit(
 
   return {
     changedPaths, preExistingUnchanged, diff: diffRes.stdout,
-    baseRevision: base, head, clean: changedPaths.length === 0,
+    baseRevision: base, head, clean: changedPaths.length === 0, probeErrors,
   };
 }
 
 export function gitDiffEvidence(workId: string, attemptId: string, obs: GitObservation, diffArtifactId: string): EvidenceRecord {
+  const probeErrors = obs.probeErrors ?? [];
   return {
     id: newId('EV'), workId, attemptId, type: 'git_diff', label: 'git diff',
-    status: 'PASS', // 觀察本身成功；是否合規由 path_policy 判定
+    status: probeErrors.length ? 'INCONCLUSIVE' : 'PASS',
     data: {
       changedPaths: obs.changedPaths, preExistingUnchanged: obs.preExistingUnchanged,
       baseRevision: obs.baseRevision, head: obs.head,
-      diffArtifactId, diffPreview: tail(obs.diff, 20),
+      diffArtifactId, diffPreview: tail(obs.diff, 20), probeErrors,
     },
     observedAt: nowIso(),
   };

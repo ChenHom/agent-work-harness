@@ -54,6 +54,14 @@ export function decideOutcome(i: OutcomeInput): OutcomeDecision {
       : push('FAILED', `agent 回報失敗：${result.summary}`);
   }
 
+  // git observation 不完整時，不能把空的 changedPaths 當成乾淨 worktree。
+  const gitEvidence = i.evidence.find((e) => e.type === 'git_diff');
+  if (!gitEvidence || gitEvidence.status !== 'PASS') {
+    const status = gitEvidence?.status ?? 'MISSING';
+    const r = `git observation 不完整（${status}），無法確認實際變更`;
+    return i.retryBudgetRemaining > 0 ? push('RETRYABLE_FAILURE', r) : push('FAILED', r);
+  }
+
   // 6. 機械 acceptance（§7.1）
   // fail-closed：path policy evidence 必須存在且 PASS，缺失或 INCONCLUSIVE 都不得判成功
   const pathPass = pathEvidence.filter((e) => e.status === 'PASS');
