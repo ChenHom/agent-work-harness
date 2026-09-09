@@ -148,6 +148,9 @@ run  ┌ prepare  contract 快照 → admitSkills → manifest → budget → co
 
 ## 文件
 
+- [下一版長任務架構 v2（設計提案，未實作）](docs/superpowers/specs/2026-09-09-long-running-harness-v2-design.md)
+- [v2 分階段實作計畫（P1 本機恢復優先）](docs/superpowers/plans/2026-09-09-long-running-harness-v2.md)
+
 - 決策記錄：`DECISIONS.md`
 - 隔離實測：`docs/spikes/2026-08-21-isolation-spike.md`
 - E2E 場景：`docs/e2e-scenarios.md`
