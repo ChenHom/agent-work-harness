@@ -145,3 +145,40 @@ test('read-only open does not migrate a v0 database', () => {
     rmSync(state, { recursive: true, force: true });
   }
 });
+
+test('malformed v0 schema is rejected without advancing user_version', () => {
+  const state = mkdtempSync(join(tmpdir(), 'harness-migration-'));
+  const path = join(state, 'harness.db');
+  const malformed = new DatabaseSync(path);
+  malformed.exec('create table works(id text primary key)');
+  malformed.close();
+
+  assert.throws(() => new Store(state), /SCHEMA_INVALID/);
+  const check = new DatabaseSync(path, { readOnly: true });
+  try {
+    assert.equal((check.prepare('pragma user_version').get() as { user_version: number }).user_version, 0);
+    assert.deepEqual((check.prepare('pragma table_info(works)').all() as Array<{ name: string }>)
+      .map((column) => column.name), ['id']);
+  } finally {
+    check.close();
+    rmSync(state, { recursive: true, force: true });
+  }
+});
+
+test('database marked current is still rejected when required schema is absent', () => {
+  const state = mkdtempSync(join(tmpdir(), 'harness-migration-'));
+  const path = join(state, 'harness.db');
+  const malformed = new DatabaseSync(path);
+  malformed.exec(`pragma user_version = ${CURRENT_SCHEMA_VERSION}`);
+  malformed.close();
+
+  assert.throws(() => new Store(state), /SCHEMA_INVALID/);
+  const check = new DatabaseSync(path, { readOnly: true });
+  try {
+    assert.equal((check.prepare('pragma user_version').get() as { user_version: number }).user_version,
+      CURRENT_SCHEMA_VERSION);
+  } finally {
+    check.close();
+    rmSync(state, { recursive: true, force: true });
+  }
+});

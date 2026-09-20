@@ -3,7 +3,7 @@ import { mkdirSync, writeFileSync, readFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { createHash } from 'node:crypto';
 import { newId, nowIso } from '../ids.ts';
-import { migrate } from './migrations.ts';
+import { migrate, rethrowAfterRollback } from './migrations.ts';
 import type {
   Work, WorkContract, Attempt, DecisionRecord, EvidenceRecord,
   Outcome, WorkState, AttemptStatus,
@@ -88,8 +88,7 @@ export class Store {
       this.db.exec('COMMIT');
       return result;
     } catch (error) {
-      this.db.exec('ROLLBACK');
-      throw error;
+      rethrowAfterRollback(this.db, error);
     } finally {
       this.inTransaction = false;
     }
@@ -249,15 +248,21 @@ export class Store {
     reasons: string[];
     workState: WorkState;
     evidenceIds: string[];
+    expectedAttemptStatus: AttemptStatus;
+    expectedWorkState: WorkState;
   }): void {
     const evidenceIds = [...new Set(input.evidenceIds)].sort();
-    const finalizationKey = createHash('sha256').update(canonicalJson({ ...input, evidenceIds })).digest('hex');
+    const finalizationKey = createHash('sha256').update(canonicalJson({
+      attempt: input.attempt, outcome: input.outcome, reasons: input.reasons,
+      workState: input.workState, evidenceIds,
+    })).digest('hex');
     this.withTransaction(() => {
       const persistedAttempt = this.getAttempt(input.attempt.id);
       if (!persistedAttempt || persistedAttempt.workId !== input.attempt.workId) {
         throw new Error(`STATE_CONFLICT: attempt ${input.attempt.id} does not belong to work ${input.attempt.workId}`);
       }
-      if (!this.getWork(input.attempt.workId)) {
+      const persistedWork = this.getWork(input.attempt.workId);
+      if (!persistedWork) {
         throw new Error(`STATE_CONFLICT: work ${input.attempt.workId} does not exist`);
       }
 
@@ -269,6 +274,13 @@ export class Store {
         throw new Error(`STATE_CONFLICT: attempt ${input.attempt.id} already has a different finalization`);
       }
 
+      if (persistedAttempt.status !== input.expectedAttemptStatus) {
+        throw new Error(`STATE_CONFLICT: attempt ${input.attempt.id} expected ${input.expectedAttemptStatus}, got ${persistedAttempt.status}`);
+      }
+      if (persistedWork.state !== input.expectedWorkState) {
+        throw new Error(`STATE_CONFLICT: work ${input.attempt.workId} expected ${input.expectedWorkState}, got ${persistedWork.state}`);
+      }
+
       const evidence = this.db.prepare('select id from evidence where attempt_id = ? and work_id = ?')
         .all(input.attempt.id, input.attempt.workId) as Array<{ id: string }>;
       const available = new Set(evidence.map((row) => row.id));
@@ -276,8 +288,10 @@ export class Store {
         throw new Error(`STATE_CONFLICT: evidence does not belong to attempt ${input.attempt.id}`);
       }
 
-      const attemptUpdate = this.db.prepare('update attempts set json = ?, status = ? where id = ? and work_id = ?')
-        .run(JSON.stringify(input.attempt), input.attempt.status, input.attempt.id, input.attempt.workId);
+      const attemptUpdate = this.db.prepare(`
+        update attempts set json = ?, status = ? where id = ? and work_id = ? and status = ?
+      `).run(JSON.stringify(input.attempt), input.attempt.status, input.attempt.id, input.attempt.workId,
+        input.expectedAttemptStatus);
       if (Number(attemptUpdate.changes) !== 1) {
         throw new Error(`STATE_CONFLICT: attempt ${input.attempt.id} changed during finalization`);
       }
@@ -290,8 +304,8 @@ export class Store {
       this.event('outcome.decided', {
         outcome: input.outcome, reasons: input.reasons, evidenceIds,
       }, input.attempt.workId, input.attempt.id);
-      const workUpdate = this.db.prepare('update works set state = ? where id = ?')
-        .run(input.workState, input.attempt.workId);
+      const workUpdate = this.db.prepare('update works set state = ? where id = ? and state = ?')
+        .run(input.workState, input.attempt.workId, input.expectedWorkState);
       if (Number(workUpdate.changes) !== 1) {
         throw new Error(`STATE_CONFLICT: work ${input.attempt.workId} changed during finalization`);
       }

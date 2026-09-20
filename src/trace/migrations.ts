@@ -44,8 +44,63 @@ create index if not exists idx_recovery_sessions_work on recovery_sessions(work_
 create index if not exists idx_recovery_sessions_attempt on recovery_sessions(attempt_id);
 `;
 
+const REQUIRED_TABLES: Record<string, readonly string[]> = {
+  works: ['id', 'title', 'repository_id', 'workspace', 'state', 'current_contract_version', 'retry_budget', 'created_at'],
+  contracts: ['id', 'work_id', 'version', 'json', 'created_at'],
+  attempts: ['id', 'work_id', 'number', 'json', 'status', 'started_at'],
+  decisions: ['id', 'work_id', 'source_message_id', 'kind', 'value', 'created_at'],
+  evidence: ['id', 'work_id', 'attempt_id', 'type', 'label', 'status', 'data', 'observed_at'],
+  outcomes: ['id', 'work_id', 'attempt_id', 'outcome', 'reasons', 'evidence_ids', 'finalization_key', 'created_at'],
+  messages: ['id', 'work_id', 'role', 'text', 'created_at'],
+  events: ['seq', 'type', 'work_id', 'attempt_id', 'data', 'created_at'],
+  artifacts: ['id', 'kind', 'hash', 'path', 'bytes', 'created_at'],
+  recovery_sessions: ['id', 'work_id', 'attempt_id', 'observed_at', 'evidence_ids', 'reason', 'status'],
+};
+
+const REQUIRED_INDEXES: Record<string, { table: string; columns: readonly string[] }> = {
+  idx_attempts_work: { table: 'attempts', columns: ['work_id'] },
+  idx_evidence_attempt: { table: 'evidence', columns: ['attempt_id'] },
+  idx_outcomes_attempt: { table: 'outcomes', columns: ['attempt_id'] },
+  idx_events_work: { table: 'events', columns: ['work_id'] },
+  idx_recovery_sessions_work: { table: 'recovery_sessions', columns: ['work_id', 'status'] },
+  idx_recovery_sessions_attempt: { table: 'recovery_sessions', columns: ['attempt_id'] },
+};
+
+function validateSchema(db: DatabaseSync): void {
+  const problems: string[] = [];
+  for (const [table, required] of Object.entries(REQUIRED_TABLES)) {
+    const actual = new Set((db.prepare(`pragma table_info(${table})`).all() as Array<{ name: string }>)
+      .map((column) => column.name));
+    const missing = required.filter((column) => !actual.has(column));
+    if (missing.length) problems.push(`${table} missing columns: ${missing.join(', ')}`);
+  }
+  for (const [name, required] of Object.entries(REQUIRED_INDEXES)) {
+    const index = db.prepare(`
+      select tbl_name from sqlite_master where type = 'index' and name = ?
+    `).get(name) as { tbl_name: string } | undefined;
+    const columns = (db.prepare(`pragma index_info(${name})`).all() as Array<{ name: string }>)
+      .map((column) => column.name);
+    if (!index || index.tbl_name !== required.table || columns.join() !== required.columns.join()) {
+      problems.push(`${name} must index ${required.table}(${required.columns.join(', ')})`);
+    }
+  }
+  if (problems.length) throw new Error(`SCHEMA_INVALID: ${problems.join('; ')}`);
+}
+
 function userVersion(db: DatabaseSync): number {
   return (db.prepare('pragma user_version').get() as { user_version: number }).user_version;
+}
+
+export function rethrowAfterRollback(db: DatabaseSync, error: unknown): never {
+  if (db.isTransaction) {
+    try {
+      db.exec('ROLLBACK');
+    } catch (rollbackError) {
+      const message = error instanceof Error ? error.message : String(error);
+      throw new AggregateError([error, rollbackError], `transaction failed: ${message}; rollback also failed`);
+    }
+  }
+  throw error;
 }
 
 export function migrate(db: DatabaseSync): void {
@@ -53,7 +108,10 @@ export function migrate(db: DatabaseSync): void {
   if (version > CURRENT_SCHEMA_VERSION) {
     throw new Error(`SCHEMA_TOO_NEW: database version ${version}, supported ${CURRENT_SCHEMA_VERSION}`);
   }
-  if (version === CURRENT_SCHEMA_VERSION) return;
+  if (version === CURRENT_SCHEMA_VERSION) {
+    validateSchema(db);
+    return;
+  }
 
   db.exec('BEGIN IMMEDIATE');
   try {
@@ -87,10 +145,10 @@ export function migrate(db: DatabaseSync): void {
         create index idx_recovery_sessions_attempt on recovery_sessions(attempt_id);
       `);
     }
+    validateSchema(db);
     db.exec(`pragma user_version = ${CURRENT_SCHEMA_VERSION}`);
     db.exec('COMMIT');
   } catch (error) {
-    db.exec('ROLLBACK');
-    throw error;
+    rethrowAfterRollback(db, error);
   }
 }
