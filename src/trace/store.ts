@@ -3,7 +3,7 @@ import { mkdirSync, writeFileSync, readFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { createHash } from 'node:crypto';
 import { newId, nowIso } from '../ids.ts';
-import { migrate, rethrowAfterRollback } from './migrations.ts';
+import { CURRENT_SCHEMA_VERSION, migrate, rethrowAfterRollback, validateSchema } from './migrations.ts';
 import type {
   Work, WorkContract, Attempt, DecisionRecord, EvidenceRecord,
   Outcome, WorkState, AttemptStatus,
@@ -53,6 +53,16 @@ export class Store {
     if (options.readOnly) {
       if (!existsSync(path)) throw new StoreOpenError('NO_STATE', `no database at ${path}`);
       this.db = new DatabaseSync(path, { readOnly: true });
+      try {
+        const version = (this.db.prepare('pragma user_version').get() as { user_version: number }).user_version;
+        if (version > CURRENT_SCHEMA_VERSION) {
+          throw new Error(`SCHEMA_TOO_NEW: database version ${version}, supported ${CURRENT_SCHEMA_VERSION}`);
+        }
+        if (version === CURRENT_SCHEMA_VERSION) validateSchema(this.db);
+      } catch (error) {
+        this.db.close();
+        throw error;
+      }
     } else {
       mkdirSync(stateDir, { recursive: true });
       mkdirSync(this.artifactDir, { recursive: true });

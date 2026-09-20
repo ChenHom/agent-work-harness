@@ -182,3 +182,72 @@ test('database marked current is still rejected when required schema is absent',
     rmSync(state, { recursive: true, force: true });
   }
 });
+
+test('current schema rejects contracts without unique(work_id, version)', () => {
+  const state = mkdtempSync(join(tmpdir(), 'harness-migration-'));
+  const initialized = new Store(state);
+  initialized.close();
+  const path = join(state, 'harness.db');
+  const malformed = new DatabaseSync(path);
+  malformed.exec(`
+    alter table contracts rename to contracts_old;
+    create table contracts(
+      id text primary key, work_id text not null, version integer not null,
+      json text not null, created_at text not null);
+    insert into contracts select * from contracts_old;
+    drop table contracts_old;
+  `);
+  malformed.close();
+
+  assert.throws(() => new Store(state), /SCHEMA_INVALID.*contracts.*unique/i);
+  rmSync(state, { recursive: true, force: true });
+});
+
+test('current schema rejects events without integer primary-key identity', () => {
+  const state = mkdtempSync(join(tmpdir(), 'harness-migration-'));
+  const initialized = new Store(state);
+  initialized.close();
+  const path = join(state, 'harness.db');
+  const malformed = new DatabaseSync(path);
+  malformed.exec(`
+    alter table events rename to events_old;
+    create table events(
+      seq text, type text not null, work_id text,
+      attempt_id text, data text not null, created_at text not null);
+    insert into events select * from events_old;
+    drop table events_old;
+    create index idx_events_work on events(work_id);
+  `);
+  malformed.close();
+
+  assert.throws(() => new Store(state), /SCHEMA_INVALID.*events\.seq/i);
+  rmSync(state, { recursive: true, force: true });
+});
+
+test('read-only open validates a current-version database', () => {
+  const state = mkdtempSync(join(tmpdir(), 'harness-read-only-'));
+  const path = join(state, 'harness.db');
+  const malformed = new DatabaseSync(path);
+  malformed.exec(`pragma user_version = ${CURRENT_SCHEMA_VERSION}`);
+  malformed.close();
+
+  assert.throws(() => new Store(state, { readOnly: true }), /SCHEMA_INVALID/);
+  rmSync(state, { recursive: true, force: true });
+});
+
+test('read-only open rejects a newer schema without changing its version', () => {
+  const state = mkdtempSync(join(tmpdir(), 'harness-read-only-'));
+  const path = join(state, 'harness.db');
+  const future = new DatabaseSync(path);
+  future.exec('pragma user_version = 999');
+  future.close();
+
+  assert.throws(() => new Store(state, { readOnly: true }), /SCHEMA_TOO_NEW/);
+  const check = new DatabaseSync(path, { readOnly: true });
+  try {
+    assert.equal((check.prepare('pragma user_version').get() as { user_version: number }).user_version, 999);
+  } finally {
+    check.close();
+    rmSync(state, { recursive: true, force: true });
+  }
+});

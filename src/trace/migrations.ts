@@ -44,17 +44,44 @@ create index if not exists idx_recovery_sessions_work on recovery_sessions(work_
 create index if not exists idx_recovery_sessions_attempt on recovery_sessions(attempt_id);
 `;
 
-const REQUIRED_TABLES: Record<string, readonly string[]> = {
-  works: ['id', 'title', 'repository_id', 'workspace', 'state', 'current_contract_version', 'retry_budget', 'created_at'],
-  contracts: ['id', 'work_id', 'version', 'json', 'created_at'],
-  attempts: ['id', 'work_id', 'number', 'json', 'status', 'started_at'],
-  decisions: ['id', 'work_id', 'source_message_id', 'kind', 'value', 'created_at'],
-  evidence: ['id', 'work_id', 'attempt_id', 'type', 'label', 'status', 'data', 'observed_at'],
-  outcomes: ['id', 'work_id', 'attempt_id', 'outcome', 'reasons', 'evidence_ids', 'finalization_key', 'created_at'],
-  messages: ['id', 'work_id', 'role', 'text', 'created_at'],
-  events: ['seq', 'type', 'work_id', 'attempt_id', 'data', 'created_at'],
-  artifacts: ['id', 'kind', 'hash', 'path', 'bytes', 'created_at'],
-  recovery_sessions: ['id', 'work_id', 'attempt_id', 'observed_at', 'evidence_ids', 'reason', 'status'],
+interface ColumnRequirement {
+  type: 'TEXT' | 'INTEGER';
+  notNull: 0 | 1;
+  primaryKey: 0 | 1;
+  defaultValue?: string | null;
+}
+
+const PK_TEXT: ColumnRequirement = { type: 'TEXT', notNull: 0, primaryKey: 1 };
+const TEXT: ColumnRequirement = { type: 'TEXT', notNull: 1, primaryKey: 0 };
+const NULLABLE_TEXT: ColumnRequirement = { type: 'TEXT', notNull: 0, primaryKey: 0 };
+const INTEGER: ColumnRequirement = { type: 'INTEGER', notNull: 1, primaryKey: 0 };
+
+const REQUIRED_TABLES: Record<string, Record<string, ColumnRequirement>> = {
+  works: {
+    id: PK_TEXT, title: TEXT, repository_id: TEXT, workspace: TEXT, state: TEXT,
+    current_contract_version: INTEGER, retry_budget: INTEGER, created_at: TEXT,
+  },
+  contracts: { id: PK_TEXT, work_id: TEXT, version: INTEGER, json: TEXT, created_at: TEXT },
+  attempts: { id: PK_TEXT, work_id: TEXT, number: INTEGER, json: TEXT, status: TEXT, started_at: TEXT },
+  decisions: { id: PK_TEXT, work_id: TEXT, source_message_id: TEXT, kind: TEXT, value: TEXT, created_at: TEXT },
+  evidence: {
+    id: PK_TEXT, work_id: TEXT, attempt_id: TEXT, type: TEXT, label: TEXT,
+    status: TEXT, data: TEXT, observed_at: TEXT,
+  },
+  outcomes: {
+    id: PK_TEXT, work_id: TEXT, attempt_id: TEXT, outcome: TEXT, reasons: TEXT,
+    evidence_ids: { ...TEXT, defaultValue: `'[]'` }, finalization_key: NULLABLE_TEXT, created_at: TEXT,
+  },
+  messages: { id: PK_TEXT, work_id: NULLABLE_TEXT, role: TEXT, text: TEXT, created_at: TEXT },
+  events: {
+    seq: { type: 'INTEGER', notNull: 0, primaryKey: 1 }, type: TEXT,
+    work_id: NULLABLE_TEXT, attempt_id: NULLABLE_TEXT, data: TEXT, created_at: TEXT,
+  },
+  artifacts: { id: PK_TEXT, kind: TEXT, hash: TEXT, path: TEXT, bytes: INTEGER, created_at: TEXT },
+  recovery_sessions: {
+    id: PK_TEXT, work_id: TEXT, attempt_id: TEXT, observed_at: TEXT,
+    evidence_ids: TEXT, reason: TEXT, status: TEXT,
+  },
 };
 
 const REQUIRED_INDEXES: Record<string, { table: string; columns: readonly string[] }> = {
@@ -66,24 +93,46 @@ const REQUIRED_INDEXES: Record<string, { table: string; columns: readonly string
   idx_recovery_sessions_attempt: { table: 'recovery_sessions', columns: ['attempt_id'] },
 };
 
-function validateSchema(db: DatabaseSync): void {
+export function validateSchema(db: DatabaseSync): void {
   const problems: string[] = [];
   for (const [table, required] of Object.entries(REQUIRED_TABLES)) {
-    const actual = new Set((db.prepare(`pragma table_info(${table})`).all() as Array<{ name: string }>)
-      .map((column) => column.name));
-    const missing = required.filter((column) => !actual.has(column));
-    if (missing.length) problems.push(`${table} missing columns: ${missing.join(', ')}`);
+    const columns = db.prepare(`pragma table_info(${table})`).all() as Array<{
+      name: string; type: string; notnull: number; dflt_value: string | null; pk: number;
+    }>;
+    const actual = new Map(columns.map((column) => [column.name, column]));
+    for (const [name, expected] of Object.entries(required)) {
+      const column = actual.get(name);
+      if (!column) {
+        problems.push(`${table}.${name} is missing`);
+        continue;
+      }
+      if (column.type.toUpperCase() !== expected.type
+        || column.notnull !== expected.notNull
+        || column.pk !== expected.primaryKey) {
+        problems.push(`${table}.${name} must be ${expected.type} notnull=${expected.notNull} pk=${expected.primaryKey}`);
+      }
+      if ('defaultValue' in expected && column.dflt_value !== expected.defaultValue) {
+        problems.push(`${table}.${name} must default to ${String(expected.defaultValue)}`);
+      }
+    }
   }
   for (const [name, required] of Object.entries(REQUIRED_INDEXES)) {
-    const index = db.prepare(`
-      select tbl_name from sqlite_master where type = 'index' and name = ?
-    `).get(name) as { tbl_name: string } | undefined;
+    const index = (db.prepare(`pragma index_list(${required.table})`).all() as Array<{
+      name: string; unique: number; partial: number;
+    }>).find((candidate) => candidate.name === name);
     const columns = (db.prepare(`pragma index_info(${name})`).all() as Array<{ name: string }>)
       .map((column) => column.name);
-    if (!index || index.tbl_name !== required.table || columns.join() !== required.columns.join()) {
+    if (!index || index.unique !== 0 || index.partial !== 0 || columns.join() !== required.columns.join()) {
       problems.push(`${name} must index ${required.table}(${required.columns.join(', ')})`);
     }
   }
+  const contractIndexes = db.prepare('pragma index_list(contracts)').all() as Array<{
+    name: string; unique: number; partial: number;
+  }>;
+  const hasContractVersionUnique = contractIndexes.some((index) => index.unique === 1 && index.partial === 0
+    && (db.prepare('select name from pragma_index_info(?) order by seqno').all(index.name) as Array<{ name: string }>)
+      .map((column) => column.name).join() === 'work_id,version');
+  if (!hasContractVersionUnique) problems.push('contracts must have unique(work_id, version)');
   if (problems.length) throw new Error(`SCHEMA_INVALID: ${problems.join('; ')}`);
 }
 
