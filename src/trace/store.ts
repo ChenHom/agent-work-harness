@@ -29,6 +29,18 @@ export class StoreOpenError extends Error {
   }
 }
 
+function canonicalJson(value: unknown): string {
+  const sort = (item: unknown): unknown => {
+    if (Array.isArray(item)) return item.map(sort);
+    if (!item || typeof item !== 'object') return item;
+    const object = item as Record<string, unknown>;
+    return Object.fromEntries(Object.keys(object).sort()
+      .filter((key) => object[key] !== undefined)
+      .map((key) => [key, sort(object[key])]));
+  };
+  return JSON.stringify(sort(JSON.parse(JSON.stringify(value)) as unknown));
+}
+
 export class Store {
   readonly db: DatabaseSync;
   readonly artifactDir: string;
@@ -239,40 +251,50 @@ export class Store {
     evidenceIds: string[];
   }): void {
     const evidenceIds = [...new Set(input.evidenceIds)].sort();
+    const finalizationKey = createHash('sha256').update(canonicalJson({ ...input, evidenceIds })).digest('hex');
     this.withTransaction(() => {
+      const persistedAttempt = this.getAttempt(input.attempt.id);
+      if (!persistedAttempt || persistedAttempt.workId !== input.attempt.workId) {
+        throw new Error(`STATE_CONFLICT: attempt ${input.attempt.id} does not belong to work ${input.attempt.workId}`);
+      }
+      if (!this.getWork(input.attempt.workId)) {
+        throw new Error(`STATE_CONFLICT: work ${input.attempt.workId} does not exist`);
+      }
+
       const previous = this.db.prepare(`
-        select outcome, reasons, evidence_ids from outcomes where attempt_id = ? order by created_at, id limit 1
-      `).get(input.attempt.id) as { outcome: string; reasons: string; evidence_ids: string } | undefined;
+        select finalization_key from outcomes where attempt_id = ? order by created_at, id limit 1
+      `).get(input.attempt.id) as { finalization_key: string | null } | undefined;
       if (previous) {
-        const attempt = this.getAttempt(input.attempt.id);
-        const work = this.getWork(input.attempt.workId);
-        const same = previous.outcome === input.outcome
-          && previous.reasons === JSON.stringify(input.reasons)
-          && previous.evidence_ids === JSON.stringify(evidenceIds)
-          && JSON.stringify(attempt) === JSON.stringify(input.attempt)
-          && work?.state === input.workState;
-        if (same) return;
+        if (previous.finalization_key === finalizationKey) return;
         throw new Error(`STATE_CONFLICT: attempt ${input.attempt.id} already has a different finalization`);
       }
 
-      const evidence = this.db.prepare('select id from evidence where attempt_id = ?')
-        .all(input.attempt.id) as Array<{ id: string }>;
+      const evidence = this.db.prepare('select id from evidence where attempt_id = ? and work_id = ?')
+        .all(input.attempt.id, input.attempt.workId) as Array<{ id: string }>;
       const available = new Set(evidence.map((row) => row.id));
       if (evidenceIds.some((id) => !available.has(id))) {
         throw new Error(`STATE_CONFLICT: evidence does not belong to attempt ${input.attempt.id}`);
       }
 
-      this.updateAttempt(input.attempt);
+      const attemptUpdate = this.db.prepare('update attempts set json = ?, status = ? where id = ? and work_id = ?')
+        .run(JSON.stringify(input.attempt), input.attempt.status, input.attempt.id, input.attempt.workId);
+      if (Number(attemptUpdate.changes) !== 1) {
+        throw new Error(`STATE_CONFLICT: attempt ${input.attempt.id} changed during finalization`);
+      }
       this.event('attempt.completed', { status: input.attempt.status }, input.attempt.workId, input.attempt.id);
       this.db.prepare(`
-        insert into outcomes(id,work_id,attempt_id,outcome,reasons,evidence_ids,created_at)
-        values (?,?,?,?,?,?,?)
+        insert into outcomes(id,work_id,attempt_id,outcome,reasons,evidence_ids,finalization_key,created_at)
+        values (?,?,?,?,?,?,?,?)
       `).run(newId('O'), input.attempt.workId, input.attempt.id, input.outcome,
-        JSON.stringify(input.reasons), JSON.stringify(evidenceIds), nowIso());
+        JSON.stringify(input.reasons), JSON.stringify(evidenceIds), finalizationKey, nowIso());
       this.event('outcome.decided', {
         outcome: input.outcome, reasons: input.reasons, evidenceIds,
       }, input.attempt.workId, input.attempt.id);
-      this.db.prepare('update works set state = ? where id = ?').run(input.workState, input.attempt.workId);
+      const workUpdate = this.db.prepare('update works set state = ? where id = ?')
+        .run(input.workState, input.attempt.workId);
+      if (Number(workUpdate.changes) !== 1) {
+        throw new Error(`STATE_CONFLICT: work ${input.attempt.workId} changed during finalization`);
+      }
       this.event('work.state_changed', { state: input.workState }, input.attempt.workId);
       if (input.outcome === 'SUCCESS') this.event('work.completed', {}, input.attempt.workId);
       if (input.outcome === 'BLOCKED' || input.outcome === 'POLICY_VIOLATION') {

@@ -166,3 +166,148 @@ test('finalizeAttempt rejects a conflicting replay', () => {
     rmSync(state, { recursive: true, force: true });
   }
 });
+
+test('finalizeAttempt rejects an attempt attached to a different work without partial writes', () => {
+  const state = mkdtempSync(join(tmpdir(), 'harness-store-finalize-'));
+  const { store, work, attempt, evidence } = seededStore(state);
+  try {
+    const beforeAttempt = store.getAttempt(attempt.id);
+    const beforeEvents = store.events(work.id);
+    assert.throws(() => store.finalizeAttempt({
+      attempt: { ...completed(attempt), workId: 'W-wrong' }, outcome: 'SUCCESS', reasons: ['verified'],
+      workState: 'DONE', evidenceIds: [evidence.id],
+    }), /STATE_CONFLICT/);
+    assert.deepEqual(store.getAttempt(attempt.id), beforeAttempt);
+    assert.equal(store.lastOutcome(work.id), null);
+    assert.deepEqual(store.events(work.id), beforeEvents);
+  } finally {
+    store.close();
+    rmSync(state, { recursive: true, force: true });
+  }
+});
+
+test('finalizeAttempt rejects a nonexistent attempt without changing its work', () => {
+  const state = mkdtempSync(join(tmpdir(), 'harness-store-finalize-'));
+  const { store, work, attempt } = seededStore(state);
+  try {
+    const beforeWork = store.getWork(work.id);
+    const beforeEvents = store.events(work.id);
+    assert.throws(() => store.finalizeAttempt({
+      attempt: { ...completed(attempt), id: 'A-missing' }, outcome: 'SUCCESS', reasons: ['verified'],
+      workState: 'DONE', evidenceIds: [],
+    }), /STATE_CONFLICT/);
+    assert.deepEqual(store.getWork(work.id), beforeWork);
+    assert.equal(store.lastOutcome(work.id), null);
+    assert.deepEqual(store.events(work.id), beforeEvents);
+  } finally {
+    store.close();
+    rmSync(state, { recursive: true, force: true });
+  }
+});
+
+test('finalizeAttempt rejects a nonexistent work without changing its attempt', () => {
+  const state = mkdtempSync(join(tmpdir(), 'harness-store-finalize-'));
+  const { store, work, attempt } = seededStore(state);
+  try {
+    store.db.prepare('delete from works where id = ?').run(work.id);
+    const beforeAttempt = store.getAttempt(attempt.id);
+    const beforeEvents = store.events(work.id);
+    assert.throws(() => store.finalizeAttempt({
+      attempt: completed(attempt), outcome: 'FAILED', reasons: ['failed'],
+      workState: 'FAILED', evidenceIds: [],
+    }), /STATE_CONFLICT/);
+    assert.deepEqual(store.getAttempt(attempt.id), beforeAttempt);
+    assert.equal(store.lastOutcome(work.id), null);
+    assert.deepEqual(store.events(work.id), beforeEvents);
+  } finally {
+    store.close();
+    rmSync(state, { recursive: true, force: true });
+  }
+});
+
+test('finalizeAttempt does not accept evidence with the right attempt id from another work', () => {
+  const state = mkdtempSync(join(tmpdir(), 'harness-store-finalize-'));
+  const { store, work, attempt } = seededStore(state);
+  try {
+    store.insertEvidence({
+      id: 'EV-foreign', workId: 'W-foreign', attemptId: attempt.id, type: 'test_result',
+      label: 'foreign', status: 'PASS', data: {}, observedAt: '2026-09-20T00:01:00.000Z',
+    });
+    const beforeEvents = store.events(work.id);
+    assert.throws(() => store.finalizeAttempt({
+      attempt: completed(attempt), outcome: 'SUCCESS', reasons: ['verified'],
+      workState: 'DONE', evidenceIds: ['EV-foreign'],
+    }), /STATE_CONFLICT/);
+    assert.equal(store.lastOutcome(work.id), null);
+    assert.deepEqual(store.events(work.id), beforeEvents);
+  } finally {
+    store.close();
+    rmSync(state, { recursive: true, force: true });
+  }
+});
+
+test('finalizeAttempt replay uses durable canonical identity and never rewinds later work state', () => {
+  const state = mkdtempSync(join(tmpdir(), 'harness-store-finalize-'));
+  const seeded = seededStore(state);
+  const firstAttempt = completed(seeded.attempt);
+  seeded.store.finalizeAttempt({
+    attempt: firstAttempt, outcome: 'SUCCESS', reasons: ['verified'],
+    workState: 'DONE', evidenceIds: [seeded.evidence.id],
+  });
+  seeded.store.close();
+
+  const reopened = new Store(state);
+  try {
+    reopened.setWorkState(seeded.work.id, 'ACTIVE');
+    const beforeReplayEvents = reopened.events(seeded.work.id);
+    const reorderedAttempt: Attempt = {
+      endedAt: firstAttempt.endedAt,
+      startedAt: firstAttempt.startedAt,
+      status: firstAttempt.status,
+      runtime: firstAttempt.runtime,
+      promptArtifactId: firstAttempt.promptArtifactId,
+      baseRevision: firstAttempt.baseRevision,
+      contractSnapshotHash: firstAttempt.contractSnapshotHash,
+      contractVersion: firstAttempt.contractVersion,
+      mode: firstAttempt.mode,
+      number: firstAttempt.number,
+      workId: firstAttempt.workId,
+      id: firstAttempt.id,
+    };
+    reopened.finalizeAttempt({
+      attempt: reorderedAttempt, outcome: 'SUCCESS', reasons: ['verified'],
+      workState: 'DONE', evidenceIds: [seeded.evidence.id],
+    });
+    assert.equal(reopened.getWork(seeded.work.id)?.state, 'ACTIVE');
+    assert.deepEqual(reopened.events(seeded.work.id), beforeReplayEvents);
+  } finally {
+    reopened.close();
+    rmSync(state, { recursive: true, force: true });
+  }
+});
+
+test('finalizeAttempt canonical identity conflicts on every logical finalization field', () => {
+  const state = mkdtempSync(join(tmpdir(), 'harness-store-finalize-'));
+  const { store, attempt, evidence } = seededStore(state);
+  const finalAttempt = completed(attempt);
+  const original = {
+    attempt: finalAttempt, outcome: 'SUCCESS' as const, reasons: ['verified'],
+    workState: 'DONE' as const, evidenceIds: [evidence.id],
+  };
+  try {
+    store.finalizeAttempt(original);
+    const variants = [
+      { ...original, workState: 'FAILED' as const },
+      { ...original, attempt: { ...finalAttempt, endedAt: '2026-09-20T00:03:00.000Z' } },
+      { ...original, outcome: 'FAILED' as const },
+      { ...original, reasons: ['different'] },
+      { ...original, evidenceIds: [] },
+    ];
+    for (const variant of variants) {
+      assert.throws(() => store.finalizeAttempt(variant), /STATE_CONFLICT/);
+    }
+  } finally {
+    store.close();
+    rmSync(state, { recursive: true, force: true });
+  }
+});

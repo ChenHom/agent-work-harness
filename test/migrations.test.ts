@@ -17,6 +17,10 @@ test('fresh state is migrated to the current schema', () => {
       select name from sqlite_master where type = 'table' and name = 'recovery_sessions'
     `).get();
     assert.ok(table);
+    const columns = store.db.prepare('pragma table_info(recovery_sessions)').all() as Array<{ name: string }>;
+    assert.deepEqual(columns.map((column) => column.name), [
+      'id', 'work_id', 'attempt_id', 'observed_at', 'evidence_ids', 'reason', 'status',
+    ]);
     const indexes = store.db.prepare(`
       select name from sqlite_master where type = 'index' and tbl_name = 'recovery_sessions' order by name
     `).all() as Array<{ name: string }>;
@@ -56,6 +60,31 @@ test('v0 migration preserves existing rows and adds finalization evidence storag
     });
     assert.equal((store.db.prepare('pragma user_version').get() as { user_version: number }).user_version,
       CURRENT_SCHEMA_VERSION);
+  } finally {
+    store.close();
+    rmSync(state, { recursive: true, force: true });
+  }
+});
+
+test('v1 migration preserves recovery rows while replacing the provisional columns', () => {
+  const state = mkdtempSync(join(tmpdir(), 'harness-migration-'));
+  const path = join(state, 'harness.db');
+  const legacy = new DatabaseSync(path);
+  legacy.exec(`
+    create table recovery_sessions(
+      id text primary key, work_id text not null, attempt_id text not null,
+      status text not null, created_at text not null, resolved_at text);
+    insert into recovery_sessions values ('R', 'W', 'A', 'OPEN', '2026-09-20', null);
+    pragma user_version = 1;
+  `);
+  legacy.close();
+
+  const store = new Store(state);
+  try {
+    assert.deepEqual({ ...store.db.prepare('select * from recovery_sessions').get() }, {
+      id: 'R', work_id: 'W', attempt_id: 'A', observed_at: '2026-09-20',
+      evidence_ids: '[]', reason: 'migrated legacy recovery session', status: 'OPEN',
+    });
   } finally {
     store.close();
     rmSync(state, { recursive: true, force: true });
