@@ -3,6 +3,7 @@ import { mkdirSync, writeFileSync, readFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { createHash } from 'node:crypto';
 import { newId, nowIso } from '../ids.ts';
+import { migrate } from './migrations.ts';
 import type {
   Work, WorkContract, Attempt, DecisionRecord, EvidenceRecord,
   Outcome, WorkState, AttemptStatus,
@@ -19,56 +20,68 @@ export type EventType =
   | 'recovery.required'
   | 'usage.note';   // 人對結果的判讀 —— 機器不知道 evidence 判錯了，只有人知道
 
-const SCHEMA = `
-create table if not exists works(
-  id text primary key, title text not null, repository_id text not null,
-  workspace text not null, state text not null, current_contract_version integer not null,
-  retry_budget integer not null, created_at text not null);
-create table if not exists contracts(
-  id text primary key, work_id text not null, version integer not null,
-  json text not null, created_at text not null,
-  unique(work_id, version));
-create table if not exists attempts(
-  id text primary key, work_id text not null, number integer not null,
-  json text not null, status text not null, started_at text not null);
-create table if not exists decisions(
-  id text primary key, work_id text not null, source_message_id text not null,
-  kind text not null, value text not null, created_at text not null);
-create table if not exists evidence(
-  id text primary key, work_id text not null, attempt_id text not null,
-  type text not null, label text not null, status text not null,
-  data text not null, observed_at text not null);
-create table if not exists outcomes(
-  id text primary key, work_id text not null, attempt_id text not null,
-  outcome text not null, reasons text not null, created_at text not null);
-create table if not exists messages(
-  id text primary key, work_id text, role text not null, text text not null, created_at text not null);
-create table if not exists events(
-  seq integer primary key autoincrement, type text not null, work_id text,
-  attempt_id text, data text not null, created_at text not null);
-create table if not exists artifacts(
-  id text primary key, kind text not null, hash text not null,
-  path text not null, bytes integer not null, created_at text not null);
-create index if not exists idx_attempts_work on attempts(work_id);
-create index if not exists idx_evidence_attempt on evidence(attempt_id);
-create index if not exists idx_events_work on events(work_id);
-`;
+export class StoreOpenError extends Error {
+  readonly code: 'NO_STATE';
+
+  constructor(code: 'NO_STATE', message: string) {
+    super(`${code}: ${message}`);
+    this.code = code;
+  }
+}
 
 export class Store {
   readonly db: DatabaseSync;
   readonly artifactDir: string;
+  private inTransaction = false;
+  private readonly hasOutcomeEvidenceIds: boolean;
 
-  constructor(stateDir: string) {
-    mkdirSync(stateDir, { recursive: true });
+  constructor(stateDir: string, options: { readOnly?: boolean } = {}) {
     this.artifactDir = join(stateDir, 'artifacts');
-    mkdirSync(this.artifactDir, { recursive: true });
-    this.db = new DatabaseSync(join(stateDir, 'harness.db'));
-    this.db.exec('pragma journal_mode = WAL');
-    this.db.exec('pragma foreign_keys = ON');
-    this.db.exec(SCHEMA);
+    const path = join(stateDir, 'harness.db');
+    if (options.readOnly) {
+      if (!existsSync(path)) throw new StoreOpenError('NO_STATE', `no database at ${path}`);
+      this.db = new DatabaseSync(path, { readOnly: true });
+    } else {
+      mkdirSync(stateDir, { recursive: true });
+      mkdirSync(this.artifactDir, { recursive: true });
+      this.db = new DatabaseSync(path);
+      try {
+        migrate(this.db);
+        this.db.exec('pragma journal_mode = WAL');
+        this.db.exec('pragma foreign_keys = ON');
+      } catch (error) {
+        this.db.close();
+        throw error;
+      }
+    }
+    this.hasOutcomeEvidenceIds = (this.db.prepare('pragma table_info(outcomes)').all() as Array<{ name: string }>)
+      .some((column) => column.name === 'evidence_ids');
   }
 
   close(): void { this.db.close(); }
+
+  /** DB-only callback: no filesystem, process, network, or other asynchronous work. */
+  withTransaction<T>(fn: () => T): T {
+    if (this.inTransaction) throw new Error('nested transaction is not allowed');
+    if (Object.prototype.toString.call(fn) === '[object AsyncFunction]') {
+      throw new Error('transaction callback must be synchronous and must not return a Promise');
+    }
+    this.db.exec('BEGIN IMMEDIATE');
+    this.inTransaction = true;
+    try {
+      const result = fn();
+      if (result && typeof (result as { then?: unknown }).then === 'function') {
+        throw new Error('transaction callback must be synchronous and must not return a Promise');
+      }
+      this.db.exec('COMMIT');
+      return result;
+    } catch (error) {
+      this.db.exec('ROLLBACK');
+      throw error;
+    } finally {
+      this.inTransaction = false;
+    }
+  }
 
   // ---- trace ----
   event(type: EventType, data: unknown, workId?: string, attemptId?: string): void {
@@ -218,6 +231,56 @@ export class Store {
     this.db.prepare('update attempts set json = ?, status = ? where id = ?').run(JSON.stringify(a), a.status, a.id);
   }
 
+  finalizeAttempt(input: {
+    attempt: Attempt;
+    outcome: Outcome;
+    reasons: string[];
+    workState: WorkState;
+    evidenceIds: string[];
+  }): void {
+    const evidenceIds = [...new Set(input.evidenceIds)].sort();
+    this.withTransaction(() => {
+      const previous = this.db.prepare(`
+        select outcome, reasons, evidence_ids from outcomes where attempt_id = ? order by created_at, id limit 1
+      `).get(input.attempt.id) as { outcome: string; reasons: string; evidence_ids: string } | undefined;
+      if (previous) {
+        const attempt = this.getAttempt(input.attempt.id);
+        const work = this.getWork(input.attempt.workId);
+        const same = previous.outcome === input.outcome
+          && previous.reasons === JSON.stringify(input.reasons)
+          && previous.evidence_ids === JSON.stringify(evidenceIds)
+          && JSON.stringify(attempt) === JSON.stringify(input.attempt)
+          && work?.state === input.workState;
+        if (same) return;
+        throw new Error(`STATE_CONFLICT: attempt ${input.attempt.id} already has a different finalization`);
+      }
+
+      const evidence = this.db.prepare('select id from evidence where attempt_id = ?')
+        .all(input.attempt.id) as Array<{ id: string }>;
+      const available = new Set(evidence.map((row) => row.id));
+      if (evidenceIds.some((id) => !available.has(id))) {
+        throw new Error(`STATE_CONFLICT: evidence does not belong to attempt ${input.attempt.id}`);
+      }
+
+      this.updateAttempt(input.attempt);
+      this.event('attempt.completed', { status: input.attempt.status }, input.attempt.workId, input.attempt.id);
+      this.db.prepare(`
+        insert into outcomes(id,work_id,attempt_id,outcome,reasons,evidence_ids,created_at)
+        values (?,?,?,?,?,?,?)
+      `).run(newId('O'), input.attempt.workId, input.attempt.id, input.outcome,
+        JSON.stringify(input.reasons), JSON.stringify(evidenceIds), nowIso());
+      this.event('outcome.decided', {
+        outcome: input.outcome, reasons: input.reasons, evidenceIds,
+      }, input.attempt.workId, input.attempt.id);
+      this.db.prepare('update works set state = ? where id = ?').run(input.workState, input.attempt.workId);
+      this.event('work.state_changed', { state: input.workState }, input.attempt.workId);
+      if (input.outcome === 'SUCCESS') this.event('work.completed', {}, input.attempt.workId);
+      if (input.outcome === 'BLOCKED' || input.outcome === 'POLICY_VIOLATION') {
+        this.event('work.blocked', { reasons: input.reasons }, input.attempt.workId);
+      }
+    });
+  }
+
   getAttempt(id: string): Attempt | null {
     const r = this.db.prepare('select json from attempts where id = ?').get(id) as { json: string } | undefined;
     return r ? JSON.parse(r.json) as Attempt : null;
@@ -252,14 +315,19 @@ export class Store {
 
   // ---- outcome ----
   insertOutcome(workId: string, attemptId: string, outcome: Outcome, reasons: string[]): void {
-    this.db.prepare('insert into outcomes(id,work_id,attempt_id,outcome,reasons,created_at) values (?,?,?,?,?,?)')
-      .run(newId('O'), workId, attemptId, outcome, JSON.stringify(reasons), nowIso());
+    this.db.prepare('insert into outcomes(id,work_id,attempt_id,outcome,reasons,evidence_ids,created_at) values (?,?,?,?,?,?,?)')
+      .run(newId('O'), workId, attemptId, outcome, JSON.stringify(reasons), '[]', nowIso());
     this.event('outcome.decided', { outcome, reasons }, workId, attemptId);
   }
 
-  lastOutcome(workId: string): { outcome: Outcome; reasons: string[]; attemptId: string } | null {
-    const r = this.db.prepare('select outcome, reasons, attempt_id from outcomes where work_id = ? order by created_at desc limit 1')
-      .get(workId) as { outcome: string; reasons: string; attempt_id: string } | undefined;
-    return r ? { outcome: r.outcome as Outcome, reasons: JSON.parse(r.reasons) as string[], attemptId: r.attempt_id } : null;
+  lastOutcome(workId: string): { outcome: Outcome; reasons: string[]; attemptId: string; evidenceIds: string[] } | null {
+    const evidenceIds = this.hasOutcomeEvidenceIds ? 'evidence_ids' : `'[]' as evidence_ids`;
+    const r = this.db.prepare(`
+      select outcome, reasons, attempt_id, ${evidenceIds} from outcomes where work_id = ? order by created_at desc limit 1
+    `).get(workId) as { outcome: string; reasons: string; attempt_id: string; evidence_ids: string } | undefined;
+    return r ? {
+      outcome: r.outcome as Outcome, reasons: JSON.parse(r.reasons) as string[],
+      attemptId: r.attempt_id, evidenceIds: JSON.parse(r.evidence_ids) as string[],
+    } : null;
   }
 }
