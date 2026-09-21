@@ -11,7 +11,10 @@ import { Store } from '../src/trace/store.ts';
 import { Orchestrator, type RuntimeDriver, type EvidenceCollector } from '../src/orchestrator.ts';
 import { DEFAULT_POLICY } from '../src/policy.ts';
 import { CONTRACT_REL_PATH } from '../src/repo/contract.ts';
-import type { GlobalPolicy, RuntimeResult, VerificationBaseline } from '../src/types.ts';
+import type {
+  AttemptInputSnapshot, AttemptOutputRefs, AttemptPhase,
+  GlobalPolicy, RuntimeResult, VerificationBaseline,
+} from '../src/types.ts';
 import type { GitObservation, DirtyEntry } from '../src/evidence/git.ts';
 import type { VerificationOutcome } from '../src/evidence/verification.ts';
 
@@ -21,9 +24,9 @@ const CHECKS = [{ id: 'test', kind: 'test' as const, argv: ['npm', 'test'], requ
 
 let evSeq = 0;
 /** required verification 失敗的 evidence。id 必須每次不同 —— 同一個 work 會插入多次。 */
-function failingVerification(): VerificationOutcome {
+function failingVerification(ids: { workId: string; attemptId: string } = { workId: 'W', attemptId: 'A' }): VerificationOutcome {
   const e = {
-    id: `EV-fake-${++evSeq}`, workId: 'W', attemptId: 'A', type: 'test_result' as const,
+    id: `EV-fake-${++evSeq}`, ...ids, type: 'test_result' as const,
     label: 'test', status: 'FAIL' as const, data: { required: true }, observedAt: 'now',
   };
   return { evidence: [e], requiredFailed: [e], allRequiredPassed: false };
@@ -94,9 +97,16 @@ function fakeEvidence(over: EvidenceOverrides = {}): EvidenceCollector & { verif
         baseRevision: 'rev-base', head: 'rev-head', clean: changed.length === 0 };
     },
     async collectBaseline() { e.baselineCalls++; return over.baseline ?? []; },
-    async runVerification(): Promise<VerificationOutcome> {
+    async runVerification(
+      _snapshot: Parameters<EvidenceCollector['runVerification']>[0],
+      _workspace: string,
+      ids: Parameters<EvidenceCollector['runVerification']>[2],
+    ): Promise<VerificationOutcome> {
       e.verificationCalls++;
-      return over.verification ?? { evidence: [], requiredFailed: [], allRequiredPassed: true };
+      if (!over.verification) return { evidence: [], requiredFailed: [], allRequiredPassed: true };
+      const evidence = over.verification.evidence.map((record) => ({ ...record, ...ids }));
+      const failed = new Set(over.verification.requiredFailed.map((record) => record.id));
+      return { ...over.verification, evidence, requiredFailed: evidence.filter((record) => failed.has(record.id)) };
     },
   };
   return e;
@@ -136,7 +146,7 @@ test('retry budget 正向：還有額度時，驗證失敗判 RETRYABLE_FAILURE'
 test('retry budget 反向：額度用盡後轉 FAILED，不會無限重試', async () => {
   // 每次呼叫都要新的 evidence id，否則第二個 attempt 插入時會撞主鍵
   const ev = fakeEvidence({ changedPaths: ['src/a.ts'] });
-  ev.runVerification = async () => failingVerification();
+  ev.runVerification = async (_s, _w, ids) => failingVerification(ids);
   const s = setup({ retryBudget: 1, evidence: ev });
   const first = await s.orch.runAttempt(s.work.id);
   assert.equal(first.decision.outcome, 'RETRYABLE_FAILURE');
@@ -154,7 +164,7 @@ test('retry budget 邊界：budget=0 時第一次失敗就是 FAILED', async () 
 
 test('retry budget 正向：retry 一次後仍有額度 → 繼續 RETRYABLE', async () => {
   const ev = fakeEvidence({ changedPaths: ['src/a.ts'] });
-  ev.runVerification = async () => failingVerification();
+  ev.runVerification = async (_s, _w, ids) => failingVerification(ids);
   const s = setup({ retryBudget: 3, evidence: ev });
   await s.orch.runAttempt(s.work.id);
   const second = await s.orch.retry(s.work.id);
@@ -172,7 +182,7 @@ test('retry budget 正向：驗證通過時完全不消耗額度', async () => {
 
 test('retry budget 反向：額度用盡後再 retry，不得再啟動 runtime', async () => {
   const ev = fakeEvidence({ changedPaths: ['src/a.ts'] });
-  ev.runVerification = async () => failingVerification();
+  ev.runVerification = async (_s, _w, ids) => failingVerification(ids);
   const driver = fakeDriver(() => 'not json');   // 一律 protocol 失敗，逼它耗盡額度
   const s = setup({ retryBudget: 1, driver, evidence: ev });
   await s.orch.runAttempt(s.work.id);
@@ -192,9 +202,45 @@ test('retry budget 反向：protocol 失敗同樣消耗額度', async () => {
   s.cleanup();
 });
 
+test('retry budget：retry 的 dispatch intent 已持久化即計費，重開後不會再派發', async () => {
+  let failPrepare = false;
+  const ids = { workId: '' };
+  const base = fakeDriver(({ attemptId }) => JSON.stringify(completed(ids.workId, attemptId)));
+  const driver: RuntimeDriver & { calls: number } = {
+    get calls() { return base.calls; },
+    prepare(input) {
+      if (failPrepare) throw new Error('prepare crash');
+      return base.prepare(input);
+    },
+    run: (...args) => base.run(...args),
+  };
+  const ev = fakeEvidence({ changedPaths: ['src/a.ts'] });
+  ev.runVerification = async (_s, _w, ids) => failingVerification(ids);
+  const s = setup({ retryBudget: 1, driver, evidence: ev });
+  ids.workId = s.work.id;
+  assert.equal((await s.orch.runAttempt(s.work.id)).decision.outcome, 'RETRYABLE_FAILURE');
+
+  failPrepare = true;
+  await assert.rejects(() => s.orch.retry(s.work.id), /prepare crash/);
+  const dispatchedRetry = s.store.listAttempts(s.work.id).at(-1)!;
+  assert.equal(dispatchedRetry.phase, 'dispatch_intent');
+  s.store.close();
+
+  const reopened = new Store(join(s.base, 'state'));
+  const orch = new Orchestrator(
+    { ...DEFAULT_POLICY, stateDir: join(s.base, 'state') }, reopened, () => {}, { driver, evidence: ev });
+  const before = driver.calls;
+  const exhausted = await orch.retry(s.work.id);
+  assert.equal(exhausted.decision.outcome, 'FAILED');
+  assert.equal(driver.calls, before);
+  assert.equal(reopened.listAttempts(s.work.id).length, 2);
+  reopened.close();
+  rmSync(s.base, { recursive: true, force: true });
+});
+
 test('retry budget 邊界：budget=0 時 retry 不建立新 attempt', async () => {
   const ev = fakeEvidence({ changedPaths: ['src/a.ts'] });
-  ev.runVerification = async () => failingVerification();
+  ev.runVerification = async (_s, _w, ids) => failingVerification(ids);
   const s = setup({ retryBudget: 0, evidence: ev });
   await s.orch.runAttempt(s.work.id);
   const before = s.store.listAttempts(s.work.id).length;
@@ -706,7 +752,7 @@ test('preExistingDirty 邊界：retry 重新 snapshot，不沿用上一個 attem
   let round = 0;
   const ev = fakeEvidence({ changedPaths: ['src/a.ts'] });
   ev.snapshotDirty = async () => (++round === 1 ? [{ path: 'first.txt', hash: 'h1' }] : []);
-  ev.runVerification = async () => failingVerification();
+  ev.runVerification = async (_s, _w, ids) => failingVerification(ids);
   const s = setup({ retryBudget: 2, evidence: ev });
   await s.orch.runAttempt(s.work.id);
   await s.orch.retry(s.work.id);
@@ -789,7 +835,7 @@ test('baseline 反向：變更越界的 attempt 也已經收過 baseline', async
 
 test('baseline 邊界：收集到的內容存進 attempt，retry 時重新收集而不是沿用', async () => {
   const ev = fakeEvidence({ changedPaths: ['src/a.ts'], baseline: ONE_BASELINE });
-  ev.runVerification = async () => failingVerification();
+  ev.runVerification = async (_s, _w, ids) => failingVerification(ids);
   const s = setup({ retryBudget: 2, evidence: ev });
   await s.orch.runAttempt(s.work.id);
   assert.equal(ev.baselineCalls, 1);
@@ -809,13 +855,51 @@ test('baseline 邊界：repo 沒有任何 required check → baseline 是空陣�
   s.cleanup();
 });
 
-test('baseline 邊界：baseline 收集失敗會炸掉整個 attempt —— 目前沒有降級路徑', async () => {
+test('baseline 失敗前已持久化可驗證的 attempt inputs，且未派發 runtime', async () => {
   const ev = fakeEvidence({ changedPaths: ['src/a.ts'] });
   ev.collectBaseline = async () => { throw new Error('baseline 跑不起來'); };
-  const s = setup({ evidence: ev });
-  // 記錄現況：runAttempt 沒有 try/catch，例外直接往外丟。
-  // 這是 fail-closed 的一種（不會假裝有 baseline），但 attempt 不會留下紀錄。
+  const driver = fakeDriver(() => 'unused');
+  const s = setup({ evidence: ev, driver });
   await assert.rejects(() => s.orch.runAttempt(s.work.id), /baseline 跑不起來/);
-  assert.equal(s.store.listAttempts(s.work.id).length, 0, 'insertAttempt 在 baseline 之後，所以什麼都沒留下');
+  s.store.close();
+
+  const reopened = new Store(join(s.base, 'state'));
+  const attempt = reopened.listAttempts(s.work.id)[0]!;
+  const phase: AttemptPhase | undefined = attempt.phase;
+  assert.equal(attempt.status, 'CREATED');
+  assert.equal(phase, 'preparing');
+  assert.ok(attempt.inputSnapshotArtifactId);
+  const input = reopened.readVerifiedArtifact(attempt.inputSnapshotArtifactId);
+  const prompt = reopened.readVerifiedArtifact(attempt.promptArtifactId);
+  assert.equal(input.status, 'verified');
+  assert.equal(prompt.status, 'verified');
+  const snapshot = JSON.parse((input as { content: Buffer }).content.toString()) as AttemptInputSnapshot;
+  assert.equal(snapshot.attemptId, attempt.id);
+  assert.equal(snapshot.promptArtifactId, attempt.promptArtifactId);
+  assert.equal(driver.calls, 0);
+  reopened.close();
+  rmSync(s.base, { recursive: true, force: true });
+});
+
+test('model 返回後 observation 失敗仍可由 attempt 找回 verified raw/stdout output', async () => {
+  const ev = fakeEvidence({ changedPaths: ['src/a.ts'] });
+  ev.observeGit = async () => { throw new Error('observe 爆掉'); };
+  const ids = { workId: '' };
+  const driver = fakeDriver(({ attemptId }) => JSON.stringify(completed(ids.workId, attemptId)));
+  const s = setup({ evidence: ev, driver });
+  ids.workId = s.work.id;
+
+  await assert.rejects(() => s.orch.runAttempt(s.work.id), /observe 爆掉/);
+  const attempt = s.store.listAttempts(s.work.id)[0]!;
+  const outputRefs: AttemptOutputRefs | undefined = attempt.outputRefs;
+  assert.equal(attempt.phase, 'collecting');
+  assert.ok(attempt.runtimeDispatch?.intentAt);
+  assert.ok(attempt.runtimeDispatch?.ownershipToken);
+  assert.ok(attempt.runtimeDispatch?.child);
+  assert.ok(outputRefs?.rawResultArtifactId);
+  assert.ok(outputRefs?.stdoutArtifactId);
+  assert.equal(s.store.readVerifiedArtifact(outputRefs.rawResultArtifactId).status, 'verified');
+  assert.equal(s.store.readVerifiedArtifact(outputRefs.stdoutArtifactId).status, 'verified');
+  assert.notEqual(s.store.getWork(s.work.id)?.state, 'DONE');
   s.cleanup();
 });

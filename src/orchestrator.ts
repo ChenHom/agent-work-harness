@@ -24,7 +24,7 @@ import { buildResponse } from './response.ts';
 import type {
   GlobalPolicy, Work, WorkContract, Attempt, AttemptAuthority, DecisionRecord,
   EvidenceRecord, OutcomeDecision, RuntimeResult, SkillAdmission, RepositoryContractSnapshot,
-  Mode, VerificationBaseline,
+  AttemptInputSnapshot, Mode, VerificationBaseline,
 } from './types.ts';
 
 /**
@@ -41,6 +41,7 @@ export interface RuntimeDriver {
 }
 
 interface OwnershipContext {
+  token: string;
   state: DriverExecutionState;
   update(state: DriverExecutionState): void;
   assertValid(): void;
@@ -55,8 +56,6 @@ interface ReadyAttempt {
   admissions: SkillAdmission[];
   attempt: Attempt;
   prompt: ReturnType<typeof compilePrompt>;
-  /** insertAttempt 之前的 attempts —— retry budget 用這份算 */
-  priorAttempts: Attempt[];
 }
 
 type PreparedAttempt = ReadyAttempt | { kind: 'short_circuit'; report: AttemptReport };
@@ -224,7 +223,7 @@ export class Orchestrator {
     const prepared = await this.prepareAttempt(work, opts);
     if (prepared.kind === 'short_circuit') return prepared.report;
     const exec = await this.executeRuntime(prepared, ownership);
-    return this.collectAndDecide(prepared, exec, ownership, opts);
+    return this.collectAndDecide(prepared, exec, ownership);
   }
 
   /**
@@ -259,19 +258,13 @@ export class Orchestrator {
       return { kind: 'short_circuit', report: this.finishWithoutRuntime(work, contract, decision) };
     }
 
-    const base = await this.evidence.baseRevision(work.workspace);
-    // attempt 開始前就存在的未提交變更不能算到 agent 頭上
-    const preExistingDirty = await this.evidence.snapshotDirty(work.workspace);
-    if (preExistingDirty.length) {
-      this.store.event('evidence.collected', { preExistingDirty: preExistingDirty.map((d) => d.path) }, workId);
-    }
-    // retry budget 要用「這次之前」的 attempts；等 insertAttempt 之後再抓會多算自己一次
+    // number 以已持久化 attempts 為準；preflight 失敗也已經占一個可追查的編號。
     const priorAttempts = this.store.listAttempts(workId);
     const attemptId = newId('A');
     const attempt: Attempt = {
       id: attemptId, workId, number: priorAttempts.length + 1, mode: contract.mode,
       contractVersion: contract.version, contractSnapshotHash: snapshot.hash,
-      baseRevision: base, preExistingDirty, promptArtifactId: '', runtime: 'codex', status: 'CREATED',
+      baseRevision: 'pending', promptArtifactId: '', runtime: 'codex', status: 'CREATED', phase: 'preparing',
       retryOf: opts?.retryOf, startedAt: nowIso(),
     };
 
@@ -288,7 +281,6 @@ export class Orchestrator {
     });
     const budgeted = applyBudget(manifest, this.policy.promptBudgetChars);
     attempt.contextDropped = budgeted.dropped;
-    if (budgeted.dropped.length) this.store.event('context_manifest.created', { dropped: budgeted.dropped }, workId, attemptId);
 
     const prompt = compilePrompt({
       manifest: budgeted.manifest, contract, authority, snapshot,
@@ -297,25 +289,54 @@ export class Orchestrator {
     });
     const promptArtifact = this.store.putArtifact('prompt', prompt.text, 'txt');
     attempt.promptArtifactId = promptArtifact.id;
-    this.store.event('prompt.compiled', {
-      hash: prompt.hash, compilerVersion: prompt.compilerVersion,
-      chars: prompt.text.length, artifactId: promptArtifact.id,
-    }, workId, attemptId);
+    const inputSnapshot: AttemptInputSnapshot = {
+      schemaVersion: '2', workId, attemptId, contract, repository: snapshot, authority,
+      manifest: budgeted.manifest, compilerVersion: prompt.compilerVersion,
+      promptArtifactId: promptArtifact.id,
+      admittedSkills: admissions.filter((a): a is SkillAdmission & { actualHash: string } =>
+        a.allowed && typeof a.actualHash === 'string').map((a) => ({ skillId: a.skillId, actualHash: a.actualHash })),
+      executionConfig: {
+        runtime: 'codex', model: this.policy.codexModel,
+        attemptTimeoutMs: this.policy.attemptTimeoutMs,
+        verificationTimeoutMs: this.policy.verificationTimeoutMs,
+        maxOutputBytes: this.policy.maxOutputBytes,
+        promptBudgetChars: this.policy.promptBudgetChars,
+      },
+    };
+    attempt.inputSnapshotArtifactId = this.store.putArtifact(
+      'attempt_input', JSON.stringify(inputSnapshot, null, 2), 'json').id;
+    this.store.withTransaction(() => {
+      this.store.insertAttempt(attempt);
+      this.store.event('prompt.compiled', {
+        hash: prompt.hash, compilerVersion: prompt.compilerVersion,
+        chars: prompt.text.length, artifactId: promptArtifact.id,
+      }, workId, attemptId);
+      if (budgeted.dropped.length) {
+        this.store.event('context_manifest.created', { dropped: budgeted.dropped }, workId, attemptId);
+      }
+    });
 
-    // §23.4：pre-flight baseline —— agent 動任何東西之前先跑一次 required checks，
-    // 之後才能判斷「有沒有比動手前變差或少跑」。read attempt 不跑 verification，也就不需要。
-    // 位置必須在 insertAttempt 之前：這裡失敗代表這次 attempt 根本沒開始。
-    if (contract.mode === 'write' && !opts?.noBaseline) {
-      this.log('收集 pre-flight baseline（agent 尚未執行）…');
-      attempt.baseline = await this.evidence.collectBaseline(snapshot, work.workspace);
+    try {
+      attempt.baseRevision = await this.evidence.baseRevision(work.workspace);
+      attempt.preExistingDirty = await this.evidence.snapshotDirty(work.workspace);
+      if (attempt.preExistingDirty.length) {
+        this.store.event('evidence.collected', {
+          preExistingDirty: attempt.preExistingDirty.map((d) => d.path),
+        }, workId, attemptId);
+      }
+      // §23.4：durable inputs 之後、runtime dispatch 之前收集 baseline。
+      if (contract.mode === 'write' && !opts?.noBaseline) {
+        this.log('收集 pre-flight baseline（agent 尚未執行）…');
+        attempt.baseline = await this.evidence.collectBaseline(snapshot, work.workspace);
+      }
+      this.store.withTransaction(() => this.store.updateAttempt(attempt));
+    } catch (error) {
+      attempt.failureReason = error instanceof Error ? error.message : String(error);
+      this.store.withTransaction(() => this.store.updateAttempt(attempt));
+      throw error;
     }
 
-    this.store.insertAttempt(attempt);
-    attempt.status = 'RUNNING';
-    this.store.updateAttempt(attempt);
-    this.store.setWorkState(workId, 'RUNNING');
-
-    return { kind: 'ready', work, contract, snapshot, admissions, attempt, prompt, priorAttempts };
+    return { kind: 'ready', work, contract, snapshot, admissions, attempt, prompt };
   }
 
   /** runtime 執行 + §22 protocol 解析。這一段是唯一會呼叫外部 agent 的地方。 */
@@ -327,35 +348,63 @@ export class Orchestrator {
     const skillPaths = admissions.filter((a) => a.allowed)
       .map((a) => a.path)
       .filter((s): s is string => Boolean(s));
+    ownership.assertValid();
+    attempt.status = 'RUNNING';
+    attempt.phase = 'dispatch_intent';
+    attempt.runtimeDispatch = { intentAt: nowIso(), ownershipToken: ownership.token };
+    this.store.withTransaction(() => {
+      this.store.updateAttempt(attempt);
+      this.store.setWorkState(work.id, 'RUNNING');
+    });
+    ownership.assertValid();
     const prepared = this.driver.prepare({
       attemptId: attempt.id, workspace: work.workspace, mode: contract.mode,
       promptText: prompt.text, approvedSkillPaths: skillPaths,
     });
     ownership.update({ phase: 'prepared', child: null, quiesced: true });
     ownership.update({ phase: 'launching', child: null, quiesced: false });
-    const run = await this.driver.run(prepared, (state) => ownership.update(state));
+    const run = await this.driver.run(prepared, (state) => {
+      ownership.update(state);
+      attempt.runtimeDispatch = {
+        ...attempt.runtimeDispatch!, state: state.phase === 'prepared' || state.phase === 'not_started'
+          ? undefined : state.phase,
+        child: state.child ?? attempt.runtimeDispatch?.child,
+      };
+      if (state.phase === 'running' || state.phase === 'stopped' || state.phase === 'unknown') {
+        attempt.phase = 'executing';
+      }
+      this.store.withTransaction(() => this.store.updateAttempt(attempt));
+    });
     ownership.assertValid();
     if (ownership.state.phase !== 'stopped' || !ownership.state.quiesced) {
       throw new OwnershipError('OWNER_UNKNOWN', inspectExecutionOwnership(this.policy.stateDir));
     }
-    this.store.putArtifact('runtime_stdout', run.stdout, 'log');
-    if (run.stderr) this.store.putArtifact('runtime_stderr', run.stderr, 'log');
-
-    // §22 protocol
+    const stdoutArtifactId = this.store.putArtifact('runtime_stdout', run.stdout, 'log').id;
+    const stderrArtifactId = run.stderr
+      ? this.store.putArtifact('runtime_stderr', run.stderr, 'log').id : undefined;
+    const raw = run.lastMessage.length > 0 ? run.lastMessage : run.stdout;
+    const rawResultArtifactId = this.store.putArtifact('runtime_raw_result', raw, 'txt').id;
     const parsed = parseRuntimeResult(run.lastMessage || run.stdout, { workId: work.id, attemptId: attempt.id });
-    if (!parsed.ok) {
-      this.store.event('runtime.protocol_failed', {
+    const parsedResultArtifactId = parsed.ok
+      ? this.store.putArtifact('runtime_result', JSON.stringify(parsed.result, null, 2), 'json').id
+      : undefined;
+    attempt.outputRefs = { stdoutArtifactId, stderrArtifactId, rawResultArtifactId, parsedResultArtifactId };
+    attempt.resultArtifactId = parsedResultArtifactId;
+    attempt.phase = 'collecting';
+    this.store.withTransaction(() => {
+      this.store.updateAttempt(attempt);
+      if (!parsed.ok) this.store.event('runtime.protocol_failed', {
         error: parsed.error, exitCode: run.exitCode, timedOut: run.timedOut,
       }, work.id, attempt.id);
-    }
+    });
     return { run, parsed };
   }
 
   /** evidence → 判定 → 落地。agent 說了什麼在這裡只是輸入之一，不是結論。 */
   private async collectAndDecide(
-    p: ReadyAttempt, exec: RuntimeExecution, ownership: OwnershipContext, opts?: { retryOf?: string },
+    p: ReadyAttempt, exec: RuntimeExecution, ownership: OwnershipContext,
   ): Promise<AttemptReport> {
-    const { work, contract, snapshot, attempt, admissions, priorAttempts } = p;
+    const { work, contract, snapshot, attempt, admissions } = p;
     const { run, parsed } = exec;
     const workId = work.id;
     ownership.assertValid();
@@ -369,7 +418,7 @@ export class Orchestrator {
     ownership.assertValid();
 
     // 本次若是 retry，必須把自己算進已用次數，否則 budget 永遠用不完
-    const usedRetries = countRetries(priorAttempts) + (opts?.retryOf ? 1 : 0);
+    const usedRetries = countRetries(this.store.listAttempts(workId));
     const retryBudgetRemaining = Math.max(0, work.retryBudget - usedRetries);
     const decision = decideOutcome({
       mode: contract.mode, skillAdmissions: admissions,
@@ -380,18 +429,14 @@ export class Orchestrator {
       runtimeCrashed: run.timedOut,
     });
 
-    if (parsed.ok) {
-      attempt.resultArtifactId = this.store.putArtifact('runtime_result', JSON.stringify(parsed.result, null, 2), 'json').id;
-    }
     attempt.status = parsed.ok ? 'COMPLETED' : 'PROTOCOL_FAILED';
+    attempt.phase = 'terminal';
     attempt.endedAt = nowIso();
-    this.store.updateAttempt(attempt);
-    this.store.event('attempt.completed', {
-      status: attempt.status, exitCode: run.exitCode, timedOut: run.timedOut, durationMs: run.durationMs,
-    }, workId, attempt.id);
-
-    this.store.insertOutcome(workId, attempt.id, decision.outcome, decision.reasons);
-    this.applyWorkState(workId, decision);
+    this.store.finalizeAttempt({
+      attempt, outcome: decision.outcome, reasons: decision.reasons,
+      workState: workStateFor(decision), evidenceIds: evidence.map((e) => e.id),
+      expectedAttemptStatus: 'RUNNING', expectedWorkState: 'VERIFYING',
+    });
 
     const response = buildResponse({
       attempt, decision,
@@ -597,6 +642,7 @@ export class Orchestrator {
       ensureRuntimeDirs(this.policy);
       const policyStateDir = this.policy.stateDir;
       const context: OwnershipContext = {
+        token: acquired.token,
         state: { phase: 'not_started', child: null, quiesced: true },
         update(state) {
           if (!acquired.update(state)) {
@@ -637,7 +683,14 @@ function mergeAllowed(current: string[] | undefined, onlyPaths: string[] | undef
 }
 
 function countRetries(attempts: readonly Attempt[]): number {
-  return attempts.filter((a) => a.retryOf).length;
+  return attempts.filter((a) => a.retryOf && (!a.phase || a.phase !== 'preparing')).length;
+}
+
+function workStateFor(decision: OutcomeDecision): Work['state'] {
+  return {
+    SUCCESS: 'DONE', NEEDS_USER_DECISION: 'WAITING_USER', RETRYABLE_FAILURE: 'ACTIVE',
+    POLICY_VIOLATION: 'BLOCKED', BLOCKED: 'BLOCKED', FAILED: 'FAILED',
+  }[decision.outcome] as Work['state'];
 }
 
 function notExecutedList(contract: WorkContract, decision: OutcomeDecision): string[] {

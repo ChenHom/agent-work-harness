@@ -37,6 +37,36 @@ export type AttemptStatus =
   | 'CREATED' | 'RUNNING' | 'COMPLETED'
   | 'PROTOCOL_FAILED' | 'FAILED' | 'RECOVERY_REQUIRED';
 
+export type AttemptPhase = 'preparing' | 'dispatch_intent' | 'executing' | 'collecting' | 'terminal';
+
+export interface AttemptOutputRefs {
+  stdoutArtifactId: string;
+  stderrArtifactId?: string;
+  rawResultArtifactId: string;
+  parsedResultArtifactId?: string;
+}
+
+export interface AttemptInputSnapshot {
+  schemaVersion: '2';
+  workId: string;
+  attemptId: string;
+  contract: WorkContract;
+  repository: RepositoryContractSnapshot;
+  authority: AttemptAuthority;
+  manifest: ContextManifest;
+  compilerVersion: string;
+  promptArtifactId: string;
+  admittedSkills: Array<{ skillId: string; actualHash: string }>;
+  executionConfig: {
+    runtime: 'codex';
+    model?: string;
+    attemptTimeoutMs: number;
+    verificationTimeoutMs: number;
+    maxOutputBytes: number;
+    promptBudgetChars: number;
+  };
+}
+
 export interface Attempt {
   id: string;
   workId: string;
@@ -50,6 +80,16 @@ export interface Attempt {
   contextDropped?: Array<{ priority: number; count: number }>;      // prompt budget 裁切統計
   promptArtifactId: string;
   resultArtifactId?: string;
+  inputSnapshotArtifactId?: string;
+  outputRefs?: AttemptOutputRefs;
+  phase?: AttemptPhase;
+  runtimeDispatch?: {
+    intentAt: string;
+    ownershipToken: string;
+    state?: 'launching' | 'running' | 'stopped' | 'unknown';
+    child?: { pid: number; processStart: string };
+  };
+  failureReason?: string;
   runtime: 'codex';
   status: AttemptStatus;
   retryOf?: string;
