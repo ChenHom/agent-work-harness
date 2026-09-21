@@ -79,7 +79,7 @@ test('exclusive ownership blocks a second executor and exposes metadata', () => 
       return true;
     });
   } finally {
-    owner.release({ phase: 'stopped', child: null, quiesced: true });
+    owner.release();
     rmSync(base, { recursive: true, force: true });
   }
 });
@@ -125,12 +125,12 @@ test('release requires matching token and a stopped managed child receipt', () =
     phase: 'running', child: { pid: 4321, processStart: '123' }, quiesced: false,
   };
   owner.update(running);
-  assert.equal(owner.release(running), false);
+  assert.equal(owner.release(), false);
   assert.equal(existsSync(lockDir), true);
 
   const metadata = inspectExecutionOwnership(stateDir).metadata!;
   writeFileSync(join(lockDir, 'owner.json'), JSON.stringify({ ...metadata, token: 'someone-else' }));
-  assert.equal(owner.release({ phase: 'stopped', child: running.child, quiesced: true }), false);
+  assert.equal(owner.release(), false);
   assert.equal(existsSync(lockDir), true);
   rmSync(base, { recursive: true, force: true });
 });
@@ -319,6 +319,72 @@ test('a throw after a stopped child receipt releases ownership', async () => {
   const work = orch.createWork({ request: '修正問題', workspace: repoIn(base) });
   await assert.rejects(orch.runAttempt(work.id, { noBaseline: true }), /post-close failure/);
   assert.equal(inspectExecutionOwnership(policy.stateDir).occupied, false);
+  store.close();
+  rmSync(base, { recursive: true, force: true });
+});
+
+test('runtime directory setup failure releases ownership before launch', async () => {
+  const base = mkdtempSync(join(tmpdir(), 'harness-owner-'));
+  const policy = policyIn(base);
+  const store = new Store(policy.stateDir);
+  const work = new Orchestrator(policy, store).createWork({ request: '修正問題', workspace: repoIn(base) });
+  writeFileSync(policy.agentHome, 'not a directory');
+
+  await assert.rejects(new Orchestrator(policy, store).runAttempt(work.id, { noBaseline: true }), /EEXIST/);
+  assert.equal(inspectExecutionOwnership(policy.stateDir).occupied, false);
+  store.close();
+  rmSync(base, { recursive: true, force: true });
+});
+
+test('lost ownership reported by a swallowed driver callback stops before evidence', async () => {
+  const base = mkdtempSync(join(tmpdir(), 'harness-owner-'));
+  const policy = policyIn(base);
+  const store = new Store(policy.stateDir);
+  let evidenceCalls = 0;
+  const evidence = fakeEvidence();
+  evidence.runVerification = async () => {
+    evidenceCalls++;
+    return { evidence: [], requiredFailed: [], allRequiredPassed: true };
+  };
+  let workId = '';
+  const orch = new Orchestrator(policy, store, () => {}, {
+    evidence,
+    driver: {
+      prepare(input) {
+        return { attemptDir: '', promptPath: '', lastMessagePath: '', logPath: '', argv: [], env: {}, cwd: '', attemptId: input.attemptId } as never;
+      },
+      async run(run, onState) {
+        const child = { pid: process.pid, processStart: 'fixture' };
+        onState?.({ phase: 'running', child, quiesced: false });
+        const lockDir = join(policy.stateDir, 'execution.lock');
+        const metadata = inspectExecutionOwnership(policy.stateDir).metadata!;
+        writeFileSync(join(lockDir, 'owner.json'), JSON.stringify({ ...metadata, token: 'replacement' }));
+        try {
+          onState?.({ phase: 'stopped', child, quiesced: true });
+        } catch {
+          // A runtime driver may swallow callback errors while it finishes collecting the child result.
+        }
+        const attemptId = (run as unknown as { attemptId: string }).attemptId;
+        return {
+          exitCode: 0, signal: null, timedOut: false, stdout: '', stderr: '', durationMs: 1,
+          lastMessage: JSON.stringify({
+            schemaVersion: '1', workId, attemptId, status: 'completed', summary: 'done',
+            claims: [], questions: [], declaredChangedPaths: [],
+          }),
+        };
+      },
+    },
+  });
+  const work = orch.createWork({ request: '修正問題', workspace: repoIn(base) });
+  workId = work.id;
+
+  await assert.rejects(orch.runAttempt(work.id, { noBaseline: true }), (error) => {
+    assert.equal((error as { code?: string }).code, 'OWNER_UNKNOWN');
+    return true;
+  });
+  assert.equal(evidenceCalls, 0);
+  assert.equal(store.lastOutcome(work.id), null);
+  assert.equal(inspectExecutionOwnership(policy.stateDir).metadata?.token, 'replacement');
   store.close();
   rmSync(base, { recursive: true, force: true });
 });

@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { existsSync, mkdtempSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, readdirSync, rmSync, unlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
@@ -250,4 +250,58 @@ test('read-only open rejects a newer schema without changing its version', () =>
     check.close();
     rmSync(state, { recursive: true, force: true });
   }
+});
+
+test('read-only open of a checkpointed WAL database creates no sidecars', () => {
+  const state = mkdtempSync(join(tmpdir(), 'harness-read-only-'));
+  const writable = new Store(state);
+  writable.close();
+  const before = readdirSync(state).sort();
+
+  const reader = new Store(state, { readOnly: true });
+  reader.close();
+
+  assert.deepEqual(readdirSync(state).sort(), before);
+  rmSync(state, { recursive: true, force: true });
+});
+
+test('read-only open sees active uncheckpointed WAL data without changing sidecars', () => {
+  const state = mkdtempSync(join(tmpdir(), 'harness-read-only-'));
+  const writer = new Store(state);
+  writer.db.exec('pragma wal_autocheckpoint = 0');
+  writer.db.exec(`insert into works values ('W', 'latest', 'repo', '/repo', 'ACTIVE', 1, 1, 'now')`);
+  const before = readdirSync(state).sort();
+
+  const reader = new Store(state, { readOnly: true });
+  try {
+    assert.equal(reader.getWork('W')?.title, 'latest');
+    assert.deepEqual(readdirSync(state).sort(), before);
+  } finally {
+    reader.close();
+    writer.close();
+    rmSync(state, { recursive: true, force: true });
+  }
+});
+
+test('read-only open fails closed for a partial WAL sidecar set without creating files', () => {
+  const state = mkdtempSync(join(tmpdir(), 'harness-read-only-'));
+  const writer = new Store(state);
+  writer.db.exec('pragma wal_autocheckpoint = 0');
+  writer.db.exec(`insert into works values ('W', 'latest', 'repo', '/repo', 'ACTIVE', 1, 1, 'now')`);
+  writer.close();
+  const path = join(state, 'harness.db');
+  const probe = new DatabaseSync(path);
+  probe.exec('pragma journal_mode = WAL; pragma wal_autocheckpoint = 0');
+  probe.exec(`insert into works values ('W2', 'uncheckpointed', 'repo', '/repo', 'ACTIVE', 1, 1, 'now')`);
+  unlinkSync(`${path}-shm`);
+  const before = readdirSync(state).sort();
+
+  assert.throws(() => new Store(state, { readOnly: true }), (error) => {
+    assert.ok(error instanceof StoreOpenError);
+    assert.equal(error.code, 'READ_ONLY_UNAVAILABLE');
+    return true;
+  });
+  assert.deepEqual(readdirSync(state).sort(), before);
+  probe.close();
+  rmSync(state, { recursive: true, force: true });
 });

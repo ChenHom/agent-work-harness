@@ -4,6 +4,7 @@ import {
   rmSync, writeFileSync,
 } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { createHash, randomUUID } from 'node:crypto';
 import { newId, nowIso } from '../ids.ts';
 import { CURRENT_SCHEMA_VERSION, migrate, rethrowAfterRollback, validateSchema } from './migrations.ts';
@@ -30,9 +31,9 @@ export type VerifiedArtifact =
   | { status: 'missing' | 'corrupt'; id: string; reason?: string; code?: string };
 
 export class StoreOpenError extends Error {
-  readonly code: 'NO_STATE';
+  readonly code: 'NO_STATE' | 'READ_ONLY_UNAVAILABLE';
 
-  constructor(code: 'NO_STATE', message: string) {
+  constructor(code: 'NO_STATE' | 'READ_ONLY_UNAVAILABLE', message: string) {
     super(`${code}: ${message}`);
     this.code = code;
   }
@@ -63,7 +64,14 @@ export class Store {
     const path = join(stateDir, 'harness.db');
     if (this.readOnly) {
       if (!existsSync(path)) throw new StoreOpenError('NO_STATE', `no database at ${path}`);
-      this.db = new DatabaseSync(path, { readOnly: true });
+      const walExists = existsSync(`${path}-wal`);
+      const shmExists = existsSync(`${path}-shm`);
+      if (walExists !== shmExists) {
+        throw new StoreOpenError('READ_ONLY_UNAVAILABLE', `incomplete WAL sidecars for ${path}`);
+      }
+      const immutable = pathToFileURL(path);
+      immutable.searchParams.set('immutable', '1');
+      this.db = new DatabaseSync(walExists ? path : immutable, { readOnly: true });
       try {
         const version = (this.db.prepare('pragma user_version').get() as { user_version: number }).user_version;
         if (version > CURRENT_SCHEMA_VERSION) {

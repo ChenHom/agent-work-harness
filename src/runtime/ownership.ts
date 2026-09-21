@@ -101,7 +101,7 @@ export interface ExecutionOwnership {
   readonly token: string;
   validate(): boolean;
   update(state: DriverExecutionState): boolean;
-  release(state?: DriverExecutionState): boolean;
+  release(): boolean;
 }
 
 export function acquireExecutionOwnership(stateDir: string): ExecutionOwnership {
@@ -130,12 +130,11 @@ export function acquireExecutionOwnership(stateDir: string): ExecutionOwnership 
     update(state): boolean {
       const current = readMetadata(stateDir);
       if (current?.token !== token) return false;
-      currentState = state;
       publishMetadata(stateDir, { ...current, phase: state.phase, child: state.child, updatedAt: new Date().toISOString() });
+      currentState = state;
       return true;
     },
-    release(state = currentState): boolean {
-      currentState = state;
+    release(): boolean {
       if (!currentState.quiesced
         || (currentState.phase !== 'stopped' && currentState.phase !== 'not_started' && currentState.phase !== 'prepared')) {
         return false;

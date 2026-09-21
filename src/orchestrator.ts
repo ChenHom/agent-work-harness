@@ -578,21 +578,21 @@ export class Orchestrator {
     if (ownership && !ownership.validate()) {
       throw new OwnershipError('OWNER_UNKNOWN', inspectExecutionOwnership(this.policy.stateDir));
     }
-    ensureRuntimeDirs(this.policy);
-    const policyStateDir = this.policy.stateDir;
-    const context: OwnershipContext = {
-      state: { phase: 'not_started', child: null, quiesced: true },
-      update(state) {
-        context.state = state;
-        if (!acquired.update(state)) {
-          throw new OwnershipError('OWNER_UNKNOWN', inspectExecutionOwnership(policyStateDir));
-        }
-      },
-    };
     try {
+      ensureRuntimeDirs(this.policy);
+      const policyStateDir = this.policy.stateDir;
+      const context: OwnershipContext = {
+        state: { phase: 'not_started', child: null, quiesced: true },
+        update(state) {
+          if (!acquired.update(state)) {
+            throw new OwnershipError('OWNER_UNKNOWN', inspectExecutionOwnership(policyStateDir));
+          }
+          context.state = state;
+        },
+      };
       return await action(context);
     } finally {
-      if (!ownership) acquired.release(context.state);
+      if (!ownership) acquired.release();
     }
   }
 }
