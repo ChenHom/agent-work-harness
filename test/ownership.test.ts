@@ -388,3 +388,56 @@ test('lost ownership reported by a swallowed driver callback stops before eviden
   store.close();
   rmSync(base, { recursive: true, force: true });
 });
+
+test('ownership replaced after stopped receipt stops before runtime artifacts and evidence', async () => {
+  const base = mkdtempSync(join(tmpdir(), 'harness-owner-'));
+  const policy = policyIn(base);
+  const store = new Store(policy.stateDir);
+  let evidenceCalls = 0;
+  const evidence = fakeEvidence();
+  evidence.observeGit = async () => {
+    evidenceCalls++;
+    return { changedPaths: [], preExistingUnchanged: [], diff: '', baseRevision: 'base', head: 'head', clean: true };
+  };
+  let workId = '';
+  const orch = new Orchestrator(policy, store, () => {}, {
+    evidence,
+    driver: {
+      prepare(input) {
+        return { attemptDir: '', promptPath: '', lastMessagePath: '', logPath: '', argv: [], env: {}, cwd: '', attemptId: input.attemptId } as never;
+      },
+      async run(run, onState) {
+        const child = { pid: process.pid, processStart: 'fixture' };
+        onState?.({ phase: 'running', child, quiesced: false });
+        onState?.({ phase: 'stopped', child, quiesced: true });
+        const lockDir = join(policy.stateDir, 'execution.lock');
+        const metadata = inspectExecutionOwnership(policy.stateDir).metadata!;
+        writeFileSync(join(lockDir, 'owner.json'), JSON.stringify({ ...metadata, token: 'replacement' }));
+        const attemptId = (run as unknown as { attemptId: string }).attemptId;
+        return {
+          exitCode: 0, signal: null, timedOut: false, stdout: 'runtime output', stderr: '', durationMs: 1,
+          lastMessage: JSON.stringify({
+            schemaVersion: '1', workId, attemptId, status: 'completed', summary: 'done',
+            claims: [], questions: [], declaredChangedPaths: [],
+          }),
+        };
+      },
+    },
+  });
+  const work = orch.createWork({ request: '修正問題', workspace: repoIn(base) });
+  workId = work.id;
+
+  await assert.rejects(orch.runAttempt(work.id, { noBaseline: true }), (error) => {
+    assert.equal((error as { code?: string }).code, 'OWNER_UNKNOWN');
+    return true;
+  });
+  const attempt = store.listAttempts(work.id)[0]!;
+  assert.equal(evidenceCalls, 0);
+  assert.equal((store.db.prepare(`select count(*) as n from artifacts where kind like 'runtime_%'`).get() as { n: number }).n, 0);
+  assert.equal((store.db.prepare('select count(*) as n from evidence where attempt_id = ?').get(attempt.id) as { n: number }).n, 0);
+  assert.equal(store.lastOutcome(work.id), null);
+  assert.equal(attempt.status, 'RUNNING');
+  assert.equal(inspectExecutionOwnership(policy.stateDir).metadata?.token, 'replacement');
+  store.close();
+  rmSync(base, { recursive: true, force: true });
+});

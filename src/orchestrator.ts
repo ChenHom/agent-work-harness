@@ -43,6 +43,7 @@ export interface RuntimeDriver {
 interface OwnershipContext {
   state: DriverExecutionState;
   update(state: DriverExecutionState): void;
+  assertValid(): void;
 }
 
 /** prepareAttempt 的三段之間傳遞的東西。attempt 是同一個物件參考被逐段補齊，不複製。 */
@@ -223,7 +224,7 @@ export class Orchestrator {
     const prepared = await this.prepareAttempt(work, opts);
     if (prepared.kind === 'short_circuit') return prepared.report;
     const exec = await this.executeRuntime(prepared, ownership);
-    return this.collectAndDecide(prepared, exec, opts);
+    return this.collectAndDecide(prepared, exec, ownership, opts);
   }
 
   /**
@@ -333,6 +334,7 @@ export class Orchestrator {
     ownership.update({ phase: 'prepared', child: null, quiesced: true });
     ownership.update({ phase: 'launching', child: null, quiesced: false });
     const run = await this.driver.run(prepared, (state) => ownership.update(state));
+    ownership.assertValid();
     if (ownership.state.phase !== 'stopped' || !ownership.state.quiesced) {
       throw new OwnershipError('OWNER_UNKNOWN', inspectExecutionOwnership(this.policy.stateDir));
     }
@@ -351,11 +353,12 @@ export class Orchestrator {
 
   /** evidence → 判定 → 落地。agent 說了什麼在這裡只是輸入之一，不是結論。 */
   private async collectAndDecide(
-    p: ReadyAttempt, exec: RuntimeExecution, opts?: { retryOf?: string },
+    p: ReadyAttempt, exec: RuntimeExecution, ownership: OwnershipContext, opts?: { retryOf?: string },
   ): Promise<AttemptReport> {
     const { work, contract, snapshot, attempt, admissions, priorAttempts } = p;
     const { run, parsed } = exec;
     const workId = work.id;
+    ownership.assertValid();
 
     // §23 evidence：無論 agent 說什麼都要自己觀察
     this.store.setWorkState(workId, 'VERIFYING');
@@ -363,6 +366,7 @@ export class Orchestrator {
       work, contract, snapshot, attempt, base: attempt.baseRevision,
       runWrite: contract.mode === 'write',
     });
+    ownership.assertValid();
 
     // 本次若是 retry，必須把自己算進已用次數，否則 budget 永遠用不完
     const usedRetries = countRetries(priorAttempts) + (opts?.retryOf ? 1 : 0);
@@ -588,6 +592,11 @@ export class Orchestrator {
             throw new OwnershipError('OWNER_UNKNOWN', inspectExecutionOwnership(policyStateDir));
           }
           context.state = state;
+        },
+        assertValid() {
+          if (!acquired.validate()) {
+            throw new OwnershipError('OWNER_UNKNOWN', inspectExecutionOwnership(policyStateDir));
+          }
         },
       };
       return await action(context);
