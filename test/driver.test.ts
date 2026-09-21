@@ -122,3 +122,28 @@ test('spawn error and close produce only one stopped receipt', async () => {
   assert.equal(phases.at(-1), 'stopped');
   rmSync(base, { recursive: true, force: true });
 });
+
+test('a rejected launching receipt prevents spawning the child', async () => {
+  const base = mkdtempSync(join(tmpdir(), 'harness-drv-'));
+  const marker = join(base, 'spawned');
+  const promptPath = join(base, 'prompt.txt');
+  writeFileSync(promptPath, '');
+  const phases: string[] = [];
+
+  await assert.rejects(new CodexDriver({ ...policyIn(base), codexBin: process.execPath }).run({
+    attemptDir: base,
+    promptPath,
+    lastMessagePath: join(base, 'last.json'),
+    logPath: join(base, 'runtime.log'),
+    argv: ['-e', `require('node:fs').writeFileSync(${JSON.stringify(marker)}, 'spawned')`],
+    env: process.env,
+    cwd: base,
+  }, (state) => {
+    phases.push(state.phase);
+    throw new Error('ownership update rejected');
+  }), /ownership update rejected/);
+
+  assert.equal(existsSync(marker), false);
+  assert.deepEqual(phases, ['launching']);
+  rmSync(base, { recursive: true, force: true });
+});

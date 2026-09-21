@@ -132,10 +132,10 @@ export class CodexDriver {
   run(run: PreparedCodexRun, onState: (state: DriverExecutionState) => void = () => {}): Promise<CodexRunResult> {
     const started = Date.now();
     return new Promise((resolve) => {
+      onState({ phase: 'launching', child: null, quiesced: false });
       const notify = (state: DriverExecutionState): void => {
         try { onState(state); } catch { /* ownership update failure must not orphan the child */ }
       };
-      notify({ phase: 'launching', child: null, quiesced: false });
       const child = spawn(this.policy.codexBin, run.argv, {
         cwd: run.cwd, env: run.env, shell: false, stdio: ['pipe', 'pipe', 'pipe'],
       });

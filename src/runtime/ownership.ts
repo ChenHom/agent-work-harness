@@ -99,6 +99,8 @@ export function inspectExecutionOwnership(stateDir: string): OwnershipInspection
 
 export interface ExecutionOwnership {
   readonly token: string;
+  beginOperation(): boolean;
+  endOperation(): void;
   validate(): boolean;
   update(state: DriverExecutionState): boolean;
   release(): boolean;
@@ -121,9 +123,18 @@ export function acquireExecutionOwnership(stateDir: string): ExecutionOwnership 
     phase: 'not_started', child: null, acquiredAt: now, updatedAt: now,
   });
   let currentState: DriverExecutionState = { phase: 'not_started', child: null, quiesced: true };
+  let operationInUse = false;
 
   return {
     token,
+    beginOperation(): boolean {
+      if (operationInUse) return false;
+      operationInUse = true;
+      return true;
+    },
+    endOperation(): void {
+      operationInUse = false;
+    },
     validate(): boolean {
       return readMetadata(stateDir)?.token === token;
     },
@@ -135,7 +146,7 @@ export function acquireExecutionOwnership(stateDir: string): ExecutionOwnership 
       return true;
     },
     release(): boolean {
-      if (!currentState.quiesced
+      if (operationInUse || !currentState.quiesced
         || (currentState.phase !== 'stopped' && currentState.phase !== 'not_started' && currentState.phase !== 'prepared')) {
         return false;
       }

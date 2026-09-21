@@ -564,12 +564,18 @@ export class Orchestrator {
 
   private withOwnershipSync<T>(ownership: ExecutionOwnership | undefined, action: () => T): T {
     const acquired = ownership ?? acquireExecutionOwnership(this.policy.stateDir);
-    if (ownership && !ownership.validate()) {
-      throw new OwnershipError('OWNER_UNKNOWN', inspectExecutionOwnership(this.policy.stateDir));
-    }
+    let operationBegun = false;
     try {
+      if (!acquired.validate()) {
+        throw new OwnershipError('OWNER_UNKNOWN', inspectExecutionOwnership(this.policy.stateDir));
+      }
+      if (!acquired.beginOperation()) {
+        throw new OwnershipError('OWNER_ACTIVE', inspectExecutionOwnership(this.policy.stateDir));
+      }
+      operationBegun = true;
       return action();
     } finally {
+      if (operationBegun) acquired.endOperation();
       if (!ownership) acquired.release();
     }
   }
@@ -579,10 +585,15 @@ export class Orchestrator {
     action: (context: OwnershipContext) => Promise<T>,
   ): Promise<T> {
     const acquired = ownership ?? acquireExecutionOwnership(this.policy.stateDir);
-    if (ownership && !ownership.validate()) {
-      throw new OwnershipError('OWNER_UNKNOWN', inspectExecutionOwnership(this.policy.stateDir));
-    }
+    let operationBegun = false;
     try {
+      if (!acquired.validate()) {
+        throw new OwnershipError('OWNER_UNKNOWN', inspectExecutionOwnership(this.policy.stateDir));
+      }
+      if (!acquired.beginOperation()) {
+        throw new OwnershipError('OWNER_ACTIVE', inspectExecutionOwnership(this.policy.stateDir));
+      }
+      operationBegun = true;
       ensureRuntimeDirs(this.policy);
       const policyStateDir = this.policy.stateDir;
       const context: OwnershipContext = {
@@ -601,6 +612,7 @@ export class Orchestrator {
       };
       return await action(context);
     } finally {
+      if (operationBegun) acquired.endOperation();
       if (!ownership) acquired.release();
     }
   }

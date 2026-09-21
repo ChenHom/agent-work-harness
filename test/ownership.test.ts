@@ -234,6 +234,65 @@ test('a paused orchestrator blocks a second executor before prepare and leaves q
   rmSync(base, { recursive: true, force: true });
 });
 
+test('one borrowed ownership handle serializes operations and can be reused afterward', async () => {
+  const base = mkdtempSync(join(tmpdir(), 'harness-owner-'));
+  const policy = policyIn(base);
+  const store = new Store(policy.stateDir);
+  const owner = acquireExecutionOwnership(policy.stateDir);
+  let enter!: () => void;
+  let resume!: () => void;
+  const entered = new Promise<void>((resolve) => { enter = resolve; });
+  const gate = new Promise<void>((resolve) => { resume = resolve; });
+  let workId = '';
+  let prepares = 0;
+  let runs = 0;
+  const driver: RuntimeDriver = {
+    prepare(input) {
+      prepares++;
+      return { attemptDir: '', promptPath: '', lastMessagePath: '', logPath: '', argv: [], env: {}, cwd: '', attemptId: input.attemptId } as never;
+    },
+    async run(run, onState) {
+      runs++;
+      const child = { pid: process.pid, processStart: 'fixture' };
+      onState?.({ phase: 'running', child, quiesced: false });
+      if (runs === 1) {
+        enter();
+        await gate;
+      }
+      onState?.({ phase: 'stopped', child, quiesced: true });
+      const attemptId = (run as unknown as { attemptId: string }).attemptId;
+      return {
+        exitCode: 0, signal: null, timedOut: false, stdout: '', stderr: '', durationMs: 1,
+        lastMessage: JSON.stringify({
+          schemaVersion: '1', workId, attemptId, status: 'completed', summary: 'done',
+          claims: [], questions: [], declaredChangedPaths: [],
+        }),
+      };
+    },
+  };
+  const orch = new Orchestrator(policy, store, () => {}, { driver, evidence: fakeEvidence() });
+  const work = orch.createWork({ request: '修正問題', workspace: repoIn(base) }, owner);
+  workId = work.id;
+  const first = orch.runAttempt(work.id, { noBaseline: true, ownership: owner });
+  await entered;
+
+  await assert.rejects(orch.runAttempt(work.id, { noBaseline: true, ownership: owner }), (error) => {
+    assert.equal((error as { code?: string }).code, 'OWNER_ACTIVE');
+    return true;
+  });
+  assert.equal(prepares, 1);
+  assert.equal(runs, 1);
+
+  resume();
+  await first;
+  await orch.runAttempt(work.id, { noBaseline: true, ownership: owner });
+  assert.equal(prepares, 2);
+  assert.equal(runs, 2);
+  assert.equal(owner.release(), true);
+  store.close();
+  rmSync(base, { recursive: true, force: true });
+});
+
 test('an unknown child after launch failure preserves ownership', async () => {
   const base = mkdtempSync(join(tmpdir(), 'harness-owner-'));
   const policy = policyIn(base);
