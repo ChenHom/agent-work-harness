@@ -357,24 +357,36 @@ export class Orchestrator {
       this.store.setWorkState(work.id, 'RUNNING');
     });
     ownership.assertValid();
-    const prepared = this.driver.prepare({
-      attemptId: attempt.id, workspace: work.workspace, mode: contract.mode,
-      promptText: prompt.text, approvedSkillPaths: skillPaths,
-    });
+    let prepared: PreparedCodexRun;
+    try {
+      prepared = this.driver.prepare({
+        attemptId: attempt.id, workspace: work.workspace, mode: contract.mode,
+        promptText: prompt.text, approvedSkillPaths: skillPaths,
+      });
+    } catch (error) {
+      this.persistInterruptedRuntime(work.id, attempt, ownership, error);
+      throw error;
+    }
     ownership.update({ phase: 'prepared', child: null, quiesced: true });
     ownership.update({ phase: 'launching', child: null, quiesced: false });
-    const run = await this.driver.run(prepared, (state) => {
-      ownership.update(state);
-      attempt.runtimeDispatch = {
-        ...attempt.runtimeDispatch!, state: state.phase === 'prepared' || state.phase === 'not_started'
-          ? undefined : state.phase,
-        child: state.child ?? attempt.runtimeDispatch?.child,
-      };
-      if (state.phase === 'running' || state.phase === 'stopped' || state.phase === 'unknown') {
-        attempt.phase = 'executing';
-      }
-      this.store.withTransaction(() => this.store.updateAttempt(attempt));
-    });
+    let run: CodexRunResult;
+    try {
+      run = await this.driver.run(prepared, (state) => {
+        ownership.update(state);
+        attempt.runtimeDispatch = {
+          ...attempt.runtimeDispatch!, state: state.phase === 'prepared' || state.phase === 'not_started'
+            ? undefined : state.phase,
+          child: state.child ?? attempt.runtimeDispatch?.child,
+        };
+        if (state.phase === 'running' || state.phase === 'stopped' || state.phase === 'unknown') {
+          attempt.phase = 'executing';
+        }
+        this.store.withTransaction(() => this.store.updateAttempt(attempt));
+      });
+    } catch (error) {
+      this.persistInterruptedRuntime(work.id, attempt, ownership, error);
+      throw error;
+    }
     ownership.assertValid();
     if (ownership.state.phase !== 'stopped' || !ownership.state.quiesced) {
       throw new OwnershipError('OWNER_UNKNOWN', inspectExecutionOwnership(this.policy.stateDir));
@@ -398,6 +410,22 @@ export class Orchestrator {
       }, work.id, attempt.id);
     });
     return { run, parsed };
+  }
+
+  private persistInterruptedRuntime(
+    workId: string, attempt: Attempt, ownership: OwnershipContext, error: unknown,
+  ): void {
+    ownership.assertValid();
+    attempt.status = 'RECOVERY_REQUIRED';
+    attempt.failureReason = error instanceof Error ? error.message : String(error);
+    attempt.endedAt = nowIso();
+    this.store.withTransaction(() => {
+      this.store.updateAttempt(attempt);
+      this.store.event('recovery.required', {
+        attemptId: attempt.id, reason: attempt.failureReason,
+      }, workId, attempt.id);
+      this.store.setWorkState(workId, 'BLOCKED');
+    });
   }
 
   /** evidence → 判定 → 落地。agent 說了什麼在這裡只是輸入之一，不是結論。 */

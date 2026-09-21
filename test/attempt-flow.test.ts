@@ -903,3 +903,82 @@ test('model 返回後 observation 失敗仍可由 attempt 找回 verified raw/st
   assert.notEqual(s.store.getWork(s.work.id)?.state, 'DONE');
   s.cleanup();
 });
+
+test('driver prepare throw 會持久化 dispatch_intent recovery，不假造 completion/output', async () => {
+  const driver: RuntimeDriver = {
+    prepare() { throw new Error('prepare 爆掉'); },
+    async run() { throw new Error('unreachable'); },
+  };
+  const s = setup({ driver });
+  await assert.rejects(() => s.orch.runAttempt(s.work.id), /prepare 爆掉/);
+  s.store.close();
+
+  const reopened = new Store(join(s.base, 'state'));
+  const attempt = reopened.listAttempts(s.work.id)[0]!;
+  assert.equal(attempt.status, 'RECOVERY_REQUIRED');
+  assert.equal(attempt.phase, 'dispatch_intent');
+  assert.match(attempt.failureReason ?? '', /prepare 爆掉/);
+  assert.equal(attempt.outputRefs, undefined);
+  assert.equal(reopened.getWork(s.work.id)?.state, 'BLOCKED');
+  assert.equal(reopened.lastOutcome(s.work.id), null);
+  const eventTypes = reopened.events(s.work.id).map((event) => event.type);
+  assert.ok(eventTypes.includes('recovery.required'));
+  assert.ok(eventTypes.includes('work.state_changed'));
+  assert.ok(!eventTypes.includes('attempt.completed'));
+  reopened.close();
+  rmSync(s.base, { recursive: true, force: true });
+});
+
+test('driver run throw 在 unknown receipt 後保留 executing recovery state', async () => {
+  const driver: RuntimeDriver = {
+    prepare() { return {} as never; },
+    async run(_run, onState) {
+      onState?.({ phase: 'unknown', child: null, quiesced: false });
+      throw new Error('run unknown 爆掉');
+    },
+  };
+  const s = setup({ driver });
+  await assert.rejects(() => s.orch.runAttempt(s.work.id), /run unknown 爆掉/);
+  s.store.close();
+
+  const reopened = new Store(join(s.base, 'state'));
+  const attempt = reopened.listAttempts(s.work.id)[0]!;
+  assert.equal(attempt.status, 'RECOVERY_REQUIRED');
+  assert.equal(attempt.phase, 'executing');
+  assert.equal(attempt.runtimeDispatch?.state, 'unknown');
+  assert.match(attempt.failureReason ?? '', /run unknown 爆掉/);
+  assert.equal(attempt.outputRefs, undefined);
+  assert.equal(reopened.getWork(s.work.id)?.state, 'BLOCKED');
+  assert.equal(reopened.lastOutcome(s.work.id), null);
+  assert.ok(!reopened.events(s.work.id).some((event) => event.type === 'attempt.completed'));
+  reopened.close();
+  rmSync(s.base, { recursive: true, force: true });
+});
+
+test('driver run throw 在 stopped receipt 後仍需 recovery，不能假裝已有 runtime result', async () => {
+  const driver: RuntimeDriver = {
+    prepare() { return {} as never; },
+    async run(_run, onState) {
+      const child = { pid: process.pid, processStart: 'fixture' };
+      onState?.({ phase: 'running', child, quiesced: false });
+      onState?.({ phase: 'stopped', child, quiesced: true });
+      throw new Error('run stopped 爆掉');
+    },
+  };
+  const s = setup({ driver });
+  await assert.rejects(() => s.orch.runAttempt(s.work.id), /run stopped 爆掉/);
+  s.store.close();
+
+  const reopened = new Store(join(s.base, 'state'));
+  const attempt = reopened.listAttempts(s.work.id)[0]!;
+  assert.equal(attempt.status, 'RECOVERY_REQUIRED');
+  assert.equal(attempt.phase, 'executing');
+  assert.equal(attempt.runtimeDispatch?.state, 'stopped');
+  assert.match(attempt.failureReason ?? '', /run stopped 爆掉/);
+  assert.equal(attempt.outputRefs, undefined);
+  assert.equal(reopened.getWork(s.work.id)?.state, 'BLOCKED');
+  assert.equal(reopened.lastOutcome(s.work.id), null);
+  assert.ok(!reopened.events(s.work.id).some((event) => event.type === 'attempt.completed'));
+  reopened.close();
+  rmSync(s.base, { recursive: true, force: true });
+});
