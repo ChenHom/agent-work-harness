@@ -890,18 +890,53 @@ test('model 返回後 observation 失敗仍可由 attempt 找回 verified raw/st
   ids.workId = s.work.id;
 
   await assert.rejects(() => s.orch.runAttempt(s.work.id), /observe 爆掉/);
-  const attempt = s.store.listAttempts(s.work.id)[0]!;
+  s.store.close();
+  const reopened = new Store(join(s.base, 'state'));
+  const attempt = reopened.listAttempts(s.work.id)[0]!;
   const outputRefs: AttemptOutputRefs | undefined = attempt.outputRefs;
+  assert.equal(attempt.status, 'RECOVERY_REQUIRED');
   assert.equal(attempt.phase, 'collecting');
+  assert.match(attempt.failureReason ?? '', /observe 爆掉/);
   assert.ok(attempt.runtimeDispatch?.intentAt);
   assert.ok(attempt.runtimeDispatch?.ownershipToken);
   assert.ok(attempt.runtimeDispatch?.child);
   assert.ok(outputRefs?.rawResultArtifactId);
   assert.ok(outputRefs?.stdoutArtifactId);
-  assert.equal(s.store.readVerifiedArtifact(outputRefs.rawResultArtifactId).status, 'verified');
-  assert.equal(s.store.readVerifiedArtifact(outputRefs.stdoutArtifactId).status, 'verified');
-  assert.notEqual(s.store.getWork(s.work.id)?.state, 'DONE');
-  s.cleanup();
+  assert.equal(reopened.readVerifiedArtifact(outputRefs.rawResultArtifactId).status, 'verified');
+  assert.equal(reopened.readVerifiedArtifact(outputRefs.stdoutArtifactId).status, 'verified');
+  assert.equal(reopened.getWork(s.work.id)?.state, 'BLOCKED');
+  assert.equal(reopened.lastOutcome(s.work.id), null);
+  const eventTypes = reopened.events(s.work.id).map((event) => event.type);
+  assert.equal(eventTypes.filter((type) => type === 'recovery.required').length, 1);
+  assert.ok(!eventTypes.includes('attempt.completed'));
+  reopened.close();
+  rmSync(s.base, { recursive: true, force: true });
+});
+
+test('verification 失敗拋例外時保留 collecting outputs 並持久化 recovery', async () => {
+  const ev = fakeEvidence({ changedPaths: ['src/a.ts'] });
+  ev.runVerification = async () => { throw new Error('verification 爆掉'); };
+  const ids = { workId: '' };
+  const driver = fakeDriver(({ attemptId }) => JSON.stringify(completed(ids.workId, attemptId)));
+  const s = setup({ evidence: ev, driver });
+  ids.workId = s.work.id;
+
+  await assert.rejects(() => s.orch.runAttempt(s.work.id), /verification 爆掉/);
+  s.store.close();
+  const reopened = new Store(join(s.base, 'state'));
+  const attempt = reopened.listAttempts(s.work.id)[0]!;
+  assert.equal(attempt.status, 'RECOVERY_REQUIRED');
+  assert.equal(attempt.phase, 'collecting');
+  assert.match(attempt.failureReason ?? '', /verification 爆掉/);
+  assert.equal(reopened.readVerifiedArtifact(attempt.outputRefs!.rawResultArtifactId).status, 'verified');
+  assert.equal(reopened.readVerifiedArtifact(attempt.outputRefs!.stdoutArtifactId).status, 'verified');
+  assert.equal(reopened.getWork(s.work.id)?.state, 'BLOCKED');
+  assert.equal(reopened.lastOutcome(s.work.id), null);
+  const eventTypes = reopened.events(s.work.id).map((event) => event.type);
+  assert.equal(eventTypes.filter((type) => type === 'recovery.required').length, 1);
+  assert.ok(!eventTypes.includes('attempt.completed'));
+  reopened.close();
+  rmSync(s.base, { recursive: true, force: true });
 });
 
 test('driver prepare throw 會持久化 dispatch_intent recovery，不假造 completion/output', async () => {

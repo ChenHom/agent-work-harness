@@ -364,7 +364,7 @@ export class Orchestrator {
         promptText: prompt.text, approvedSkillPaths: skillPaths,
       });
     } catch (error) {
-      this.persistInterruptedRuntime(work.id, attempt, ownership, error);
+      this.markRecoveryRequired(work.id, attempt, ownership, error);
       throw error;
     }
     ownership.update({ phase: 'prepared', child: null, quiesced: true });
@@ -384,12 +384,15 @@ export class Orchestrator {
         this.store.withTransaction(() => this.store.updateAttempt(attempt));
       });
     } catch (error) {
-      this.persistInterruptedRuntime(work.id, attempt, ownership, error);
+      this.markRecoveryRequired(work.id, attempt, ownership, error);
       throw error;
     }
     ownership.assertValid();
     if (ownership.state.phase !== 'stopped' || !ownership.state.quiesced) {
-      throw new OwnershipError('OWNER_UNKNOWN', inspectExecutionOwnership(this.policy.stateDir));
+      const error = new OwnershipError('OWNER_UNKNOWN', inspectExecutionOwnership(this.policy.stateDir));
+      this.markRecoveryRequired(work.id, attempt, ownership,
+        new Error(`OWNER_UNKNOWN: runtime child is not quiesced (phase ${ownership.state.phase})`));
+      throw error;
     }
     const stdoutArtifactId = this.store.putArtifact('runtime_stdout', run.stdout, 'log').id;
     const stderrArtifactId = run.stderr
@@ -412,7 +415,7 @@ export class Orchestrator {
     return { run, parsed };
   }
 
-  private persistInterruptedRuntime(
+  private markRecoveryRequired(
     workId: string, attempt: Attempt, ownership: OwnershipContext, error: unknown,
   ): void {
     ownership.assertValid();
@@ -439,11 +442,17 @@ export class Orchestrator {
 
     // §23 evidence：無論 agent 說什麼都要自己觀察
     this.store.setWorkState(workId, 'VERIFYING');
-    const evidence = await this.collectEvidence({
-      work, contract, snapshot, attempt, base: attempt.baseRevision,
-      runWrite: contract.mode === 'write',
-    });
-    ownership.assertValid();
+    let evidence: EvidenceRecord[];
+    try {
+      evidence = await this.collectEvidence({
+        work, contract, snapshot, attempt, base: attempt.baseRevision,
+        runWrite: contract.mode === 'write',
+      });
+      ownership.assertValid();
+    } catch (error) {
+      this.markRecoveryRequired(workId, attempt, ownership, error);
+      throw error;
+    }
 
     // 本次若是 retry，必須把自己算進已用次數，否則 budget 永遠用不完
     const usedRetries = countRetries(this.store.listAttempts(workId));

@@ -354,6 +354,18 @@ test('a returned runtime result cannot override an unknown child receipt', async
   });
   assert.equal(inspectExecutionOwnership(policy.stateDir).occupied, true);
   store.close();
+
+  const reopened = new Store(policy.stateDir);
+  const attempt = reopened.listAttempts(work.id)[0]!;
+  assert.equal(attempt.status, 'RECOVERY_REQUIRED');
+  assert.equal(attempt.phase, 'executing');
+  assert.match(attempt.failureReason ?? '', /OWNER_UNKNOWN|not quiesced/i);
+  assert.equal(reopened.getWork(work.id)?.state, 'BLOCKED');
+  assert.equal(reopened.lastOutcome(work.id), null);
+  const eventTypes = reopened.events(work.id).map((event) => event.type);
+  assert.equal(eventTypes.filter((type) => type === 'recovery.required').length, 1);
+  assert.ok(!eventTypes.includes('attempt.completed'));
+  reopened.close();
   rmSync(base, { recursive: true, force: true });
 });
 
