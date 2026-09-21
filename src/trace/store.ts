@@ -1,7 +1,10 @@
 import { DatabaseSync } from 'node:sqlite';
-import { mkdirSync, writeFileSync, readFileSync, existsSync } from 'node:fs';
-import { join } from 'node:path';
-import { createHash } from 'node:crypto';
+import {
+  closeSync, constants, existsSync, fsyncSync, mkdirSync, openSync, readFileSync, renameSync, rmSync,
+  writeFileSync,
+} from 'node:fs';
+import { dirname, join } from 'node:path';
+import { createHash, randomUUID } from 'node:crypto';
 import { newId, nowIso } from '../ids.ts';
 import { CURRENT_SCHEMA_VERSION, migrate, rethrowAfterRollback, validateSchema } from './migrations.ts';
 import type {
@@ -19,6 +22,10 @@ export type EventType =
   | 'work.completed' | 'work.blocked' | 'work.state_changed'
   | 'recovery.required'
   | 'usage.note';   // 人對結果的判讀 —— 機器不知道 evidence 判錯了，只有人知道
+
+export type VerifiedArtifact =
+  | { status: 'verified'; id: string; hash: string; content: Buffer }
+  | { status: 'missing' | 'corrupt'; id: string; reason?: string; code?: string };
 
 export class StoreOpenError extends Error {
   readonly code: 'NO_STATE';
@@ -44,13 +51,15 @@ function canonicalJson(value: unknown): string {
 export class Store {
   readonly db: DatabaseSync;
   readonly artifactDir: string;
+  private readonly readOnly: boolean;
   private inTransaction = false;
   private readonly hasOutcomeEvidenceIds: boolean;
 
   constructor(stateDir: string, options: { readOnly?: boolean } = {}) {
     this.artifactDir = join(stateDir, 'artifacts');
+    this.readOnly = options.readOnly === true;
     const path = join(stateDir, 'harness.db');
-    if (options.readOnly) {
+    if (this.readOnly) {
       if (!existsSync(path)) throw new StoreOpenError('NO_STATE', `no database at ${path}`);
       this.db = new DatabaseSync(path, { readOnly: true });
       try {
@@ -152,19 +161,88 @@ export class Store {
 
   // ---- artifacts (§29 大內容不進 event) ----
   putArtifact(kind: string, content: string | Buffer, ext = 'txt'): { id: string; hash: string; path: string } {
+    if (this.readOnly) throw new Error('read-only store cannot write artifacts');
     const buf = Buffer.isBuffer(content) ? content : Buffer.from(content, 'utf8');
     const hash = createHash('sha256').update(buf).digest('hex');
     const id = newId('AR');
-    const path = join(this.artifactDir, `${hash.slice(0, 16)}.${ext}`);
-    if (!existsSync(path)) writeFileSync(path, buf);
+    const path = join(this.artifactDir, `${hash}.${ext}`);
+    let valid = false;
+    try {
+      const descriptor = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+      try {
+        const persisted = readFileSync(descriptor);
+        valid = persisted.length === buf.length
+          && createHash('sha256').update(persisted).digest('hex') === hash;
+      } finally {
+        closeSync(descriptor);
+      }
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code !== 'ENOENT' && code !== 'ELOOP') throw error;
+    }
+    if (!valid) {
+      const temporaryPath = join(this.artifactDir, `.${hash}.${randomUUID()}.tmp`);
+      let descriptor: number | undefined;
+      try {
+        descriptor = openSync(temporaryPath, 'wx');
+        writeFileSync(descriptor, buf);
+        fsyncSync(descriptor);
+        closeSync(descriptor);
+        descriptor = undefined;
+        renameSync(temporaryPath, path);
+      } catch (error) {
+        if (descriptor !== undefined) closeSync(descriptor);
+        rmSync(temporaryPath, { force: true });
+        throw error;
+      }
+    }
+    const fileDescriptor = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+    try {
+      const persisted = readFileSync(fileDescriptor);
+      if (persisted.length !== buf.length
+        || createHash('sha256').update(persisted).digest('hex') !== hash) {
+        throw new Error('artifact payload verification failed after publish');
+      }
+      fsyncSync(fileDescriptor);
+    } finally {
+      closeSync(fileDescriptor);
+    }
+    const directoryDescriptor = openSync(this.artifactDir, 'r');
+    try { fsyncSync(directoryDescriptor); } finally { closeSync(directoryDescriptor); }
     this.db.prepare('insert into artifacts(id, kind, hash, path, bytes, created_at) values (?,?,?,?,?,?)')
       .run(id, kind, hash, path, buf.length, nowIso());
     return { id, hash, path };
   }
 
   readArtifact(id: string): string | null {
-    const row = this.db.prepare('select path from artifacts where id = ?').get(id) as { path: string } | undefined;
-    return row && existsSync(row.path) ? readFileSync(row.path, 'utf8') : null;
+    const artifact = this.readVerifiedArtifact(id);
+    return artifact.status === 'verified' ? artifact.content.toString('utf8') : null;
+  }
+
+  readVerifiedArtifact(id: string): VerifiedArtifact {
+    const row = this.db.prepare('select hash, path, bytes from artifacts where id = ?').get(id) as {
+      hash: string; path: string; bytes: number;
+    } | undefined;
+    if (!row) return { status: 'missing', id, reason: 'record_missing' };
+    if (dirname(row.path) !== this.artifactDir) return { status: 'corrupt', id, reason: 'invalid_path' };
+    try {
+      const descriptor = openSync(row.path, constants.O_RDONLY | constants.O_NOFOLLOW);
+      let content: Buffer;
+      try {
+        content = readFileSync(descriptor);
+      } finally {
+        closeSync(descriptor);
+      }
+      if (content.length !== row.bytes) return { status: 'corrupt', id, reason: 'byte_length_mismatch' };
+      if (createHash('sha256').update(content).digest('hex') !== row.hash) {
+        return { status: 'corrupt', id, reason: 'hash_mismatch' };
+      }
+      return { status: 'verified', id, hash: row.hash, content };
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code === 'ENOENT') return { status: 'missing', id, reason: 'file_missing', code };
+      return { status: 'corrupt', id, reason: 'io_error', code };
+    }
   }
 
   // ---- work ----
