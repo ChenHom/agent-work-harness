@@ -59,9 +59,12 @@ function fakeDriver(reply: (ids: { workId: string; attemptId: string }) => strin
       return { attemptDir: '', promptPath: '', lastMessagePath: '', logPath: '',
         argv: [], env: {}, cwd: '', attemptId: input.attemptId } as never;
     },
-    async run(run: unknown) {
+    async run(run: unknown, onState?: Parameters<RuntimeDriver['run']>[1]) {
       d.calls++;
       const attemptId = (run as { attemptId: string }).attemptId;
+      const child = { pid: process.pid, processStart: 'fixture' };
+      onState?.({ phase: 'running', child, quiesced: false });
+      onState?.({ phase: 'stopped', child, quiesced: true });
       return {
         exitCode: 0, signal: null, timedOut: opts?.timedOut ?? false,
         stdout: '', stderr: '', durationMs: 1,

@@ -3,6 +3,7 @@ import { mkdirSync, writeFileSync, readFileSync, existsSync, cpSync, rmSync, rea
 import { join } from 'node:path';
 import type { GlobalPolicy, Mode } from '../types.ts';
 import { agentEnv, ensureRuntimeDirs } from './isolation.ts';
+import type { DriverExecutionState, ProcessIdentity } from './ownership.ts';
 
 // §21：Driver 只負責啟動 Codex 與捕捉結果。不理解 intent、不判定成功、不追加 authority。
 
@@ -128,14 +129,26 @@ export class CodexDriver {
     };
   }
 
-  run(run: PreparedCodexRun): Promise<CodexRunResult> {
+  run(run: PreparedCodexRun, onState: (state: DriverExecutionState) => void = () => {}): Promise<CodexRunResult> {
     const started = Date.now();
     return new Promise((resolve) => {
+      const notify = (state: DriverExecutionState): void => {
+        try { onState(state); } catch { /* ownership update failure must not orphan the child */ }
+      };
+      notify({ phase: 'launching', child: null, quiesced: false });
       const child = spawn(this.policy.codexBin, run.argv, {
         cwd: run.cwd, env: run.env, shell: false, stdio: ['pipe', 'pipe', 'pipe'],
       });
+      const identity: ProcessIdentity | null = child.pid === undefined ? null : {
+        pid: child.pid,
+        processStart: processStart(child.pid),
+      };
+      notify(identity
+        ? { phase: 'running', child: identity, quiesced: false }
+        : { phase: 'unknown', child: null, quiesced: false });
 
       let stdout = '', stderr = '', timedOut = false;
+      let finished = false;
       const cap = this.policy.maxOutputBytes;
       const append = (buf: Buffer, cur: string): string =>
         (cur.length >= cap ? cur : (cur + buf.toString('utf8')).slice(0, cap));
@@ -148,14 +161,36 @@ export class CodexDriver {
       const timer = setTimeout(() => { timedOut = true; child.kill('SIGKILL'); }, this.policy.attemptTimeoutMs);
 
       const finish = (exitCode: number | null, signal: NodeJS.Signals | null): void => {
+        if (finished) return;
+        finished = true;
         clearTimeout(timer);
+        notify({ phase: 'stopped', child: identity, quiesced: true });
         const lastMessage = existsSync(run.lastMessagePath) ? readFileSync(run.lastMessagePath, 'utf8') : '';
         writeFileSync(run.logPath, `--- stdout ---\n${stdout}\n--- stderr ---\n${stderr}\n`);
         resolve({ exitCode, signal, timedOut, stdout, stderr, lastMessage, durationMs: Date.now() - started });
       };
 
-      child.on('error', (e) => { stderr += `\nspawn error: ${e.message}`; finish(null, null); });
+      child.on('error', (e) => {
+        stderr += `\nspawn error: ${e.message}`;
+        if (identity) {
+          finished = true;
+          clearTimeout(timer);
+          notify({ phase: 'unknown', child: identity, quiesced: false });
+          resolve({ exitCode: null, signal: null, timedOut, stdout, stderr, lastMessage: '', durationMs: Date.now() - started });
+        } else {
+          finish(null, null);
+        }
+      });
       child.on('close', finish);
     });
+  }
+}
+
+function processStart(pid: number): string {
+  try {
+    const stat = readFileSync(`/proc/${pid}/stat`, 'utf8');
+    return stat.slice(stat.lastIndexOf(')') + 2).trim().split(/\s+/)[19] || 'unknown';
+  } catch {
+    return 'unknown';
   }
 }

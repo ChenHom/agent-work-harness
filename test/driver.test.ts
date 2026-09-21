@@ -81,3 +81,44 @@ test('bwrap argv：遮蔽 /home，只 bind 需要的路徑，且不共享網路'
   const rw = bwrapArgv({ workspace: '/w', home: '/vh', readOnlyBinds: [], writable: true }).join(' ');
   assert.match(rw, /--bind \/w \/w/);
 });
+
+test('run reports the managed child identity and a stopped receipt', async () => {
+  const base = mkdtempSync(join(tmpdir(), 'harness-drv-'));
+  const policy = { ...policyIn(base), codexBin: process.execPath };
+  const promptPath = join(base, 'prompt.txt');
+  const lastMessagePath = join(base, 'last.json');
+  const logPath = join(base, 'runtime.log');
+  writeFileSync(promptPath, '');
+  const states: Array<{ phase: string; child: { pid: number; processStart: string } | null; quiesced: boolean }> = [];
+  const result = await new CodexDriver(policy).run({
+    attemptDir: base, promptPath, lastMessagePath, logPath,
+    argv: ['-e', 'process.stdout.write("ok")'], env: process.env, cwd: base,
+  }, (state) => states.push(state));
+
+  assert.equal(result.exitCode, 0);
+  const running = states.find((state) => state.phase === 'running');
+  assert.ok(running?.child?.pid);
+  assert.ok(running?.child?.processStart);
+  assert.deepEqual(states.at(-1), { phase: 'stopped', child: running.child, quiesced: true });
+  rmSync(base, { recursive: true, force: true });
+});
+
+test('spawn error and close produce only one stopped receipt', async () => {
+  const base = mkdtempSync(join(tmpdir(), 'harness-drv-'));
+  const policy = { ...policyIn(base), codexBin: join(base, 'missing-codex') };
+  const promptPath = join(base, 'prompt.txt');
+  writeFileSync(promptPath, '');
+  const phases: string[] = [];
+  const result = await new CodexDriver(policy).run({
+    attemptDir: base,
+    promptPath,
+    lastMessagePath: join(base, 'last.json'),
+    logPath: join(base, 'runtime.log'),
+    argv: [], env: process.env, cwd: base,
+  }, (state) => phases.push(state.phase));
+
+  assert.equal(result.exitCode, null);
+  assert.equal(phases.filter((phase) => phase === 'stopped').length, 1);
+  assert.equal(phases.at(-1), 'stopped');
+  rmSync(base, { recursive: true, force: true });
+});

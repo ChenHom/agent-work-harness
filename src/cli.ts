@@ -1,16 +1,21 @@
 #!/usr/bin/env node
 import { parseArgs } from 'node:util';
 import { resolve, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { writeFileSync, mkdirSync, existsSync, readFileSync } from 'node:fs';
 import { loadPolicy } from './policy.ts';
-import { Store } from './trace/store.ts';
+import { Store, StoreOpenError } from './trace/store.ts';
 import { Orchestrator } from './orchestrator.ts';
 import { detectCandidate, loadSnapshot, CONTRACT_REL_PATH, ContractError } from './repo/contract.ts';
 import { approveSkill, loadRegistry, admitSkills } from './security/skills.ts';
 import { ensureRuntimeDirs } from './runtime/isolation.ts';
+import {
+  acquireExecutionOwnership, inspectExecutionOwnership, type ExecutionOwnership,
+} from './runtime/ownership.ts';
 import { runIsolated } from './evidence/exec.ts';
 import { formatContextDropped, formatPreExistingDirty, formatWorkListRow } from './cli-format.ts';
 import { formatPromptChars } from './response.ts';
+import type { GlobalPolicy } from './types.ts';
 
 const USAGE = `harness — Agent Work Harness (MVP)
 
@@ -27,6 +32,7 @@ const USAGE = `harness — Agent Work Harness (MVP)
   harness note <workId> <kind> "<說明>"  記錄使用中發現的問題（見下方 kind）
   harness notes [kind]                  列出所有記錄
   harness stats                         work / attempt / retry / outcome 彙總
+  harness ownership                     顯示目前 execution ownership（唯讀）
   harness skills list|approve <id> <dir>
   harness doctor [dir]                  檢查 runtime 與隔離是否真的生效
 
@@ -41,17 +47,23 @@ note 的 kind 對應 DECISIONS.md 的升級判準：
 
 const NOTE_KINDS = ['false-accept', 'false-block', 'retry-churn', 'blocked-work', 'friction', 'other'];
 
-async function main(argv: string[]): Promise<number> {
-  const [cmd, ...rest] = argv;
-  const policy = loadPolicy();
-  ensureRuntimeDirs(policy);
-  const store = new Store(policy.stateDir);
-  const log = (m: string): void => { process.stderr.write(`  · ${m}\n`); };
-  const orch = new Orchestrator(policy, store, log);
+const STORE_COMMANDS = new Set(['new', 'run', 'retry', 'recover', 'answer', 'list', 'show', 'trace', 'prompt', 'note', 'notes', 'stats']);
+const READ_ONLY_COMMANDS = new Set(['list', 'show', 'trace', 'prompt', 'notes', 'stats']);
+const MUTATING_COMMANDS = new Set(['init', 'new', 'run', 'retry', 'recover', 'answer', 'note', 'doctor']);
 
-  // §D5：每次啟動先處理殘留 RUNNING attempt
-  const crashed = orch.markCrashedAttempts();
-  for (const a of crashed) console.error(`! attempt ${a.id}（work ${a.workId}）在執行中中斷 → RECOVERY_REQUIRED，請執行 harness recover ${a.workId}`);
+export async function main(argv: string[], policy: GlobalPolicy = loadPolicy()): Promise<number> {
+  const [cmd, ...rest] = argv;
+  let store: Store | undefined;
+  let ownership: ExecutionOwnership | undefined;
+  try {
+    if ((cmd && MUTATING_COMMANDS.has(cmd)) || (cmd === 'skills' && rest[0] === 'approve')) {
+      ownership = acquireExecutionOwnership(policy.stateDir);
+    }
+    if (cmd && STORE_COMMANDS.has(cmd)) {
+      store = new Store(policy.stateDir, { readOnly: READ_ONLY_COMMANDS.has(cmd) });
+    }
+    const log = (m: string): void => { process.stderr.write(`  · ${m}\n`); };
+    const orch = store && !READ_ONLY_COMMANDS.has(cmd ?? '') ? new Orchestrator(policy, store, log) : undefined;
 
   switch (cmd) {
     case 'init': {
@@ -76,9 +88,9 @@ async function main(argv: string[]): Promise<number> {
       if (!request) { console.error('需要需求文字'); return 1; }
       const workspace = resolve(values.dir ?? '.');
       try {
-        const work = orch.createWork({ request, workspace, title: values.title });
-        if (values.retry) store.db.prepare('update works set retry_budget = ? where id = ?').run(Number(values.retry), work.id);
-        const contract = store.getContract(work.id, 1)!;
+        const work = orch!.createWork({ request, workspace, title: values.title }, ownership);
+        if (values.retry) store!.db.prepare('update works set retry_budget = ? where id = ?').run(Number(values.retry), work.id);
+        const contract = store!.getContract(work.id, 1)!;
         console.log(`work: ${work.id}  repo: ${work.repositoryId}  mode: ${contract.mode}`);
         console.log(`denied: ${contract.deniedPaths.join(', ') || '(僅 repo protectedPaths)'}`);
         console.log(`allowed: ${contract.allowedPaths?.join(', ') ?? '整個 worktree'}`);
@@ -97,9 +109,9 @@ async function main(argv: string[]): Promise<number> {
       // pre-flight baseline 讓 verification 時間翻倍；測試很慢的 repo 可以關掉，
       // 代價是失去「有沒有比動手前少跑」這個判斷。
       const noBaseline = rest.includes('--no-baseline');
-      const report = cmd === 'run' ? await orch.runAttempt(workId, { noBaseline })
-        : cmd === 'retry' ? await orch.retry(workId, { noBaseline })
-        : await orch.recover(workId);
+      const report = cmd === 'run' ? await orch!.runAttempt(workId, { noBaseline, ownership })
+        : cmd === 'retry' ? await orch!.retry(workId, { noBaseline, ownership })
+        : await orch!.recover(workId, ownership);
       console.log(`\n${report.response}\n`);
       return report.decision.outcome === 'SUCCESS' ? 0 : 3;
     }
@@ -107,7 +119,7 @@ async function main(argv: string[]): Promise<number> {
     case 'answer': {
       const [workId, text] = rest;
       if (!workId || !text) { console.error('用法：harness answer <workId> "<回覆>"'); return 1; }
-      const added = orch.answer(workId, text);
+      const added = orch!.answer(workId, text, ownership);
       console.log(added.length ? `已記錄 ${added.length} 筆決策：` : '沒有可機械解析的新決策（原文已保留）');
       for (const d of added) console.log(`- ${d.kind}: ${d.value}`);
       console.log(`\n下一步：harness retry ${workId}`);
@@ -115,17 +127,19 @@ async function main(argv: string[]): Promise<number> {
     }
 
     case 'list': {
-      for (const w of store.listWorks()) {
-        console.log(formatWorkListRow(w, store.lastOutcome(w.id)?.outcome ?? null));
+      const works = store!.listWorks();
+      if (!works.length) console.log('(沒有 work)');
+      for (const w of works) {
+        console.log(formatWorkListRow(w, store!.lastOutcome(w.id)?.outcome ?? null));
       }
       return 0;
     }
 
     case 'show': {
       const workId = rest[0];
-      const work = workId ? store.getWork(workId) : null;
+      const work = workId ? store!.getWork(workId) : null;
       if (!work) { console.error('找不到 work'); return 1; }
-      const contract = store.getContract(work.id, work.currentContractVersion)!;
+      const contract = store!.getContract(work.id, work.currentContractVersion)!;
       console.log(`work ${work.id}  state=${work.state}  repo=${work.repositoryId}`);
       console.log(`workspace: ${work.workspace}`);
       console.log(`\n[contract v${contract.version}] mode=${contract.mode}`);
@@ -135,16 +149,16 @@ async function main(argv: string[]): Promise<number> {
       console.log(`constraints: ${contract.constraints.join(' / ') || '-'}`);
       console.log(`success criteria (semantic): ${contract.successCriteria.join(' / ')}`);
       console.log('\n[decisions]');
-      for (const d of store.listDecisions(work.id)) console.log(`- ${d.kind}: ${d.value}  (${d.sourceMessageId})`);
+      for (const d of store!.listDecisions(work.id)) console.log(`- ${d.kind}: ${d.value}  (${d.sourceMessageId})`);
       console.log('\n[attempts]');
-      for (const a of store.listAttempts(work.id)) {
+      for (const a of store!.listAttempts(work.id)) {
         console.log(`- #${a.number} ${a.id} ${a.mode} ${a.status} base=${a.baseRevision.slice(0, 8)} contract=v${a.contractVersion} snapshot=${a.contractSnapshotHash.slice(0, 8)}${a.retryOf ? ` retryOf=${a.retryOf}` : ''}`);
-        console.log(formatPromptChars(store.readArtifact(a.promptArtifactId)));
+        console.log(formatPromptChars(store!.readArtifact(a.promptArtifactId)));
         console.log(formatPreExistingDirty(a));
         console.log(formatContextDropped(a));
-        for (const e of store.listEvidence(a.id)) console.log(`    · ${e.type} ${e.label}: ${e.status}`);
+        for (const e of store!.listEvidence(a.id)) console.log(`    · ${e.type} ${e.label}: ${e.status}`);
       }
-      const last = store.lastOutcome(work.id);
+      const last = store!.lastOutcome(work.id);
       if (last) console.log(`\n[outcome] ${last.outcome}: ${last.reasons.join(' / ')}`);
       return 0;
     }
@@ -152,7 +166,7 @@ async function main(argv: string[]): Promise<number> {
     case 'trace': {
       const workId = rest[0];
       if (!workId) { console.error('需要 workId'); return 1; }
-      for (const e of store.events(workId)) {
+      for (const e of store!.events(workId)) {
         console.log(`${String(e.seq).padStart(4)} ${e.created_at} ${e.type.padEnd(26)} ${e.attempt_id ?? '-'} ${e.data}`);
       }
       return 0;
@@ -160,9 +174,9 @@ async function main(argv: string[]): Promise<number> {
 
     case 'prompt': {
       const attemptId = rest[0];
-      const attempt = attemptId ? store.getAttempt(attemptId) : null;
+      const attempt = attemptId ? store!.getAttempt(attemptId) : null;
       if (!attempt) { console.error('找不到 attempt'); return 1; }
-      console.log(store.readArtifact(attempt.promptArtifactId) ?? '(prompt artifact 不存在)');
+      console.log(store!.readArtifact(attempt.promptArtifactId) ?? '(prompt artifact 不存在)');
       return 0;
     }
 
@@ -170,8 +184,8 @@ async function main(argv: string[]): Promise<number> {
       const [workId, kind, text] = rest;
       if (!workId || !kind || !text) { console.error('用法：harness note <workId> <kind> "<說明>"'); return 1; }
       if (!NOTE_KINDS.includes(kind)) { console.error(`kind 必須是：${NOTE_KINDS.join(' / ')}`); return 1; }
-      if (!store.getWork(workId)) { console.error(`找不到 work ${workId}`); return 1; }
-      store.event('usage.note', { kind, text }, workId);
+      if (!store!.getWork(workId)) { console.error(`找不到 work ${workId}`); return 1; }
+      store!.event('usage.note', { kind, text }, workId);
       console.log(`已記錄 [${kind}] ${workId}`);
       // false-accept / false-block 是 watch list 的前兩條升級判準，出現就該被看見
       if (kind === 'false-accept' || kind === 'false-block') {
@@ -182,7 +196,7 @@ async function main(argv: string[]): Promise<number> {
 
     case 'notes': {
       const kind = rest[0];
-      const notes = store.notes(kind);
+      const notes = store!.notes(kind);
       if (!notes.length) { console.log(kind ? `(沒有 ${kind} 的記錄)` : '(還沒有任何記錄)'); return 0; }
       for (const n of notes) {
         console.log(`${n.createdAt.slice(0, 16).replace('T', ' ')}  ${n.kind.padEnd(13)} ${n.workId ?? '-'}`);
@@ -193,7 +207,7 @@ async function main(argv: string[]): Promise<number> {
     }
 
     case 'stats': {
-      const st = store.stats();
+      const st = store!.stats();
       console.log(`works: ${st.works}   attempts: ${st.attempts}   retries: ${st.retries}` +
         (st.attempts ? `   (retry 率 ${Math.round((st.retries / st.attempts) * 100)}%)` : ''));
       console.log('\noutcome 分佈');
@@ -203,6 +217,18 @@ async function main(argv: string[]): Promise<number> {
         console.log('\n使用中記錄的問題');
         for (const n of st.notes) console.log(`  ${String(n.kind).padEnd(22)} ${n.count}`);
       }
+      return 0;
+    }
+
+    case 'ownership': {
+      const inspection = inspectExecutionOwnership(policy.stateDir);
+      if (!inspection.occupied) { console.log('(沒有 active execution ownership)'); return 0; }
+      const metadata = inspection.metadata;
+      console.log(`token: ${metadata?.token ?? 'unknown'}`);
+      console.log(`owner: ${metadata ? `${metadata.host} pid=${metadata.pid} start=${metadata.processStart}` : 'unknown'}`);
+      console.log(`phase: ${metadata?.phase ?? 'unknown'}`);
+      console.log(`known child: ${metadata?.child ? `pid=${metadata.child.pid} start=${metadata.child.processStart}` : 'unknown'}`);
+      console.log(`blocked reason: ${inspection.blockedReason ?? 'occupied'}`);
       return 0;
     }
 
@@ -229,6 +255,7 @@ async function main(argv: string[]): Promise<number> {
 
     case 'doctor': {
       const dir = resolve(rest[0] ?? '.');
+      ensureRuntimeDirs(policy);
       console.log(`state dir       : ${policy.stateDir}`);
       console.log(`agent HOME      : ${policy.agentHome}`);
       console.log(`codex HOME      : ${policy.codexHome}`);
@@ -257,8 +284,23 @@ async function main(argv: string[]): Promise<number> {
       console.log(USAGE);
       return cmd ? 1 : 0;
   }
+  } catch (error) {
+    if (error instanceof StoreOpenError && error.code === 'NO_STATE' && cmd && READ_ONLY_COMMANDS.has(cmd)) {
+      if (cmd === 'list') console.log('(沒有 work)');
+      else if (cmd === 'notes') console.log('(還沒有任何記錄)');
+      else if (cmd === 'stats') console.log('works: 0   attempts: 0   retries: 0\n\noutcome 分佈\n  (無)');
+      else console.error(cmd === 'prompt' ? '找不到 attempt' : '找不到 work');
+      return ['list', 'notes', 'stats'].includes(cmd) ? 0 : 1;
+    }
+    throw error;
+  } finally {
+    store?.close();
+    ownership?.release();
+  }
 }
 
-main(process.argv.slice(2))
-  .then((code) => process.exit(code))
-  .catch((e: unknown) => { console.error(`error: ${(e as Error).message}\n${(e as Error).stack ?? ''}`); process.exit(1); });
+if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  main(process.argv.slice(2))
+    .then((code) => process.exit(code))
+    .catch((e: unknown) => { console.error(`error: ${(e as Error).message}\n${(e as Error).stack ?? ''}`); process.exit(1); });
+}

@@ -7,6 +7,14 @@ import { buildManifest } from './context/manifest.ts';
 import { applyBudget } from './context/budget.ts';
 import { compilePrompt } from './prompt/compiler.ts';
 import { CodexDriver, type PreparedCodexRun, type CodexRunResult } from './runtime/codex-driver.ts';
+import { ensureRuntimeDirs } from './runtime/isolation.ts';
+import {
+  acquireExecutionOwnership,
+  inspectExecutionOwnership,
+  type DriverExecutionState,
+  type ExecutionOwnership,
+  OwnershipError,
+} from './runtime/ownership.ts';
 import { parseRuntimeResult, type ParseOutcome } from './runtime/result.ts';
 import { baseRevision, snapshotDirty, observeGit, gitDiffEvidence, pathPolicyEvidence,
   type DirtyEntry, type GitObservation } from './evidence/git.ts';
@@ -29,7 +37,12 @@ export interface RuntimeDriver {
     attemptId: string; workspace: string; mode: Mode;
     promptText: string; approvedSkillPaths: readonly string[];
   }): PreparedCodexRun;
-  run(run: PreparedCodexRun): Promise<CodexRunResult>;
+  run(run: PreparedCodexRun, onState?: (state: DriverExecutionState) => void): Promise<CodexRunResult>;
+}
+
+interface OwnershipContext {
+  state: DriverExecutionState;
+  update(state: DriverExecutionState): void;
 }
 
 /** prepareAttempt 的三段之間傳遞的東西。attempt 是同一個物件參考被逐段補齊，不複製。 */
@@ -103,7 +116,14 @@ export class Orchestrator {
 
   // ---------------------------------------------------------------- work
 
-  createWork(input: { request: string; workspace: string; title?: string; successCriteria?: string[] }): Work {
+  createWork(
+    input: { request: string; workspace: string; title?: string; successCriteria?: string[] },
+    ownership?: ExecutionOwnership,
+  ): Work {
+    return this.withOwnershipSync(ownership, () => this.createWorkOwned(input));
+  }
+
+  private createWorkOwned(input: { request: string; workspace: string; title?: string; successCriteria?: string[] }): Work {
     const snapshot = loadSnapshot(input.workspace, this.policy);  // fail fast：沒有 contract 就不建 work
     const parsed = parseRequest(input.request);
     const workId = newId('W');
@@ -152,7 +172,11 @@ export class Orchestrator {
   }
 
   /** 使用者回覆 → 只累積 Decision，不累積 conversation（§13）。 */
-  answer(workId: string, text: string): DecisionRecord[] {
+  answer(workId: string, text: string, ownership?: ExecutionOwnership): DecisionRecord[] {
+    return this.withOwnershipSync(ownership, () => this.answerOwned(workId, text));
+  }
+
+  private answerOwned(workId: string, text: string): DecisionRecord[] {
     const work = this.requireWork(workId);
     const messageId = this.store.insertMessage('user', text, workId);
     const parsed = parseRequest(text);
@@ -183,11 +207,22 @@ export class Orchestrator {
    * → 收 evidence 並判定。切開是為了讓每段的前後順序看得見 —— 特別是
    * baseline 必須在 insertAttempt 之前、retry budget 必須用準備當下的 attempts。
    */
-  async runAttempt(workId: string, opts?: { retryOf?: string; noBaseline?: boolean }): Promise<AttemptReport> {
+  async runAttempt(
+    workId: string,
+    opts?: { retryOf?: string; noBaseline?: boolean; ownership?: ExecutionOwnership },
+  ): Promise<AttemptReport> {
+    return this.withOwnership(opts?.ownership, (context) => this.runAttemptOwned(workId, opts, context));
+  }
+
+  private async runAttemptOwned(
+    workId: string,
+    opts: { retryOf?: string; noBaseline?: boolean } | undefined,
+    ownership: OwnershipContext,
+  ): Promise<AttemptReport> {
     const work = this.requireWork(workId);
     const prepared = await this.prepareAttempt(work, opts);
     if (prepared.kind === 'short_circuit') return prepared.report;
-    const exec = await this.executeRuntime(prepared);
+    const exec = await this.executeRuntime(prepared, ownership);
     return this.collectAndDecide(prepared, exec, opts);
   }
 
@@ -283,7 +318,7 @@ export class Orchestrator {
   }
 
   /** runtime 執行 + §22 protocol 解析。這一段是唯一會呼叫外部 agent 的地方。 */
-  private async executeRuntime(p: ReadyAttempt): Promise<RuntimeExecution> {
+  private async executeRuntime(p: ReadyAttempt, ownership: OwnershipContext): Promise<RuntimeExecution> {
     const { work, contract, attempt, admissions, prompt } = p;
 
     // Codex 執行（§21）
@@ -295,7 +330,12 @@ export class Orchestrator {
       attemptId: attempt.id, workspace: work.workspace, mode: contract.mode,
       promptText: prompt.text, approvedSkillPaths: skillPaths,
     });
-    const run = await this.driver.run(prepared);
+    ownership.update({ phase: 'prepared', child: null, quiesced: true });
+    ownership.update({ phase: 'launching', child: null, quiesced: false });
+    const run = await this.driver.run(prepared, (state) => ownership.update(state));
+    if (ownership.state.phase !== 'stopped' || !ownership.state.quiesced) {
+      throw new OwnershipError('OWNER_UNKNOWN', inspectExecutionOwnership(this.policy.stateDir));
+    }
     this.store.putArtifact('runtime_stdout', run.stdout, 'log');
     if (run.stderr) this.store.putArtifact('runtime_stderr', run.stderr, 'log');
 
@@ -394,7 +434,18 @@ export class Orchestrator {
 
   // ---------------------------------------------------------------- retry / recovery
 
-  async retry(workId: string, opts?: { noBaseline?: boolean }): Promise<AttemptReport> {
+  async retry(
+    workId: string,
+    opts?: { noBaseline?: boolean; ownership?: ExecutionOwnership },
+  ): Promise<AttemptReport> {
+    return this.withOwnership(opts?.ownership, (context) => this.retryOwned(workId, opts, context));
+  }
+
+  private async retryOwned(
+    workId: string,
+    opts: { noBaseline?: boolean } | undefined,
+    ownership: OwnershipContext,
+  ): Promise<AttemptReport> {
     const work = this.requireWork(workId);
     const attempts = this.store.listAttempts(workId);
     const last = attempts.at(-1);
@@ -406,11 +457,15 @@ export class Orchestrator {
       this.applyWorkState(workId, decision);
       return { attempt: last, decision, evidence: this.store.listEvidence(last.id), response: buildResponse({ attempt: last, decision, evidence: this.store.listEvidence(last.id), notExecuted: [] }) };
     }
-    return this.runAttempt(workId, { retryOf: last.id, noBaseline: opts?.noBaseline });
+    return this.runAttemptOwned(workId, { retryOf: last.id, noBaseline: opts?.noBaseline }, ownership);
   }
 
   /** §D5：不得直接 auto-rerun 同一 Attempt。啟動時把殘留 RUNNING 標成 RECOVERY_REQUIRED。 */
-  markCrashedAttempts(): Attempt[] {
+  markCrashedAttempts(ownership?: ExecutionOwnership): Attempt[] {
+    return this.withOwnershipSync(ownership, () => this.markCrashedAttemptsOwned());
+  }
+
+  private markCrashedAttemptsOwned(): Attempt[] {
     const stuck = this.store.attemptsByStatus('RUNNING');
     for (const a of stuck) {
       a.status = 'RECOVERY_REQUIRED';
@@ -423,7 +478,11 @@ export class Orchestrator {
   }
 
   /** 對 RECOVERY_REQUIRED 的 attempt 重新收集 evidence，由使用者決定接受或重試。 */
-  async recover(workId: string): Promise<AttemptReport> {
+  async recover(workId: string, ownership?: ExecutionOwnership): Promise<AttemptReport> {
+    return this.withOwnership(ownership, () => this.recoverOwned(workId));
+  }
+
+  private async recoverOwned(workId: string): Promise<AttemptReport> {
     const work = this.requireWork(workId);
     const contract = this.currentContract(work);
     const attempt = this.store.listAttempts(workId).at(-1);
@@ -497,6 +556,44 @@ export class Orchestrator {
     this.store.insertOutcome(work.id, attempt.id, decision.outcome, decision.reasons);
     this.applyWorkState(work.id, decision);
     return { attempt, decision, evidence: [], response: buildResponse({ attempt, decision, evidence: [], notExecuted: ['codex 未啟動'] }) };
+  }
+
+  private withOwnershipSync<T>(ownership: ExecutionOwnership | undefined, action: () => T): T {
+    const acquired = ownership ?? acquireExecutionOwnership(this.policy.stateDir);
+    if (ownership && !ownership.validate()) {
+      throw new OwnershipError('OWNER_UNKNOWN', inspectExecutionOwnership(this.policy.stateDir));
+    }
+    try {
+      return action();
+    } finally {
+      if (!ownership) acquired.release();
+    }
+  }
+
+  private async withOwnership<T>(
+    ownership: ExecutionOwnership | undefined,
+    action: (context: OwnershipContext) => Promise<T>,
+  ): Promise<T> {
+    const acquired = ownership ?? acquireExecutionOwnership(this.policy.stateDir);
+    if (ownership && !ownership.validate()) {
+      throw new OwnershipError('OWNER_UNKNOWN', inspectExecutionOwnership(this.policy.stateDir));
+    }
+    ensureRuntimeDirs(this.policy);
+    const policyStateDir = this.policy.stateDir;
+    const context: OwnershipContext = {
+      state: { phase: 'not_started', child: null, quiesced: true },
+      update(state) {
+        context.state = state;
+        if (!acquired.update(state)) {
+          throw new OwnershipError('OWNER_UNKNOWN', inspectExecutionOwnership(policyStateDir));
+        }
+      },
+    };
+    try {
+      return await action(context);
+    } finally {
+      if (!ownership) acquired.release(context.state);
+    }
   }
 }
 
