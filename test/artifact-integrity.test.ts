@@ -1,14 +1,26 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { execFileSync, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import {
-  lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync,
+  existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync,
+  writeFileSync,
 } from 'node:fs';
 import { syncBuiltinESMExports } from 'node:module';
 import { tmpdir } from 'node:os';
-import { basename, join } from 'node:path';
+import { basename, join, relative } from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { Store } from '../src/trace/store.ts';
+
+function runStoreChild(state: string, body: string) {
+  const storeUrl = pathToFileURL(join(process.cwd(), 'src/trace/store.ts')).href;
+  return spawnSync(process.execPath, ['--input-type=module', '--eval', `
+    import { Store } from ${JSON.stringify(storeUrl)};
+    const store = new Store(${JSON.stringify(state)});
+    try { ${body} } finally { store.close(); }
+  `], { encoding: 'utf8', timeout: 1_000 });
+}
 
 test('readVerifiedArtifact reports a missing artifact record', () => {
   const state = mkdtempSync(join(tmpdir(), 'harness-artifact-'));
@@ -108,7 +120,7 @@ test('readVerifiedArtifact rejects a byte-length mismatch', () => {
   }
 });
 
-test('readVerifiedArtifact identifies payload I/O errors', () => {
+test('readVerifiedArtifact rejects a directory as a non-regular payload', () => {
   const state = mkdtempSync(join(tmpdir(), 'harness-artifact-'));
   const store = new Store(state);
   try {
@@ -118,10 +130,47 @@ test('readVerifiedArtifact identifies payload I/O errors', () => {
 
     const result = store.readVerifiedArtifact(artifact.id);
     assert.equal(result.status, 'corrupt');
-    assert.equal(result.reason, 'io_error');
-    assert.ok(result.code);
+    assert.equal(result.reason, 'non_regular_file');
   } finally {
     store.close();
+    rmSync(state, { recursive: true, force: true });
+  }
+});
+
+test('readVerifiedArtifact rejects a FIFO without blocking', () => {
+  const state = mkdtempSync(join(tmpdir(), 'harness-artifact-'));
+  const store = new Store(state);
+  const path = join(store.artifactDir, 'fifo.txt');
+  try {
+    execFileSync('/usr/bin/mkfifo', [path]);
+    store.db.prepare('insert into artifacts(id, kind, hash, path, bytes, created_at) values (?,?,?,?,?,?)')
+      .run('AR_fifo', 'fifo', createHash('sha256').update('').digest('hex'), path, 0, new Date().toISOString());
+
+    const child = runStoreChild(state, `process.stdout.write(JSON.stringify(store.readVerifiedArtifact('AR_fifo')));`);
+
+    assert.equal(child.status, 0, child.error?.message ?? child.stderr);
+    assert.deepEqual(JSON.parse(child.stdout), {
+      status: 'corrupt', id: 'AR_fifo', reason: 'non_regular_file',
+    });
+  } finally {
+    store.close();
+    rmSync(state, { recursive: true, force: true });
+  }
+});
+
+test('readVerifiedArtifact accepts an equivalent absolute artifact path after a relative open', () => {
+  const state = mkdtempSync(join(tmpdir(), 'harness-artifact-'));
+  const relativeState = relative(process.cwd(), state);
+  const writer = new Store(relativeState);
+  const artifact = writer.putArtifact('relative', 'payload');
+  writer.close();
+  const reader = new Store(state, { readOnly: true });
+  try {
+    assert.deepEqual(reader.readVerifiedArtifact(artifact.id), {
+      status: 'verified', id: artifact.id, hash: artifact.hash, content: Buffer.from('payload'),
+    });
+  } finally {
+    reader.close();
     rmSync(state, { recursive: true, force: true });
   }
 });
@@ -174,6 +223,20 @@ test('putArtifact keeps identical payloads with different extensions separate', 
     assert.equal(text.hash, json.hash);
     assert.notEqual(text.path, json.path);
     assert.deepEqual(readdirSync(store.artifactDir).sort(), [`${text.hash}.json`, `${text.hash}.txt`]);
+  } finally {
+    store.close();
+    rmSync(state, { recursive: true, force: true });
+  }
+});
+
+test('putArtifact rejects an unsafe extension before publishing a payload', () => {
+  const state = mkdtempSync(join(tmpdir(), 'harness-artifact-'));
+  const store = new Store(state);
+  try {
+    assert.throws(() => store.putArtifact('escape', 'payload', '../../../escaped'), /invalid artifact extension/i);
+    assert.equal(existsSync(join(state, 'escaped')), false);
+    assert.deepEqual(readdirSync(store.artifactDir), []);
+    assert.equal((store.db.prepare('select count(*) as count from artifacts').get() as { count: number }).count, 0);
   } finally {
     store.close();
     rmSync(state, { recursive: true, force: true });
@@ -238,6 +301,32 @@ test('putArtifact replaces a matching symlink before recording its reference', (
     assert.equal(store.readVerifiedArtifact(artifact.id).status, 'verified');
   } finally {
     store.close();
+    rmSync(state, { recursive: true, force: true });
+  }
+});
+
+test('putArtifact replaces a FIFO without blocking', () => {
+  const state = mkdtempSync(join(tmpdir(), 'harness-artifact-'));
+  const initialized = new Store(state);
+  initialized.close();
+  const content = 'fifo replacement';
+  const hash = createHash('sha256').update(content).digest('hex');
+  const path = join(state, 'artifacts', `${hash}.txt`);
+  try {
+    execFileSync('/usr/bin/mkfifo', [path]);
+
+    const child = runStoreChild(state, `process.stdout.write(JSON.stringify(store.putArtifact('fifo', ${JSON.stringify(content)})));`);
+
+    assert.equal(child.status, 0, child.error?.message ?? child.stderr);
+    assert.equal(lstatSync(path).isFile(), true);
+    assert.equal(readFileSync(path, 'utf8'), content);
+    const verifier = new Store(state);
+    try {
+      assert.equal((verifier.db.prepare('select count(*) as count from artifacts').get() as { count: number }).count, 1);
+    } finally {
+      verifier.close();
+    }
+  } finally {
     rmSync(state, { recursive: true, force: true });
   }
 });

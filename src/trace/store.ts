@@ -1,9 +1,9 @@
 import { DatabaseSync } from 'node:sqlite';
 import {
-  closeSync, constants, existsSync, fsyncSync, mkdirSync, openSync, readFileSync, renameSync, rmSync,
-  writeFileSync,
+  closeSync, constants, existsSync, fstatSync, fsyncSync, mkdirSync, openSync, readFileSync, renameSync,
+  rmSync, writeFileSync,
 } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
 import { newId, nowIso } from '../ids.ts';
 import { CURRENT_SCHEMA_VERSION, migrate, rethrowAfterRollback, validateSchema } from './migrations.ts';
@@ -11,6 +11,8 @@ import type {
   Work, WorkContract, Attempt, DecisionRecord, EvidenceRecord,
   Outcome, WorkState, AttemptStatus,
 } from '../types.ts';
+
+const ARTIFACT_READ_FLAGS = constants.O_RDONLY | constants.O_NONBLOCK | constants.O_NOFOLLOW;
 
 // §29：append-only trace + artifact store。MVP 不做 Event Sourcing。
 export type EventType =
@@ -161,6 +163,7 @@ export class Store {
 
   // ---- artifacts (§29 大內容不進 event) ----
   putArtifact(kind: string, content: string | Buffer, ext = 'txt'): { id: string; hash: string; path: string } {
+    if (!/^[A-Za-z0-9_-]+$/.test(ext)) throw new Error(`invalid artifact extension: ${ext}`);
     if (this.readOnly) throw new Error('read-only store cannot write artifacts');
     const buf = Buffer.isBuffer(content) ? content : Buffer.from(content, 'utf8');
     const hash = createHash('sha256').update(buf).digest('hex');
@@ -168,11 +171,13 @@ export class Store {
     const path = join(this.artifactDir, `${hash}.${ext}`);
     let valid = false;
     try {
-      const descriptor = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+      const descriptor = openSync(path, ARTIFACT_READ_FLAGS);
       try {
-        const persisted = readFileSync(descriptor);
-        valid = persisted.length === buf.length
-          && createHash('sha256').update(persisted).digest('hex') === hash;
+        if (fstatSync(descriptor).isFile()) {
+          const persisted = readFileSync(descriptor);
+          valid = persisted.length === buf.length
+            && createHash('sha256').update(persisted).digest('hex') === hash;
+        }
       } finally {
         closeSync(descriptor);
       }
@@ -196,8 +201,9 @@ export class Store {
         throw error;
       }
     }
-    const fileDescriptor = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+    const fileDescriptor = openSync(path, ARTIFACT_READ_FLAGS);
     try {
+      if (!fstatSync(fileDescriptor).isFile()) throw new Error('artifact payload is not a regular file');
       const persisted = readFileSync(fileDescriptor);
       if (persisted.length !== buf.length
         || createHash('sha256').update(persisted).digest('hex') !== hash) {
@@ -224,11 +230,16 @@ export class Store {
       hash: string; path: string; bytes: number;
     } | undefined;
     if (!row) return { status: 'missing', id, reason: 'record_missing' };
-    if (dirname(row.path) !== this.artifactDir) return { status: 'corrupt', id, reason: 'invalid_path' };
+    const artifactDir = resolve(this.artifactDir);
+    const path = resolve(row.path);
+    if (dirname(path) !== artifactDir) return { status: 'corrupt', id, reason: 'invalid_path' };
     try {
-      const descriptor = openSync(row.path, constants.O_RDONLY | constants.O_NOFOLLOW);
+      const descriptor = openSync(path, ARTIFACT_READ_FLAGS);
       let content: Buffer;
       try {
+        if (!fstatSync(descriptor).isFile()) {
+          return { status: 'corrupt', id, reason: 'non_regular_file' };
+        }
         content = readFileSync(descriptor);
       } finally {
         closeSync(descriptor);
