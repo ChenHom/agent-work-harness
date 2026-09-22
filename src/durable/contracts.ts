@@ -3,7 +3,8 @@ import type { RuntimeExecutionIdentity } from './runtime-state.ts';
 type DurableWorkflowStatus =
   | 'GENERATING'
   | 'DISPATCHING'
-  | 'WAITING_CALLBACK'
+  | 'WAITING_EXTERNAL'
+  | 'RETRY_WAIT'
   | 'RECONCILING'
   | 'VALIDATING'
   | 'SUCCEEDED'
@@ -17,10 +18,44 @@ export interface DurableWorkflowInput {
   value: string;
   generatedText: string;
   callbackTimeoutMs: number;
+  callbackSourceVersion?: number;
+  callbackDedupeLimit?: number;
+  lookupDelayCount?: number;
+  reconcileDelayMs?: number;
+  maxReconcileAttempts?: number;
+  historyEventLimit?: number;
 }
 
 export interface DurableCallback {
+  eventId: string;
+  sourceVersion: number;
+  sequence: number;
   operationId: string;
+  receiptRef: string;
+}
+
+export interface DurableCallbackInbox {
+  recentEvents: DurableCallback[];
+  lastSequence: number;
+  acceptedEventId?: string;
+  acceptedReceiptRef?: string;
+  acceptedTransitionCount: number;
+  ignoredCount: number;
+  conflictReason?: string;
+}
+
+interface DurableContinueAsNewState {
+  budgetWorkId: string;
+  deadlineAtMs: number;
+  outputArtifactId?: string;
+  operationId?: string;
+  operationStatus?: string;
+  receiptArtifactId?: string;
+  callbackInbox: DurableCallbackInbox;
+}
+
+export interface DurableContinueAsNewInput extends DurableWorkflowInput {
+  carry: DurableContinueAsNewState;
 }
 
 export interface DurableWorkflowSnapshot {
@@ -28,6 +63,10 @@ export interface DurableWorkflowSnapshot {
   outputArtifactId?: string;
   operationId?: string;
   operationStatus?: string;
+  receiptArtifactId?: string;
+  acceptedCallbackCount?: number;
+  ignoredCallbackCount?: number;
+  callbackConflict?: string;
 }
 
 export interface DurableWorkflowResult extends DurableWorkflowSnapshot {
@@ -47,6 +86,7 @@ interface DispatchOperationInput {
   workId: string;
   businessId: string;
   value: string;
+  lookupDelayCount?: number;
   authority: RuntimeExecutionIdentity;
 }
 

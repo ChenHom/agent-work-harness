@@ -81,6 +81,7 @@ export function createDurableActivities(options: DurableActivityOptions): Durabl
         payload: {
           businessId: input.businessId, value: input.value,
           behavior: 'lose-response-after-effect' as const,
+          lookupDelayCount: input.lookupDelayCount,
         },
         precondition: 'resource absent', reconciliationStrategy: 'lookup stable idempotency key',
         compensationPolicy: 'remove exact owned version', authorizationRef: `work:${input.workId}`,

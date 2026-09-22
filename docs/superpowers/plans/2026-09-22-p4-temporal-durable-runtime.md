@@ -62,12 +62,12 @@ Failure to run the server or any required scenario blocks the selection. Do not 
 
 **Files:** `src/durable/workflows.ts`, `src/durable/signals.ts`, `src/durable/contracts.ts`, `test/durable-signals.test.ts`, `test/durable-timers.test.ts`
 
-- [ ] Accept callbacks as Temporal signals carrying a stable event ID, source version/sequence, operation identity, and receipt reference.
-- [ ] Persist bounded dedupe and ordering state in Workflow history. Duplicate delivery is ignored; stale/out-of-order delivery cannot regress state; a conflicting event becomes explicit manual review.
-- [ ] Represent `WAITING_EXTERNAL` and `RETRY_WAIT` with Workflow timers, never process sleeps or model calls.
-- [ ] Race callbacks, cancellation, and deadlines deterministically. A late valid callback may resolve an in-flight operation but cannot reopen a finalized transition.
-- [ ] Define history-growth limits and Continue-As-New input so required event IDs, outstanding operations, deadlines, budgets, and artifact references survive rollover.
-- [ ] Run targeted signal/timer tests, one full `npm run check`, review against this task, and commit.
+- [x] Accept callbacks as Temporal signals carrying a stable event ID, source version/sequence, operation identity, and receipt reference.
+- [x] Persist bounded dedupe and ordering state in Workflow history. Duplicate delivery is ignored; stale/out-of-order delivery cannot regress state; a conflicting event becomes explicit manual review.
+- [x] Represent `WAITING_EXTERNAL` and `RETRY_WAIT` with Workflow timers, never process sleeps or model calls.
+- [x] Race callbacks and deadlines deterministically. A late valid callback may resolve an in-flight operation but cannot reopen a finalized transition. Cancellation/quiescence remains Task 5 so it has one implementation owner.
+- [x] Define history-growth limits and Continue-As-New input so required event IDs, outstanding operations, deadlines, budgets, and artifact references survive rollover.
+- [x] Run targeted signal/timer tests, one full `npm run check`, review against this task, and commit.
 
 ## Task 5: Cancellation, quiescence, and managed publication
 
