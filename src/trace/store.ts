@@ -25,7 +25,7 @@ export type EventType =
   | 'runtime.protocol_failed' | 'evidence.collected' | 'outcome.decided'
   | 'work.completed' | 'work.blocked' | 'work.state_changed'
   | 'recovery.required' | 'recovery.observed'
-  | 'plan.proposed' | 'checkpoint.created'
+  | 'plan.proposed' | 'plan.activated' | 'plan.superseded' | 'checkpoint.created'
   | 'usage.note';   // 人對結果的判讀 —— 機器不知道 evidence 判錯了，只有人知道
 
 export type VerifiedArtifact =
@@ -509,6 +509,50 @@ export class Store {
     const rows = this.db.prepare('select json from plans where work_id = ? order by version, id')
       .all(workId) as Array<{ json: string }>;
     return rows.map((row) => JSON.parse(row.json) as WorkPlan);
+  }
+
+  getActivePlan(workId: string): WorkPlan | null {
+    const row = this.db.prepare("select json from plans where work_id = ? and status = 'ACTIVE'")
+      .get(workId) as { json: string } | undefined;
+    return row ? JSON.parse(row.json) as WorkPlan : null;
+  }
+
+  activatePlan(id: string): WorkPlan {
+    return this.withTransaction(() => {
+      const candidate = this.getPlan(id);
+      if (!candidate) throw new Error(`PLAN_NOT_FOUND: ${id}`);
+      if (candidate.status !== 'VALIDATED') {
+        throw new Error(`PLAN_INVALID_STATE: ${id} is ${candidate.status}`);
+      }
+      const work = this.getWork(candidate.workId);
+      if (!work) throw new Error(`PLAN_INVALID: work ${candidate.workId} does not exist`);
+      if (work.currentContractVersion !== candidate.contractVersion) {
+        throw new Error(`PLAN_STALE: contract v${candidate.contractVersion} is not current v${work.currentContractVersion}`);
+      }
+      const active = this.getActivePlan(candidate.workId);
+      if (candidate.parentPlanId) {
+        if (active?.id !== candidate.parentPlanId) {
+          throw new Error(`PLAN_STALE: parent ${candidate.parentPlanId} is no longer active`);
+        }
+      } else if (active) {
+        throw new Error(`PLAN_STALE: initial proposal expected no active parent, found ${active.id}`);
+      }
+
+      if (active) {
+        const superseded: WorkPlan = { ...active, status: 'SUPERSEDED' };
+        this.db.prepare("update plans set status = 'SUPERSEDED', json = ? where id = ? and status = 'ACTIVE'")
+          .run(JSON.stringify(superseded), active.id);
+        this.event('plan.superseded', { planId: active.id, successorPlanId: candidate.id }, candidate.workId);
+      }
+      const activated: WorkPlan = { ...candidate, status: 'ACTIVE', activatedAt: nowIso() };
+      const changed = this.db.prepare("update plans set status = 'ACTIVE', json = ? where id = ? and status = 'VALIDATED'")
+        .run(JSON.stringify(activated), candidate.id);
+      if (Number(changed.changes) !== 1) throw new Error(`PLAN_STALE: candidate ${candidate.id} changed`);
+      this.event('plan.activated', {
+        planId: activated.id, branchId: activated.branchId, contractVersion: activated.contractVersion,
+      }, activated.workId);
+      return activated;
+    });
   }
 
   insertMilestones(milestones: readonly PlanMilestone[]): void {

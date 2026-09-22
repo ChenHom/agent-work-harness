@@ -70,24 +70,24 @@ Commit: `feat: persist versioned plans and logical checkpoints`.
 - Modify: `src/trace/store.ts`
 - Modify: `test/plans.test.ts`
 
-- [ ] **Step 1: Write failing validation tests**
+- [x] **Step 1: Write failing validation tests**
 
 Cover stable acceptance IDs; duplicate/missing milestone IDs; missing/self/cyclic dependencies; unknown acceptance IDs; incomplete acceptance coverage; stale contract version; stale parent plan; and two proposals racing to activate from the same parent.
 
-- [ ] **Step 2: Verify RED**
+- [x] **Step 2: Verify RED**
 
 Run `node --test test/plans.test.ts`.
 Expected: `PlanService` and activation behavior are absent.
 
-- [ ] **Step 3: Implement criterion IDs and proposal validation**
+- [x] **Step 3: Implement criterion IDs and proposal validation**
 
 Derive IDs as `AC-<first 16 hex chars of SHA-256(canonical criterion text)>`. Require every contract criterion to be referenced by at least one required milestone. Validate the ordered milestone list and dependency graph without adding a general scheduler.
 
-- [ ] **Step 4: Implement compare-and-swap activation**
+- [x] **Step 4: Implement compare-and-swap activation**
 
 `propose()` freezes `contractVersion` and `parentPlanId`. `activate(planId)` runs in one transaction: current contract must match, the expected parent must still be active, any prior active plan becomes `SUPERSEDED`, and only the candidate becomes `ACTIVE`. A competing candidate receives `PLAN_STALE` and remains proposed.
 
-- [ ] **Step 5: Verify and commit**
+- [x] **Step 5: Verify and commit**
 
 Run `npm run typecheck` and `node --test test/plans.test.ts test/store-transaction.test.ts`.
 Commit: `feat: validate and activate milestone plans`.
