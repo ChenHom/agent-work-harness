@@ -70,7 +70,7 @@ export class CompensationWorkflow {
   }
 
   async dispatch(compensationId: string, authority: DispatchAuthority): Promise<Compensation> {
-    await assertDispatchAuthority(authority, 'dispatch', 'compensation dispatch admission');
+    await assertDispatchAuthority(authority, 'compensate', 'compensation dispatch admission');
     if (!authority.beginOperation()) throw new Error('OWNER_ACTIVE: another operation is running');
     try {
       const current = this.requireCompensation(compensationId);
@@ -92,9 +92,9 @@ export class CompensationWorkflow {
         this.store.insertCompensationAttempt(attempt);
       });
       try {
-        await assertDispatchAuthority(authority, 'dispatch', 'compensation provider dispatch');
+        await assertDispatchAuthority(authority, 'compensate', 'compensation provider dispatch');
         const receipt = await this.adapter.compensate(request);
-        if (!await authority.validate('dispatch')) {
+        if (!await authority.validate('compensate')) {
           throw new AdapterDispatchError('ambiguous', 'OWNER_UNKNOWN: lost after compensation call');
         }
         return this.recordSuccess(dispatched, attempt, receipt);

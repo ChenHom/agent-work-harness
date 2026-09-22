@@ -50,6 +50,7 @@ test('Temporal authority allows quiescent reconciliation but blocks new dispatch
     () => state,
   );
   assert.equal(await authority.validate('reconcile'), true);
+  assert.equal(await authority.validate('compensate'), true);
   assert.equal(await authority.validate('dispatch'), false);
   assert.equal(await authority.validate('publish'), false);
 });

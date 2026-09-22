@@ -1,6 +1,6 @@
 import type { ExecutionOwnership } from './ownership.ts';
 
-export type DispatchAction = 'dispatch' | 'reconcile' | 'publish';
+export type DispatchAction = 'dispatch' | 'reconcile' | 'compensate' | 'publish';
 
 export interface DispatchAuthority {
   beginOperation(): boolean;

@@ -7,6 +7,9 @@ type DurableWorkflowStatus =
   | 'RETRY_WAIT'
   | 'RECONCILING'
   | 'VALIDATING'
+  | 'CANCEL_REQUESTED'
+  | 'QUIESCING'
+  | 'CANCELLED'
   | 'SUCCEEDED'
   | 'WAITING_USER'
   | 'FAILED';
@@ -24,6 +27,11 @@ export interface DurableWorkflowInput {
   reconcileDelayMs?: number;
   maxReconcileAttempts?: number;
   historyEventLimit?: number;
+  dispatchDelayMs?: number;
+  lookupDelayMs?: number;
+  compensationDelayMs?: number;
+  compensationBehavior?: 'success' | 'fail-before-effect' | 'lose-response-after-effect' | 'unsupported';
+  maxCompensationAttempts?: number;
 }
 
 export interface DurableCallback {
@@ -67,13 +75,12 @@ export interface DurableWorkflowSnapshot {
   acceptedCallbackCount?: number;
   ignoredCallbackCount?: number;
   callbackConflict?: string;
+  compensationId?: string;
+  compensationStatus?: string;
 }
 
 export interface DurableWorkflowResult extends DurableWorkflowSnapshot {
   validationVerdict: 'pass' | 'fail' | 'unknown';
-  outputArtifactId: string;
-  operationId: string;
-  receiptArtifactId?: string;
   validationArtifactId?: string;
 }
 
@@ -87,6 +94,10 @@ interface DispatchOperationInput {
   businessId: string;
   value: string;
   lookupDelayCount?: number;
+  dispatchDelayMs?: number;
+  lookupDelayMs?: number;
+  compensationDelayMs?: number;
+  compensationBehavior?: 'success' | 'fail-before-effect' | 'lose-response-after-effect' | 'unsupported';
   authority: RuntimeExecutionIdentity;
 }
 
@@ -113,6 +124,18 @@ interface ValidateTerminalInput {
   receiptArtifactId?: string;
 }
 
+interface CompensateOperationInput {
+  operationId: string;
+  businessId: string;
+  authority: RuntimeExecutionIdentity;
+}
+
+export interface CompensateOperationResult {
+  compensationId: string;
+  compensationStatus: string;
+  receiptArtifactId?: string;
+}
+
 export interface ValidateTerminalResult {
   verdict: 'pass' | 'fail';
   validationArtifactId: string;
@@ -122,5 +145,6 @@ export interface DurableActivities {
   generateOutput(input: GenerateOutputInput): Promise<{ outputArtifactId: string }>;
   dispatchOperation(input: DispatchOperationInput): Promise<DispatchOperationResult>;
   reconcileOperation(input: ReconcileOperationInput): Promise<ReconcileOperationResult>;
+  compensateOperation(input: CompensateOperationInput): Promise<CompensateOperationResult>;
   validateTerminal(input: ValidateTerminalInput): Promise<ValidateTerminalResult>;
 }

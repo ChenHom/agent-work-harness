@@ -73,12 +73,12 @@ Failure to run the server or any required scenario blocks the selection. Do not 
 
 **Files:** `src/durable/workflows.ts`, `src/durable/publication.ts`, `src/durable/contracts.ts`, `test/durable-cancellation.test.ts`, `test/publication-fence.test.ts`
 
-- [ ] Implement `CANCEL_REQUESTED -> QUIESCING -> CANCELLED`. Stop scheduling new model/tool work after the request.
-- [ ] Track started Activities and operations until each is completed, definitively absent, reconciled, compensated, or assigned to `WAITING_USER`. UNKNOWN never becomes cancelled merely because a lease or timeout expired.
-- [ ] Write each epoch's artifacts to an isolated staging area. Only an active authority may atomically publish a manifest/reference into the canonical workspace.
-- [ ] Reject a delayed stale worker at the publish gate and retain its staging output for diagnosis/retention policy. Do not claim database fencing blocks arbitrary direct filesystem writes.
-- [ ] Prove cancellation during dispatch, lost response, reconciliation, and compensation produces the documented non-terminal or terminal state.
-- [ ] Run targeted cancellation/publication tests, one full `npm run check`, review against this task, and commit.
+- [x] Implement `CANCEL_REQUESTED -> QUIESCING -> CANCELLED`. Stop scheduling new model/tool work after the request.
+- [x] Track started Activities and operations until each is completed, definitively absent, reconciled, compensated, or assigned to `WAITING_USER`. UNKNOWN never becomes cancelled merely because a lease or timeout expired.
+- [x] Write each epoch's artifacts to an isolated staging area. Only an active authority may atomically publish a manifest/reference into the canonical workspace.
+- [x] Reject a delayed stale worker at the publish gate and retain its staging output for diagnosis/retention policy. Do not claim database fencing blocks arbitrary direct filesystem writes.
+- [x] Prove cancellation during dispatch, lost response, reconciliation, and compensation produces the documented non-terminal or terminal state.
+- [x] Run targeted cancellation/publication tests, one full `npm run check`, review against this task, and commit.
 
 ## Task 6: Version compatibility, safe replay, and history rollover
 

@@ -5,6 +5,7 @@ import type {
 } from './contracts.ts';
 
 export const durableCallbackSignal = defineSignal<[DurableCallback]>('durable.callback');
+export const durableCancelSignal = defineSignal('durable.cancel');
 export const durableStateQuery = defineQuery<DurableWorkflowSnapshot>('durable.state');
 export const DEFAULT_CALLBACK_DEDUPE_LIMIT = 128;
 const DEFAULT_DURABLE_HISTORY_EVENT_LIMIT = 10_000;

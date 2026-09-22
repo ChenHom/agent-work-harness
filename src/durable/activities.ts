@@ -1,13 +1,15 @@
 import { ApplicationFailure } from '@temporalio/activity';
 import { BudgetLedger } from '../budget/ledger.ts';
 import { TemporalDispatchAuthority, type RuntimeExecutionReader } from './runtime-state.ts';
+import { CompensationWorkflow } from '../tools/compensation.ts';
 import { FakeProvider } from '../tools/fake-provider.ts';
 import { OperationGateway } from '../tools/gateway.ts';
 import { canonicalJson } from '../tools/operations.ts';
 import { Store } from '../trace/store.ts';
 import type { Work } from '../types.ts';
 import type {
-  DispatchOperationResult, DurableActivities, ReconcileOperationResult, ValidateTerminalResult,
+  CompensateOperationResult, DispatchOperationResult, DurableActivities, ReconcileOperationResult,
+  ValidateTerminalResult,
 } from './contracts.ts';
 
 interface DurableActivityOptions {
@@ -82,6 +84,10 @@ export function createDurableActivities(options: DurableActivityOptions): Durabl
           businessId: input.businessId, value: input.value,
           behavior: 'lose-response-after-effect' as const,
           lookupDelayCount: input.lookupDelayCount,
+          dispatchDelayMs: input.dispatchDelayMs,
+          lookupDelayMs: input.lookupDelayMs,
+          compensationDelayMs: input.compensationDelayMs,
+          compensationBehavior: input.compensationBehavior,
         },
         precondition: 'resource absent', reconciliationStrategy: 'lookup stable idempotency key',
         compensationPolicy: 'remove exact owned version', authorizationRef: `work:${input.workId}`,
@@ -104,6 +110,32 @@ export function createDurableActivities(options: DurableActivityOptions): Durabl
         operationStatus: operation.status,
         ...(operation.lastReconciliationArtifactId
           ? { receiptArtifactId: operation.lastReconciliationArtifactId } : {}),
+      };
+    })),
+
+    compensateOperation: (input) => activityBoundary(() => withStore(async (store): Promise<CompensateOperationResult> => {
+      const compensationWorkflow = new CompensationWorkflow(
+        store, new BudgetLedger(store), new FakeProvider(options.providerLedgerPath),
+      );
+      const prepared = compensationWorkflow.prepare({
+        operationId: input.operationId,
+        authorizationRef: `cancel:${input.operationId}`,
+        resourceIdentity: `fake-${input.businessId}`,
+        ownershipRef: input.businessId,
+        targetVersion: 'fake-v1',
+      });
+      const authority = new TemporalDispatchAuthority(input.authority, options.readRuntime);
+      const compensation = prepared.status === 'PREPARED'
+        ? await compensationWorkflow.dispatch(prepared.id, authority)
+        : prepared.status === 'UNKNOWN' || prepared.status === 'RECONCILING' || prepared.status === 'DISPATCHED'
+          ? await compensationWorkflow.reconcile(prepared.id, authority)
+          : prepared;
+      const receiptArtifactId = store.listCompensationAttempts(compensation.id)
+        .find((attempt) => attempt.status === 'SUCCEEDED' && attempt.receiptArtifactId)?.receiptArtifactId
+        ?? compensation.lastReconciliationArtifactId;
+      return {
+        compensationId: compensation.id, compensationStatus: compensation.status,
+        ...(receiptArtifactId ? { receiptArtifactId } : {}),
       };
     })),
 

@@ -1,6 +1,7 @@
 import { existsSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { randomUUID } from 'node:crypto';
+import { setTimeout as delay } from 'node:timers/promises';
 import type { AdapterCapabilitySnapshot } from '../types.ts';
 import {
   AdapterDispatchError, type CompensationDispatchRequest, type CompensationLookupOutcome,
@@ -13,6 +14,9 @@ interface FakePayload {
   value: string;
   behavior?: 'success' | 'fail-before-effect' | 'lose-response-before-effect' | 'lose-response-after-effect';
   lookupDelayCount?: number;
+  dispatchDelayMs?: number;
+  lookupDelayMs?: number;
+  compensationDelayMs?: number;
   lookupMode?: 'normal' | 'partial' | 'unsupported';
   compensationBehavior?: 'success' | 'fail-before-effect' | 'lose-response-after-effect' | 'unsupported';
 }
@@ -25,6 +29,8 @@ interface FakeEffect {
   receipt: OperationReceipt;
   lookupCount: number;
   lookupDelayCount: number;
+  lookupDelayMs: number;
+  compensationDelayMs: number;
   lookupMode: 'normal' | 'partial' | 'unsupported';
   compensationBehavior: 'success' | 'fail-before-effect' | 'lose-response-after-effect' | 'unsupported';
   removed: boolean;
@@ -58,6 +64,7 @@ export class FakeProvider implements OperationAdapter {
 
   async execute(request: OperationDispatchRequest): Promise<OperationReceipt> {
     const payload = this.payload(request.payload);
+    if (payload.dispatchDelayMs) await delay(payload.dispatchDelayMs);
     const ledger = this.readLedger();
     const byKey = ledger.effects.find((effect) => effect.idempotencyKey === request.idempotencyKey);
     const byIdentity = ledger.effects.find((effect) => effect.businessId === payload.businessId);
@@ -87,6 +94,8 @@ export class FakeProvider implements OperationAdapter {
       businessId: payload.businessId, idempotencyKey: request.idempotencyKey,
       canonicalInputHash: request.canonicalInputHash, value: payload.value, receipt,
       lookupCount: 0, lookupDelayCount: payload.lookupDelayCount ?? 0,
+      lookupDelayMs: payload.lookupDelayMs ?? 0,
+      compensationDelayMs: payload.compensationDelayMs ?? 0,
       lookupMode: payload.lookupMode ?? 'normal',
       compensationBehavior: payload.compensationBehavior ?? 'success', removed: false,
     });
@@ -106,6 +115,7 @@ export class FakeProvider implements OperationAdapter {
     const effect = ledger.effects.find((candidate) => candidate.idempotencyKey === request.idempotencyKey
       || candidate.businessId === payload.businessId);
     if (!effect) return completionWindowClosed ? { kind: 'confirmed-no-effect' } : { kind: 'pending' };
+    if (effect.lookupDelayMs) await delay(effect.lookupDelayMs);
     if (effect.idempotencyKey !== request.idempotencyKey
       || effect.businessId !== payload.businessId
       || effect.canonicalInputHash !== request.canonicalInputHash) {
@@ -148,6 +158,7 @@ export class FakeProvider implements OperationAdapter {
     if (effect.compensationBehavior === 'fail-before-effect') {
       throw new AdapterDispatchError('definitive-no-effect', 'FAKE_COMPENSATION_REJECTED');
     }
+    if (effect.compensationDelayMs) await delay(effect.compensationDelayMs);
     const receipt: CompensationReceipt = {
       providerReceiptId: `comp-receipt-${randomUUID()}`, externalId: request.externalId,
       removedVersion: request.resourceVersion, actualUnits: 3,
