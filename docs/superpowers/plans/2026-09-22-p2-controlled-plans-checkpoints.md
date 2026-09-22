@@ -155,24 +155,24 @@ Commit: `feat: invalidate milestones after artifact replacement`.
 - Modify: `test/attempt-flow.test.ts`
 - Modify: `test/compiler.test.ts`
 
-- [ ] **Step 1: Write failing lifecycle tests**
+- [x] **Step 1: Write failing lifecycle tests**
 
 Cover: active plan requires a milestone selection; attempt freezes plan/branch/milestone; plan and milestone appear in control context; first required milestone SUCCESS leaves Work `ACTIVE`; final required milestone SUCCESS makes Work `DONE`; stale-plan success cannot satisfy the active plan; failed attempts do not complete milestones.
 
-- [ ] **Step 2: Verify RED**
+- [x] **Step 2: Verify RED**
 
 Run `node --test test/attempt-flow.test.ts test/compiler.test.ts`.
 Expected: attempts have no plan binding and first success completes Work.
 
-- [ ] **Step 3: Bind preparation to active plan**
+- [x] **Step 3: Bind preparation to active plan**
 
 Extend `runAttempt`/`retry` options with `milestoneId`. Resolve the active plan before input snapshot creation, validate the milestone belongs to it, and persist plan/branch/milestone IDs in Attempt and authoritative manifest control items.
 
-- [ ] **Step 4: Atomically complete milestones**
+- [x] **Step 4: Atomically complete milestones**
 
 Extend terminal finalization so a successful planned attempt marks its milestone complete in the same transaction. Work becomes `DONE` only when every required milestone of the still-active plan is complete and the completing attempt passed the repository mechanical checks; otherwise it returns to `ACTIVE`.
 
-- [ ] **Step 5: Verify and commit**
+- [x] **Step 5: Verify and commit**
 
 Run `npm run typecheck` and `node --test test/attempt-flow.test.ts test/compiler.test.ts test/store-transaction.test.ts`.
 Commit: `feat: bind attempts and completion to active milestones`.

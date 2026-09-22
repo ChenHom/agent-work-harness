@@ -11,6 +11,7 @@ import { Store } from '../src/trace/store.ts';
 import { Orchestrator, type RuntimeDriver, type EvidenceCollector } from '../src/orchestrator.ts';
 import { DEFAULT_POLICY } from '../src/policy.ts';
 import { CONTRACT_REL_PATH } from '../src/repo/contract.ts';
+import { PlanService, acceptanceCriterionId } from '../src/work/plans.ts';
 import type {
   AttemptInputSnapshot, AttemptOutputRefs, AttemptPhase,
   GlobalPolicy, RuntimeResult, VerificationBaseline,
@@ -133,6 +134,117 @@ function setup(opts: { request?: string; retryBudget?: number; checks?: unknown;
     cleanup: () => { store.close(); rmSync(base, { recursive: true, force: true }); },
   };
 }
+
+function activateTwoMilestonePlan(store: Store, workId: string, parentPlanId?: string) {
+  const work = store.getWork(workId)!;
+  const contract = store.getContract(workId, work.currentContractVersion)!;
+  const plans = new PlanService(store);
+  const proposed = plans.propose({
+    workId, contractVersion: contract.version, parentPlanId,
+    branchId: 'B-lifecycle', reason: parentPlanId ? 'replacement' : 'initial',
+    milestones: [
+      {
+        id: 'M-1', objective: 'implement',
+        acceptanceCriterionIds: [acceptanceCriterionId(contract.successCriteria[0]!)],
+      },
+      {
+        id: 'M-2', objective: 'verify', dependsOn: ['M-1'],
+        acceptanceCriterionIds: [acceptanceCriterionId(contract.successCriteria[1]!)],
+      },
+    ],
+  });
+  plans.activate(proposed.plan.id);
+  return proposed.plan;
+}
+
+// ---------------------------------------------------------------- P2 planned lifecycle
+
+test('active plan requires a milestone and completes Work only after all required milestones pass', async () => {
+  const s = setup({ evidence: fakeEvidence({ changedPaths: ['src/a.ts'] }) });
+  try {
+    const plan = activateTwoMilestonePlan(s.store, s.work.id);
+    await assert.rejects(() => s.orch.runAttempt(s.work.id), /PLAN_MILESTONE_REQUIRED/);
+    assert.equal(s.store.listAttempts(s.work.id).length, 0);
+
+    const first = await s.orch.runAttempt(s.work.id, { milestoneId: 'M-1' });
+    assert.equal(first.decision.outcome, 'SUCCESS');
+    assert.equal(first.attempt.planId, plan.id);
+    assert.equal(first.attempt.branchId, plan.branchId);
+    assert.equal(first.attempt.milestoneId, 'M-1');
+    assert.equal(s.store.getMilestone(plan.id, 'M-1')!.status, 'COMPLETED');
+    assert.equal(s.store.getMilestone(plan.id, 'M-2')!.status, 'PENDING');
+    assert.equal(s.store.getWork(s.work.id)!.state, 'ACTIVE');
+
+    const snapshotArtifact = s.store.readVerifiedArtifact(first.attempt.inputSnapshotArtifactId!);
+    assert.equal(snapshotArtifact.status, 'verified');
+    if (snapshotArtifact.status !== 'verified') throw new Error('snapshot unavailable');
+    const snapshot = JSON.parse(snapshotArtifact.content.toString('utf8')) as AttemptInputSnapshot;
+    const control = snapshot.manifest.control.map((entry) => entry.content ?? '').join('\n');
+    assert.match(control, new RegExp(`plan: ${plan.id}`));
+    assert.match(control, /milestone: M-1/);
+
+    const second = await s.orch.runAttempt(s.work.id, { milestoneId: 'M-2' });
+    assert.equal(second.decision.outcome, 'SUCCESS');
+    assert.equal(s.store.getMilestone(plan.id, 'M-2')!.status, 'COMPLETED');
+    assert.equal(s.store.getWork(s.work.id)!.state, 'DONE');
+  } finally {
+    s.cleanup();
+  }
+});
+
+test('failed planned attempts do not complete their milestone', async () => {
+  const s = setup({
+    evidence: fakeEvidence({ changedPaths: ['src/a.ts'], verification: failingVerification() }),
+  });
+  try {
+    const plan = activateTwoMilestonePlan(s.store, s.work.id);
+    const result = await s.orch.runAttempt(s.work.id, { milestoneId: 'M-1' });
+    assert.equal(result.decision.outcome, 'RETRYABLE_FAILURE');
+    assert.equal(s.store.getMilestone(plan.id, 'M-1')!.status, 'PENDING');
+    assert.equal(s.store.getWork(s.work.id)!.state, 'ACTIVE');
+  } finally {
+    s.cleanup();
+  }
+});
+
+test('success from a superseded plan cannot satisfy the active plan', async () => {
+  let replacePlan = (): void => {};
+  const evidence = fakeEvidence({ changedPaths: ['src/a.ts'] });
+  const observe = evidence.observeGit.bind(evidence);
+  evidence.observeGit = async (...args) => {
+    replacePlan();
+    return observe(...args);
+  };
+  const s = setup({ evidence });
+  try {
+    const original = activateTwoMilestonePlan(s.store, s.work.id);
+    const work = s.store.getWork(s.work.id)!;
+    const contract = s.store.getContract(s.work.id, work.currentContractVersion)!;
+    const plans = new PlanService(s.store);
+    const replacement = plans.propose({
+      workId: s.work.id, contractVersion: contract.version, parentPlanId: original.id,
+      branchId: original.branchId, reason: 'new route', milestones: [
+        {
+          id: 'M-1', objective: 'implement differently',
+          acceptanceCriterionIds: [acceptanceCriterionId(contract.successCriteria[0]!)],
+        },
+        {
+          id: 'M-2', objective: 'verify', dependsOn: ['M-1'],
+          acceptanceCriterionIds: [acceptanceCriterionId(contract.successCriteria[1]!)],
+        },
+      ],
+    }).plan;
+    replacePlan = () => { plans.activate(replacement.id); replacePlan = () => {}; };
+
+    const result = await s.orch.runAttempt(s.work.id, { milestoneId: 'M-1' });
+    assert.equal(result.decision.outcome, 'SUCCESS');
+    assert.equal(s.store.getMilestone(original.id, 'M-1')!.status, 'PENDING');
+    assert.equal(s.store.getMilestone(replacement.id, 'M-1')!.status, 'PENDING');
+    assert.equal(s.store.getWork(s.work.id)!.state, 'ACTIVE');
+  } finally {
+    s.cleanup();
+  }
+});
 
 // ---------------------------------------------------------------- 規則 1：retry budget
 

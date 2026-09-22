@@ -25,8 +25,8 @@ export type EventType =
   | 'runtime.protocol_failed' | 'evidence.collected' | 'outcome.decided'
   | 'work.completed' | 'work.blocked' | 'work.state_changed'
   | 'recovery.required' | 'recovery.observed'
-  | 'plan.proposed' | 'plan.activated' | 'plan.superseded' | 'checkpoint.created'
-  | 'dependency.artifact_replaced' | 'milestone.stale'
+  | 'plan.proposed' | 'plan.activated' | 'plan.superseded' | 'plan.completed' | 'checkpoint.created'
+  | 'dependency.artifact_replaced' | 'milestone.completed' | 'milestone.stale'
   | 'usage.note';   // 人對結果的判讀 —— 機器不知道 evidence 判錯了，只有人知道
 
 export type VerifiedArtifact =
@@ -419,13 +419,50 @@ export class Store {
       this.event('outcome.decided', {
         outcome: input.outcome, reasons: input.reasons, evidenceIds,
       }, input.attempt.workId, input.attempt.id);
+
+      let workState = input.workState;
+      if (input.outcome === 'SUCCESS'
+        && input.attempt.planId && input.attempt.branchId && input.attempt.milestoneId) {
+        const activePlan = this.getActivePlan(input.attempt.workId);
+        const attemptMatchesActivePlan = activePlan?.id === input.attempt.planId
+          && activePlan.branchId === input.attempt.branchId
+          && activePlan.contractVersion === input.attempt.contractVersion
+          && persistedWork.currentContractVersion === input.attempt.contractVersion;
+        if (activePlan && attemptMatchesActivePlan) {
+          const milestone = this.getMilestone(activePlan.id, input.attempt.milestoneId);
+          if (!milestone) {
+            throw new Error(`STATE_CONFLICT: milestone ${input.attempt.milestoneId} is absent from active plan`);
+          }
+          if (milestone.status !== 'COMPLETED') {
+            this.setMilestoneStatus(activePlan.id, milestone.id, 'COMPLETED', input.attempt.id);
+            this.event('milestone.completed', {
+              planId: activePlan.id, milestoneId: milestone.id, attemptId: input.attempt.id,
+            }, input.attempt.workId, input.attempt.id);
+          }
+          const allRequiredComplete = this.listMilestones(activePlan.id)
+            .filter((candidate) => candidate.required)
+            .every((candidate) => candidate.status === 'COMPLETED');
+          workState = allRequiredComplete ? 'DONE' : 'ACTIVE';
+          if (allRequiredComplete) {
+            const completedPlan: WorkPlan = { ...activePlan, status: 'COMPLETED' };
+            const planUpdate = this.db.prepare("update plans set status = 'COMPLETED', json = ? where id = ? and status = 'ACTIVE'")
+              .run(JSON.stringify(completedPlan), activePlan.id);
+            if (Number(planUpdate.changes) !== 1) {
+              throw new Error(`STATE_CONFLICT: plan ${activePlan.id} changed during finalization`);
+            }
+            this.event('plan.completed', { planId: activePlan.id }, input.attempt.workId, input.attempt.id);
+          }
+        } else {
+          workState = 'ACTIVE';
+        }
+      }
       const workUpdate = this.db.prepare('update works set state = ? where id = ? and state = ?')
-        .run(input.workState, input.attempt.workId, input.expectedWorkState);
+        .run(workState, input.attempt.workId, input.expectedWorkState);
       if (Number(workUpdate.changes) !== 1) {
         throw new Error(`STATE_CONFLICT: work ${input.attempt.workId} changed during finalization`);
       }
-      this.event('work.state_changed', { state: input.workState }, input.attempt.workId);
-      if (input.outcome === 'SUCCESS') this.event('work.completed', {}, input.attempt.workId);
+      this.event('work.state_changed', { state: workState }, input.attempt.workId);
+      if (workState === 'DONE') this.event('work.completed', {}, input.attempt.workId);
       if (input.outcome === 'BLOCKED' || input.outcome === 'POLICY_VIOLATION') {
         this.event('work.blocked', { reasons: input.reasons }, input.attempt.workId);
       }

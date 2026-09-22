@@ -66,6 +66,12 @@ interface RuntimeExecution {
   parsed: ParseOutcome;
 }
 
+interface AttemptOptions {
+  retryOf?: string;
+  noBaseline?: boolean;
+  milestoneId?: string;
+}
+
 export interface EvidenceCollector {
   baseRevision(workspace: string): Promise<string>;
   snapshotDirty(workspace: string): Promise<DirtyEntry[]>;
@@ -210,14 +216,14 @@ export class Orchestrator {
    */
   async runAttempt(
     workId: string,
-    opts?: { retryOf?: string; noBaseline?: boolean; ownership?: ExecutionOwnership },
+    opts?: AttemptOptions & { ownership?: ExecutionOwnership },
   ): Promise<AttemptReport> {
     return this.withOwnership(opts?.ownership, (context) => this.runAttemptOwned(workId, opts, context));
   }
 
   private async runAttemptOwned(
     workId: string,
-    opts: { retryOf?: string; noBaseline?: boolean } | undefined,
+    opts: AttemptOptions | undefined,
     ownership: OwnershipContext,
   ): Promise<AttemptReport> {
     const work = this.requireWork(workId);
@@ -231,9 +237,23 @@ export class Orchestrator {
    * 準備階段。兩條路徑不會進 runtime（contract 無效、skill admission 被拒），
    * 用 short_circuit 回報，讓 runAttempt 自己決定要不要往下走。
    */
-  private async prepareAttempt(work: Work, opts?: { retryOf?: string; noBaseline?: boolean }): Promise<PreparedAttempt> {
+  private async prepareAttempt(work: Work, opts?: AttemptOptions): Promise<PreparedAttempt> {
     const workId = work.id;
     const contract = this.currentContract(work);
+    const activePlan = this.store.getActivePlan(workId);
+    let milestoneId: string | undefined;
+    if (activePlan) {
+      if (activePlan.contractVersion !== contract.version) {
+        throw new Error(`PLAN_STALE: active plan ${activePlan.id} uses contract v${activePlan.contractVersion}`);
+      }
+      if (!opts?.milestoneId) throw new Error(`PLAN_MILESTONE_REQUIRED: active plan ${activePlan.id}`);
+      if (!this.store.getMilestone(activePlan.id, opts.milestoneId)) {
+        throw new Error(`PLAN_MILESTONE_INVALID: ${opts.milestoneId} does not belong to plan ${activePlan.id}`);
+      }
+      milestoneId = opts.milestoneId;
+    } else if (opts?.milestoneId) {
+      throw new Error(`PLAN_NOT_ACTIVE: cannot select milestone ${opts.milestoneId}`);
+    }
 
     // §34.1.1：每次 Attempt 前重新 load → validate → hash → freeze
     let snapshot: RepositoryContractSnapshot;
@@ -264,6 +284,7 @@ export class Orchestrator {
     const attemptId = newId('A');
     const attempt: Attempt = {
       id: attemptId, workId, number: priorAttempts.length + 1, mode: contract.mode,
+      planId: activePlan?.id, branchId: activePlan?.branchId, milestoneId,
       contractVersion: contract.version, contractSnapshotHash: snapshot.hash,
       baseRevision: 'pending', promptArtifactId: '', runtime: 'codex', status: 'CREATED', phase: 'preparing',
       retryOf: opts?.retryOf, startedAt: nowIso(),
@@ -523,14 +544,14 @@ export class Orchestrator {
 
   async retry(
     workId: string,
-    opts?: { noBaseline?: boolean; ownership?: ExecutionOwnership },
+    opts?: { noBaseline?: boolean; milestoneId?: string; ownership?: ExecutionOwnership },
   ): Promise<AttemptReport> {
     return this.withOwnership(opts?.ownership, (context) => this.retryOwned(workId, opts, context));
   }
 
   private async retryOwned(
     workId: string,
-    opts: { noBaseline?: boolean } | undefined,
+    opts: { noBaseline?: boolean; milestoneId?: string } | undefined,
     ownership: OwnershipContext,
   ): Promise<AttemptReport> {
     const work = this.requireWork(workId);
@@ -544,7 +565,11 @@ export class Orchestrator {
       this.applyWorkState(workId, decision);
       return { attempt: last, decision, evidence: this.store.listEvidence(last.id), response: buildResponse({ attempt: last, decision, evidence: this.store.listEvidence(last.id), notExecuted: [] }) };
     }
-    return this.runAttemptOwned(workId, { retryOf: last.id, noBaseline: opts?.noBaseline }, ownership);
+    return this.runAttemptOwned(workId, {
+      retryOf: last.id,
+      noBaseline: opts?.noBaseline,
+      milestoneId: opts?.milestoneId ?? last.milestoneId,
+    }, ownership);
   }
 
   /** §D5：不得直接 auto-rerun 同一 Attempt。啟動時把殘留 RUNNING 標成 RECOVERY_REQUIRED。 */

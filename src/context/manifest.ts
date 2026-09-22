@@ -65,6 +65,11 @@ export function buildManifest(input: {
       ].join('\n'),
     }),
   ];
+  if (attempt.planId && attempt.branchId && attempt.milestoneId) {
+    control.push(item('control', 'authority', 0, `plan:${attempt.planId}`, {
+      content: `plan: ${attempt.planId}\nbranch: ${attempt.branchId}\nmilestone: ${attempt.milestoneId}`,
+    }));
+  }
   for (const c of contract.constraints) {
     control.push(item('control', 'authority', 0, `contract:${contract.id}`, { content: c }));
   }

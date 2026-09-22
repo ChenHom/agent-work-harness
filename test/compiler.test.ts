@@ -64,6 +64,15 @@ test('authority 與 repo data 分離：pointer 只給路徑，並標明 repo 內
   assert.match(text, /- test: npm test \(required\)/);
 });
 
+test('planned attempt keeps plan, branch, and milestone identity in authority control', () => {
+  const planned: Attempt = { ...attempt, planId: 'P-2', branchId: 'B-2', milestoneId: 'M-2' };
+  const manifest = buildManifest({ contract, attempt: planned, authority, decisions, snapshot, userContext: [] });
+  const planControl = manifest.control.find((entry) => entry.source === 'plan:P-2');
+  assert.equal(planControl?.trust, 'authority');
+  assert.equal(planControl?.priority, 0);
+  assert.equal(planControl?.content, 'plan: P-2\nbranch: B-2\nmilestone: M-2');
+});
+
 test('§16：budget 先砍 pointer，authority 一律保留', () => {
   const many = { ...snapshot, contract: { ...snapshot.contract, context: { entryPoints: Array.from({ length: 300 }, (_, i) => `dir${i}/`) } } };
   const m = buildManifest({ contract, attempt, authority, decisions, snapshot: many, userContext: [] });
