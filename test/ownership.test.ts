@@ -1,8 +1,9 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync, existsSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { spawnSync } from 'node:child_process';
 import { Store } from '../src/trace/store.ts';
 import { Orchestrator, type EvidenceCollector, type RuntimeDriver } from '../src/orchestrator.ts';
 import { DEFAULT_POLICY } from '../src/policy.ts';
@@ -62,6 +63,65 @@ async function captureCli(policy: GlobalPolicy, args: string[]): Promise<{ code:
     console.error = error;
   }
 }
+
+test('process death after dispatch intent preserves one attempt and occupied ownership', () => {
+  const base = mkdtempSync(join(tmpdir(), 'harness-owner-crash-'));
+  const policy = policyIn(base);
+  const repo = repoIn(base);
+  const idsPath = join(base, 'ids.json');
+  const orchestratorModule = new URL('../src/orchestrator.ts', import.meta.url).href;
+  const storeModule = new URL('../src/trace/store.ts', import.meta.url).href;
+  const child = spawnSync(process.execPath, ['--input-type=module', '--eval', `
+    import { writeFileSync } from 'node:fs';
+    import { Store } from ${JSON.stringify(storeModule)};
+    import { Orchestrator } from ${JSON.stringify(orchestratorModule)};
+    const policy = JSON.parse(process.env.CRASH_POLICY);
+    const store = new Store(policy.stateDir);
+    const evidence = {
+      async baseRevision() { return 'base'; }, async snapshotDirty() { return []; },
+      async observeGit() { throw new Error('unreachable'); }, async collectBaseline() { return []; },
+      async runVerification() { throw new Error('unreachable'); },
+    };
+    let workId = '';
+    const driver = {
+      prepare(input) {
+        writeFileSync(process.env.CRASH_IDS, JSON.stringify({ workId, attemptId: input.attemptId }));
+        process.kill(process.pid, 'SIGKILL');
+        return {};
+      },
+      async run() { throw new Error('unreachable'); },
+    };
+    const orch = new Orchestrator(policy, store, () => {}, { driver, evidence });
+    const work = orch.createWork({ request: 'crash boundary', workspace: process.env.CRASH_REPO });
+    workId = work.id;
+    await orch.runAttempt(work.id, { noBaseline: true });
+  `], {
+    env: {
+      ...process.env, CRASH_POLICY: JSON.stringify(policy), CRASH_REPO: repo, CRASH_IDS: idsPath,
+    },
+    timeout: 5_000,
+  });
+  assert.equal(child.signal, 'SIGKILL');
+  const ids = JSON.parse(readFileSync(idsPath, 'utf8')) as { workId: string; attemptId: string };
+  const reopened = new Store(policy.stateDir);
+  try {
+    const attempts = reopened.listAttempts(ids.workId);
+    assert.equal(attempts.length, 1);
+    assert.equal(attempts[0]!.id, ids.attemptId);
+    assert.equal(attempts[0]!.status, 'RUNNING');
+    assert.equal(attempts[0]!.phase, 'dispatch_intent');
+    assert.equal(reopened.lastOutcome(ids.workId), null);
+    assert.equal(reopened.events(ids.workId).some((event) => event.type === 'attempt.completed'), false);
+    assert.equal(inspectExecutionOwnership(policy.stateDir).occupied, true);
+    assert.throws(() => acquireExecutionOwnership(policy.stateDir), (error) => {
+      assert.match(String((error as Error).message), /OWNER_(ACTIVE|UNKNOWN)/);
+      return true;
+    });
+  } finally {
+    reopened.close();
+    rmSync(base, { recursive: true, force: true });
+  }
+});
 
 test('exclusive ownership blocks a second executor and exposes metadata', () => {
   const base = mkdtempSync(join(tmpdir(), 'harness-owner-'));

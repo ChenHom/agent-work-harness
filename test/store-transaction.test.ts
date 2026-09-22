@@ -1,8 +1,9 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, readdirSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { spawnSync } from 'node:child_process';
 import { Store } from '../src/trace/store.ts';
 import type { Attempt, EvidenceRecord, Work } from '../src/types.ts';
 
@@ -30,6 +31,64 @@ function seededStore(state: string): { store: Store; work: Work; attempt: Attemp
 function completed(attempt: Attempt): Attempt {
   return { ...attempt, status: 'COMPLETED', endedAt: '2026-09-20T00:02:00.000Z' };
 }
+
+const STORE_MODULE = new URL('../src/trace/store.ts', import.meta.url).href;
+
+function crashChild(state: string, body: string): ReturnType<typeof spawnSync> {
+  return spawnSync(process.execPath, ['--input-type=module', '--eval', `
+    import { Store } from ${JSON.stringify(STORE_MODULE)};
+    const store = new Store(process.env.CRASH_STATE);
+    store.db.function('crash_now', () => { process.kill(process.pid, 'SIGKILL'); return 0; });
+    ${body}
+  `], { env: { ...process.env, CRASH_STATE: state }, timeout: 5_000 });
+}
+
+test('process death after artifact publish leaves no database reference to an incomplete payload', () => {
+  const state = mkdtempSync(join(tmpdir(), 'harness-store-crash-'));
+  new Store(state).close();
+  const child = crashChild(state, `
+    store.db.exec("create trigger crash_artifact before insert on artifacts begin select crash_now(); end");
+    store.putArtifact('prompt', 'fully-published-before-crash', 'txt');
+  `);
+  assert.equal(child.signal, 'SIGKILL');
+
+  const reopened = new Store(state);
+  try {
+    assert.equal((reopened.db.prepare('select count(*) as n from artifacts').get() as { n: number }).n, 0);
+    const files = readdirSync(reopened.artifactDir);
+    assert.equal(files.some((name) => name.includes('.tmp-')), false);
+    assert.equal(files.length, 1, 'a complete unreferenced payload is safe for later garbage collection');
+  } finally {
+    reopened.close();
+    rmSync(state, { recursive: true, force: true });
+  }
+});
+
+test('process death between outcome insert and work update rolls back the whole terminal transition', () => {
+  const state = mkdtempSync(join(tmpdir(), 'harness-store-crash-'));
+  const seeded = seededStore(state);
+  seeded.store.close();
+  const child = crashChild(state, `
+    store.db.exec("create trigger crash_terminal before update on works when new.state = 'DONE' begin select crash_now(); end");
+    const attempt = store.getAttempt('A');
+    attempt.status = 'COMPLETED';
+    attempt.endedAt = '2026-09-20T00:02:00.000Z';
+    store.finalizeAttempt({ attempt, outcome: 'SUCCESS', reasons: ['verified'], workState: 'DONE',
+      evidenceIds: ['EV'], expectedAttemptStatus: 'RUNNING', expectedWorkState: 'RUNNING' });
+  `);
+  assert.equal(child.signal, 'SIGKILL');
+
+  const reopened = new Store(state);
+  try {
+    assert.equal(reopened.getAttempt('A')!.status, 'RUNNING');
+    assert.equal(reopened.getWork('W')!.state, 'RUNNING');
+    assert.equal(reopened.lastOutcome('W'), null);
+    assert.equal(reopened.events('W').some((event) => event.type === 'attempt.completed'), false);
+  } finally {
+    reopened.close();
+    rmSync(state, { recursive: true, force: true });
+  }
+});
 
 test('withTransaction rolls back an event when the callback throws', () => {
   const state = mkdtempSync(join(tmpdir(), 'harness-store-tx-'));
