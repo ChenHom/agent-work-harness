@@ -51,12 +51,12 @@ Failure to run the server or any required scenario blocks the selection. Do not 
 
 **Files:** `src/durable/workflows.ts`, `src/durable/activities.ts`, `src/durable/contracts.ts`, `src/durable/worker.ts`, `test/durable-workflow.test.ts`
 
-- [ ] Implement the fixed flow: generate saved output, prepare and dispatch one fake provider operation, wait for callback, reconcile uncertain delivery, and validate the terminal result.
-- [ ] Keep Workflow code deterministic. Model calls, clocks other than Workflow time, filesystem, database, Gateway, provider, and artifact operations live in Activities.
-- [ ] Save result references and receipts before later decisions. Workflow retries reuse the same Work, operation, intent, and idempotency identities.
-- [ ] Temporal owns Activity retry/backoff. Gateway refuses UNKNOWN redispatch and only reconciles; adapters do not add another automatic retry loop.
-- [ ] Separate retryable transport failure, definitive no-effect failure, unknown outcome, partial effect, policy denial, and budget exhaustion.
-- [ ] Run targeted workflow tests, one full `npm run check`, review against this task, and commit.
+- [x] Implement the fixed flow: generate saved output, prepare and dispatch one fake provider operation, wait for callback, reconcile uncertain delivery, and validate the terminal result.
+- [x] Keep Workflow code deterministic. Model calls, clocks other than Workflow time, filesystem, database, Gateway, provider, and artifact operations live in Activities.
+- [x] Save result references and receipts before later decisions. Workflow retries reuse the same Work, operation, intent, and idempotency identities.
+- [x] Temporal owns Activity retry/backoff. Gateway refuses UNKNOWN redispatch and only reconciles; adapters do not add another automatic retry loop.
+- [x] Separate retryable transport failure, definitive no-effect failure, unknown outcome, partial effect, policy denial, and budget exhaustion.
+- [x] Run targeted workflow tests, one full `npm run check`, review against this task, and commit.
 
 ## Task 4: Durable inbox, callback ordering, and deadlines
 
