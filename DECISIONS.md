@@ -88,6 +88,19 @@ agent 回報 completed、evidence 卻顯示 worktree 全無變更 → RETRYABLE_
 CLI 每次啟動先把殘留 `RUNNING` 的 attempt 標成 `RECOVERY_REQUIRED`、work 轉 `BLOCKED`，
 `harness recover <workId>` 重新收集 evidence 後交由使用者決定。
 
+**此啟動掃描方案已由 D-33 取代。** 保留本條作為歷史決策，不再代表目前行為。
+
+### D-33 [取捨] P1 採保守本機 ownership 與顯式 recovery，取代 D-19 啟動掃描
+只讀 CLI 不改 lifecycle state；mutating command 必須先取得 state directory 的單一 execution token。
+啟動時不掃描 `RUNNING` attempt，不依 PID 或 timeout 自動接手 orphan。owner／child 無法確認時保留 lock
+並回 `OWNER_UNKNOWN`。只有操作者保存 metadata 與 state backup、確認舊 harness、已知 child 和受管環境
+均已停止後，才能人工隔離舊 lock，再執行只讀 recovery。
+
+Recovery 綁定 attempt 原始 contract 與 verified input snapshot，建立新的 recovery session，只做目前
+workspace readback 與 current policy 評估；不重跑模型或 verification，不改寫原 attempt/outcome，
+也不把最新設定補成歷史輸入。這是單主機互斥與保守人工恢復，不是自動 orphan 接手；自動 lease、
+heartbeat、execution epoch 與 supervisor 邊界留到 P4。
+
 ### D-20 [取捨] Protocol 失敗不做「請重輸出 JSON」的 in-session 重試
 §22 允許有限次重新輸出，但那需要 resume 同一個 codex session。MVP 直接判 RETRYABLE_FAILURE，
 由 retry 建立新 attempt（context 只帶 evidence，不重播 transcript）。真實使用若發現這類失敗頻繁，

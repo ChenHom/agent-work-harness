@@ -46,3 +46,23 @@
 | 4 Evidence-correct | 有測試與 E2E 覆蓋。dogfood 發現的 skip 盲區已修（pre-flight baseline，見 `docs/evidence-model.md`）；E3 provenance 仍是後續候選 |
 | 5 Recoverable | 有測試覆蓋（restart persistence + crash recovery） |
 | 6 Portable | E2E H：Python repo 只加 `.harness/config.json` 即通過 write+verify。Cross-Repo 兩站（task-tracker 36.6k 行 TS、rag-stack 10k 行 Python）各 5 個真實 work 全部收斂，Core 零修改 |
+
+## Long-running v2 G1：P1 recovery correctness
+
+| # | G1 條件 | 驗證來源 |
+|---|---|---|
+| 1 | 只讀 CLI 不改 active attempt 或 lifecycle events | `test/ownership.test.ts` paused executor query fixture |
+| 2 | 同 state directory 不同時進入兩個 driver | `test/ownership.test.ts` dual executor 與 borrowed handle fixtures |
+| 3 | owner／child 無法確認時不自動接手 | `test/ownership.test.ts` partial metadata、unknown child、crash boundary |
+| 4 | 派發前保存可驗證的 contract/repository/authority/manifest/prompt refs | `test/attempt-flow.test.ts` baseline failure 與 dispatch fixtures |
+| 5 | model 返回後、verification 前已有 durable raw/stdout refs | `test/attempt-flow.test.ts` observation/verification failure fixtures |
+| 6 | terminal attempt/outcome/work/events 原子更新 | `test/store-transaction.test.ts` rollback、idempotency、`SIGKILL` fixtures |
+| 7 | recover 使用原始 contract/snapshot 且不重跑模型 | `test/recovery.test.ts` v1→v2 repository/contract fixtures |
+| 8 | legacy/missing/corrupt inputs 明確受限且不能 SUCCESS | `test/recovery.test.ts` snapshot failure fixtures |
+| 9 | retry/recovery 保留派發計數與既有護欄 | `test/attempt-flow.test.ts` durable retry budget；既有 path/skill/Git suites |
+| 10 | migration、crash、ownership 與全套回歸通過 | `test/migrations.test.ts`、`test/store-transaction.test.ts`、`test/ownership.test.ts`；`npm run check` |
+
+2026-09-22 驗收環境：Node v24.19.0、Linux 6.8.0-124-generic x86_64。
+主機環境執行 `npm run check`：exit 0，257 pass、0 fail、0 skip，lint/typecheck/Knip 全部通過。
+受限工具沙箱執行含 Git fixture 的測試時會得到 `spawnSync git EPERM`；該結果記為環境限制，
+沒有 skip 測試檔，也沒有用這個失敗結果宣告通過，改在支援 Git process 的主機環境重跑。

@@ -139,8 +139,29 @@ verification 跑在獨立的 network namespace，只有自己的 loopback。
 代價是失去「有沒有比 agent 動手前少跑」這個判斷。
 
 **上次跑到一半被中斷**
-下次執行任何指令時會自動偵測，把該 attempt 標成 `RECOVERY_REQUIRED`、work 轉 `BLOCKED`。
-**不會自動重跑。** 用 `harness recover <workId>` 重新收集 evidence，再由你決定接受或重試。
+Harness **不會在 CLI 啟動時掃描、接手或重跑**中斷的 attempt。先執行：
+
+```bash
+harness ownership
+```
+
+如果 ownership 可正常取得，`harness recover <workId>` 會讀取該 attempt 原本凍結的 input snapshot，
+並建立獨立 recovery session。這個動作只讀取目前 workspace，不執行模型、不執行 verification、
+不做 `git reset`／`git clean`，也不會把 recovery 判成 `SUCCESS`。輸出分為「已知／未知／可採取動作」；
+要重新驗證或繼續工作，應以目前有效的 contract 建立新 attempt。
+
+若顯示 `SNAPSHOT_UNAVAILABLE` 或 `ARTIFACT_CORRUPT`，保留舊 attempt、artifact 與 evidence。
+不要用目前的 contract 或 repository config 回填歷史輸入。現況只能由新 attempt 重新凍結並驗證。
+
+**OWNER_UNKNOWN 的人工處置**
+
+1. 保存 `harness ownership` 的完整輸出，並備份整個 state directory（預設
+   `~/.local/share/agent-work-harness/`）。
+2. 確認舊 harness process、metadata 記錄的 Codex child，以及相關受管執行環境都已停止。
+   PID 不存在本身不足以證明 child 沒有留下副作用。
+3. 只要任何一項無法確認，就維持 blocked；不要刪除或改寫 `execution.lock`。
+4. 全部確認且 state 已備份後，操作者可把 `execution.lock` 移到備份位置，再執行
+   `harness recover <workId>` 做只讀觀察。P1 沒有 force-unlock 或自動 orphan 接手機制。
 
 ---
 

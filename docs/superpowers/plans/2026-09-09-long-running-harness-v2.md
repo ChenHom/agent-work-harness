@@ -128,19 +128,19 @@ Recovery session 另存 id/work_id/attempt_id/observed_at/evidence_ids/reason/st
 **Files:** `src/trace/store.ts`、`src/trace/migrations.ts`、
 `test/store-transaction.test.ts`、`test/migrations.test.ts`。
 
-- [ ] 寫 transaction rollback 測試：插入 event 後注入例外，重新開 DB 必須完全看不到該 event。
-- [ ] 寫原子 terminal 測試：在 outcome 與 work update 之間丟錯，attempt/work/outcome/event 全部維持前值。
-- [ ] 執行 `node --test test/store-transaction.test.ts test/migrations.test.ts`，確認新增行為尚未存在而失敗。
-- [ ] 新增同步 `Store.withTransaction<T>(fn: () => T): T`，BEGIN IMMEDIATE／COMMIT／ROLLBACK；
+- [x] 寫 transaction rollback 測試：插入 event 後注入例外，重新開 DB 必須完全看不到該 event。
+- [x] 寫原子 terminal 測試：在 outcome 與 work update 之間丟錯，attempt/work/outcome/event 全部維持前值。
+- [x] 執行 `node --test test/store-transaction.test.ts test/migrations.test.ts`，確認新增行為尚未存在而失敗。
+- [x] 新增同步 `Store.withTransaction<T>(fn: () => T): T`，BEGIN IMMEDIATE／COMMIT／ROLLBACK；
   明確拒絕巢狀與 Promise callback，不在 transaction 內做外部 I/O。
-- [ ] 將 terminal transition 包成 `finalizeAttempt`，一次更新 attempt、outcome、work state 與 events。
+- [x] 將 terminal transition 包成 `finalizeAttempt`，一次更新 attempt、outcome、work state 與 events。
   最終 verdict 綁定該次 evidence；相同 attempt 的相同 finalization 可安全重入，不追加第二次完成事件；
   衝突 finalization 回 STATE_CONFLICT。
-- [ ] 用 `PRAGMA user_version` 管 migration；辨識 v0 既有 schema，保留原 rows，
+- [x] 用 `PRAGMA user_version` 管 migration；辨識 v0 既有 schema，保留原 rows，
   transaction 建立 recovery_sessions 及需要的索引。未來版本拒絕寫入。
-- [ ] 加入 `Store(stateDir, { readOnly: true })`：不 mkdir、不執行 DDL/WAL pragma；
+- [x] 加入 `Store(stateDir, { readOnly: true })`：不 mkdir、不執行 DDL/WAL pragma；
   DB 不存在時回報尚無 state，不建立空 state。
-- [ ] 重跑兩個測試檔及 typecheck；通過後提交 `feat: add transactional attempt persistence`。
+- [x] 重跑兩個測試檔及 typecheck；通過後提交 `feat: add transactional attempt persistence`。
 
 代表性測試（新 API 的驗收範例，可直接放入 store-transaction.test.ts）：
 
@@ -170,23 +170,23 @@ test('transaction failure does not leave an event after reopen', () => {
 });
 ```
 
-這個單元測試只證明 transaction 邊界；Task 7 另外測 process kill，不能用丟例外替代所有 crash 測試。
+這個單元測試只證明 transaction 邊界；Task 6 另外測 process kill，不能用丟例外替代所有 crash 測試。
 
 ## 6. Task 2：Artifact integrity 與 durable refs
 
 **Files:** `src/trace/store.ts`、`test/artifact-integrity.test.ts`。
 
-- [ ] 寫空檔、missing、hash mismatch、相同內容 dedupe 測試；測試原有短 hash path 仍可讀。
-- [ ] 執行 `node --test test/artifact-integrity.test.ts`，確認損壞檔目前不會被拒絕。
-- [ ] putArtifact 改用完整 hash 檔名、同目錄 temporary file、完成寫入後原子 rename；
+- [x] 寫空檔、missing、hash mismatch、相同內容 dedupe 測試；測試原有短 hash path 仍可讀。
+- [x] 執行 `node --test test/artifact-integrity.test.ts`，確認損壞檔目前不會被拒絕。
+- [x] putArtifact 改用完整 hash 檔名、同目錄 temporary file、完成寫入後原子 rename；
   durability 契約需包含 file 與必要 directory sync，最後才 commit DB 引用。
   已存在內容必須驗證 hash，不能因 exists 就信任。
-- [ ] 新增 `Store.readVerifiedArtifact(id): VerifiedArtifact`；
+- [x] 新增 `Store.readVerifiedArtifact(id): VerifiedArtifact`；
   比對檔案長度與完整 SHA-256，I/O 錯誤留下可辨識原因，不把空 Buffer 判 missing。
-- [ ] 保留舊 `readArtifact` 呼叫端相容性；recovery／驗收逐一切到 verified API，
+- [x] 保留舊 `readArtifact` 呼叫端相容性；recovery／驗收逐一切到 verified API，
   stdout／prompt 展示遇損壞也必須明示，不能顯示不可信內容而不標註。
-- [ ] 外部 payload 發布成功但 DB insert 失敗，可留下 orphan；P1 不自動 GC。
-- [ ] 重跑 artifact 測試及現有 driver/compiler/store tests；提交 `feat: verify persisted artifact integrity`。
+- [x] 外部 payload 發布成功但 DB insert 失敗，可留下 orphan；P1 不自動 GC。
+- [x] 重跑 artifact 測試及現有 driver/compiler/store tests；提交 `feat: verify persisted artifact integrity`。
 
 代表性測試：
 
@@ -222,25 +222,25 @@ test('corrupt artifact is distinct from an empty valid artifact', () => {
 `src/orchestrator.ts`、`src/cli.ts`、`test/ownership.test.ts`、
 `test/cli.test.ts`、`test/driver.test.ts`。
 
-- [ ] 加入雙執行者 fixture：第一個 fake driver 暫停時，第二個 run 不得 prepare／修改 shared CODEX_HOME。
-- [ ] 加入查詢 fixture：執行中呼叫 list/show/trace/prompt/stats/notes/skills list，
+- [x] 加入雙執行者 fixture：第一個 fake driver 暫停時，第二個 run 不得 prepare／修改 shared CODEX_HOME。
+- [x] 加入查詢 fixture：執行中呼叫 list/show/trace/prompt/stats/notes/skills list，
   attempt 與 work state、events sequence 不得改變。
-- [ ] 執行 `node --test test/ownership.test.ts test/cli.test.ts test/driver.test.ts`，確認新 ownership 規則尚未滿足。
-- [ ] 以 state directory 下的 exclusive lock（原子 mkdir）取得單一 execution token；
+- [x] 執行 `node --test test/ownership.test.ts test/cli.test.ts test/driver.test.ts`，確認新 ownership 規則尚未滿足。
+- [x] 以 state directory 下的 exclusive lock（原子 mkdir）取得單一 execution token；
   保存 token、host、owner PID、程序啟動識別、phase、已知 child identity。
   owner metadata 尚未寫完也視為已被占用，不可因空檔清掉。
-- [ ] 覆蓋會影響執行的 mutation：new/run/retry/recover/answer、skills approve、共享 runtime config 準備；
+- [x] 覆蓋會影響執行的 mutation：new/run/retry/recover/answer、skills approve、共享 runtime config 準備；
   init／doctor 等會寫設定或啟動工具的路徑也不能繞過同一 execution boundary。
   從 Orchestrator 直接呼叫也要經 ownership wrapper；不要只在 CLI 外殼上鎖。
   token 由最外層取得並明確往內傳，不重複奪鎖。
-- [ ] 正常釋放要求 token 相符且 driver 已證明受管執行停止；
+- [x] 正常釋放要求 token 相符且 driver 已證明受管執行停止；
   launch 途中 crash／timeout 無法確認子程序時保留鎖，回 OWNER_UNKNOWN。
   P1 **不實作自動過期奪鎖**，PID 不存在也不足以證明子程序停止。
-- [ ] 移除 main 啟動時 markCrashedAttempts；
+- [x] 移除 main 啟動時 markCrashedAttempts；
   只讀命令用 readonly Store，無 DB 時只顯示空狀態。
-- [ ] 實作 ownership inspection 輸出：token、owner、phase、已知 child、blocked reason；
+- [x] 實作 ownership inspection 輸出：token、owner、phase、已知 child、blocked reason；
   不提供未經驗證的 force-unlock。異常 lock 的處置見 Task 7 runbook。
-- [ ] 驗證正常結束／throw／重複 close/error event 不會釋放別人的 token；
+- [x] 驗證正常結束／throw／重複 close/error event 不會釋放別人的 token；
   通過後提交 `fix: preserve active execution ownership across cli calls`。
 
 P1 的保證是「不自動派出第二個執行者」，不是任意 untrusted process tree 的強制終止保證。
@@ -251,24 +251,24 @@ P1 的保證是「不自動派出第二個執行者」，不是任意 untrusted 
 **Files:** `src/types.ts`、`src/orchestrator.ts`、`src/trace/store.ts`、
 `test/attempt-flow.test.ts`。
 
-- [ ] 用既有 fake driver／EvidenceCollector 測試：baseline throw 後重開 DB，
+- [x] 用既有 fake driver／EvidenceCollector 測試：baseline throw 後重開 DB，
   attempt 必須存在、inputs 可驗 hash，且 driver.calls === 0。
-- [ ] 測試：model 已返回、verification throw，stdout/raw result refs 仍可讀；
+- [x] 測試：model 已返回、verification throw，stdout/raw result refs 仍可讀；
   work 不得 DONE，recovery 能分辨 collecting 與 dispatch_intent。
-- [ ] 執行 `node --test test/attempt-flow.test.ts`，確認新 assertions 失敗。
-- [ ] 依 §4 建立完整 input snapshot，與 prompt 分開保存。
+- [x] 執行 `node --test test/attempt-flow.test.ts`，確認新 assertions 失敗。
+- [x] 依 §4 建立完整 input snapshot，與 prompt 分開保存。
   先 publish artifacts，再 transaction 插入 status=CREATED／phase=preparing 的 attempt、
   input refs 與事件，之後才跑 baseline。
-- [ ] 在呼叫 driver.prepare/run 前，持久化 dispatch_intent；
+- [x] 在呼叫 driver.prepare/run 前，持久化 dispatch_intent；
   將 launch identity 接上 ownership token，啟動後保存已知 child receipt。
-- [ ] Model 返回後立即保存 raw output／stdout／stderr 及 parse result；
+- [x] Model 返回後立即保存 raw output／stdout／stderr 及 parse result；
   保存 refs 與 phase=collecting 後才開始 verification。
-- [ ] 例外依 phase 留下原因；prepare 失敗不可假造 runtime completion；
+- [x] 例外依 phase 留下原因；prepare 失敗不可假造 runtime completion；
   執行結果不明保持 recovery required。
-- [ ] Retry 計數以 durable dispatch intent 保守計費：未派發的 prepare 失敗不扣模型 retry；
+- [x] Retry 計數以 durable dispatch intent 保守計費：未派發的 prepare 失敗不扣模型 retry；
   dispatch intent 已存在但 crash，視為可能派發並占用一次；重開 DB／換 plan 不會清零。
   用新 phase 規則兼容 legacy retryOf 計數，不改歷史資料的含義。
-- [ ] collectAndDecide 改用 Task 1 finalization；通過現有 outcome／retry 回歸與新增案例後，
+- [x] collectAndDecide 改用 Task 1 finalization；通過現有 outcome／retry 回歸與新增案例後，
   提交 `feat: persist attempt inputs and outputs before recovery boundaries`。
 
 驗證不變量：
@@ -284,57 +284,57 @@ work=DONE        ⇒ terminal attempt／outcome／對應 events 同筆 transacti
 **Files:** `src/orchestrator.ts`、`src/trace/store.ts`、
 `src/response.ts`、`src/cli-format.ts`、`test/recovery.test.ts`。
 
-- [ ] 建立 attempt v1 fixture，中斷後把 repository checks 改成 v2；
+- [x] 建立 attempt v1 fixture，中斷後把 repository checks 改成 v2；
   recover 不得把 v2 檢查當 v1 evidence，也不得重新呼叫模型。
-- [ ] 建立 contract mode／deniedPaths 改變 fixture；
+- [x] 建立 contract mode／deniedPaths 改變 fixture；
   recover 必須引用 attempt.contractVersion，並拒絕違反目前強制 policy 的執行。
-- [ ] 覆蓋 legacy 無 snapshot、損壞 snapshot、不適用狀態、重複 recover 與目前仍有 owner。
-- [ ] 執行 `node --test test/recovery.test.ts`，確認目前 recover 使用最新 snapshot 的測試失敗。
-- [ ] 先做 ownership／status 檢查；缺原始 inputs 時回 SNAPSHOT_UNAVAILABLE，
+- [x] 覆蓋 legacy 無 snapshot、損壞 snapshot、不適用狀態、重複 recover 與目前仍有 owner。
+- [x] 執行 `node --test test/recovery.test.ts`，確認目前 recover 使用最新 snapshot 的測試失敗。
+- [x] 先做 ownership／status 檢查；缺原始 inputs 時回 SNAPSHOT_UNAVAILABLE，
   可顯示有標註的新 readback，但不得替舊 attempt 補造成功證據。
-- [ ] 建立獨立 recovery session，保存輸入 artifact ref、當前 repo readback、
+- [x] 建立獨立 recovery session，保存輸入 artifact ref、當前 repo readback、
   最新 policy 評估及 evidence IDs。原 attempt 的原始 snapshot／terminal outcome 不變。
-- [ ] Recovery 預設做只讀 observation，不自動跑可能寫入的 verification。
+- [x] Recovery 預設做只讀 observation，不自動跑可能寫入的 verification。
   需要再驗證時由新 attempt 執行凍結 checks；明確標示使用原始或新 contract，
   並檢查當前 policy、workspace 及 verification scripts 的變更。
-- [ ] 輸出「已知／未知／可採取動作」；
+- [x] 輸出「已知／未知／可採取動作」；
   recovery 不直接 SUCCESS，保留由有效授權建立新 attempt 的既有模式。
-- [ ] 原始 snapshot 為證據，不是 Git 備份，不 reset／clean／覆蓋既有 worktree。
-- [ ] 通過 recovery 與 attempt-flow 回歸；提交 `fix: bind recovery evidence to original attempt inputs`。
+- [x] 原始 snapshot 為證據，不是 Git 備份，不 reset／clean／覆蓋既有 worktree。
+- [x] 通過 recovery 與 attempt-flow 回歸；提交 `fix: bind recovery evidence to original attempt inputs`。
 
 ## 10. Task 6：遷移與恢復測試矩陣
 
 **Files:** `test/migrations.test.ts`、`test/recovery.test.ts`、
 `test/store-transaction.test.ts`、`test/ownership.test.ts`。
 
-- [ ] 用基線 SCHEMA 與固定 fixture rows 建立 v0 DB，再由 v2 重開；
+- [x] 用基線 SCHEMA 與固定 fixture rows 建立 v0 DB，再由 v2 重開；
   work/attempt/contract/evidence 的 identity、內容、events 順序不變。
-- [ ] 在 migration 中途注入例外，重開應仍是完整 v0；重新 migration 可成功。
-- [ ] 未知較新 schema 拒絕 mutation，不能把 user_version 改回較舊數字。
-- [ ] 在 artifact 完成／DB commit 前，及 outcome／work update 間強制終止測試程序；
+- [x] 在 migration 中途注入例外，重開應仍是完整 v0；重新 migration 可成功。
+- [x] 未知較新 schema 拒絕 mutation，不能把 user_version 改回較舊數字。
+- [x] 在 artifact 完成／DB commit 前，及 outcome／work update 間強制終止測試程序；
   重新啟動確認無部分 terminal state、無 DB 指向不完整 artifact。
-- [ ] 在 dispatch intent 後、child receipt 前中斷，重啟不得 auto-rerun；
+- [x] 在 dispatch intent 後、child receipt 前中斷，重啟不得 auto-rerun；
   owner 模糊時保持 OWNER_UNKNOWN，不推測安全。
-- [ ] 測試受限環境遇 process／Git EPERM 時記錄環境限制，
+- [x] 測試受限環境遇 process／Git EPERM 時記錄環境限制，
   不將整個檔案 skip 或使用失敗的 composite check 宣告通過。
-- [ ] 目標測試通過後跑完整 `npm run check`；
+- [x] 目標測試通過後跑完整 `npm run check`；
   根據需要在支援 bwrap／Git fixture 的主機跑，保存 pass/fail/skip 與 exit code。
-- [ ] 提交 `test: cover persistence and ownership crash boundaries`。
+- [x] 提交 `test: cover persistence and ownership crash boundaries`。
 
 ## 11. Task 7：文件、操作手冊與 G1 驗收
 
 **Files:** `docs/usage.md`、`docs/acceptance.md`、`DECISIONS.md`、
 `README.md`、本計畫。
 
-- [ ] 記錄 OWNER_UNKNOWN 處置：先保存 owner metadata／state backup，確認舊 harness、
+- [x] 記錄 OWNER_UNKNOWN 處置：先保存 owner metadata／state backup，確認舊 harness、
   已知 Codex 子程序與受管執行環境停止；無法確認則維持 blocked，不刪 lock。
   只有可證明環境已隔離／停止時，才由操作者清理該 token 的 lock，再執行只讀 recovery。
-- [ ] 記錄 legacy snapshot unavailable 的行為：保留舊證據；以新 attempt 驗證現況；
+- [x] 記錄 legacy snapshot unavailable 的行為：保留舊證據；以新 attempt 驗證現況；
   不把最新設定回填成歷史輸入。
-- [ ] 在 DECISIONS 新增取代 D-19 啟動掃描的決策，保留舊條目並連結；
+- [x] 在 DECISIONS 新增取代 D-19 啟動掃描的決策，保留舊條目並連結；
   說明 P1 是保守本機互斥，不是自動 orphan 接手。
-- [ ] README 僅將 G1 已驗證行為改成已完成；P2–P5 保持設計狀態。
-- [ ] 完整檢查通過後，只在無新增 code 時做 docs link／diff check；
+- [x] README 僅將 G1 已驗證行為改成已完成；P2–P5 保持設計狀態。
+- [x] 完整檢查通過後，只在無新增 code 時做 docs link／diff check；
   提交 `docs: describe verified recovery guarantees and limits`。
 
 G1 必須全部通過：

@@ -12,6 +12,8 @@
 MVP                    ✅ 完成（Gate 1–6，見 docs/acceptance.md）
 Cross-Repo Validation  ✅ task-tracker（36.6k 行 TS）✅ rag-stack（10k 行 Python）
 Core abstraction       ✅ 跨兩種語言 / domain / runner，Core 0 修改
+P1 Recovery correctness ✅ G1 通過：durable inputs/outputs、ownership、transaction、recovery session
+P2–P5                  ◻ 設計中，尚未實作
 需要修改 Core 的證據      無
 ```
 
@@ -148,7 +150,7 @@ run  ┌ prepare  contract 快照 → admitSkills → manifest → budget → co
 
 ## 文件
 
-- [下一版長任務架構 v2（設計提案，未實作）](docs/superpowers/specs/2026-09-09-long-running-harness-v2-design.md)
+- [長任務架構 v2（P1 已實作；P2–P5 為設計）](docs/superpowers/specs/2026-09-09-long-running-harness-v2-design.md)
 - [v2 分階段實作計畫（P1 本機恢復優先）](docs/superpowers/plans/2026-09-09-long-running-harness-v2.md)
 
 - 決策記錄：`DECISIONS.md`
@@ -164,7 +166,7 @@ run  ┌ prepare  contract 快照 → admitSkills → manifest → budget → co
 ```bash
 npm run check     # lint + typecheck + test + deadcode，提交前跑這個
 
-npm test          # 155 個測試，不需要 codex
+npm test          # 257 個測試，不需要 codex
 npm run typecheck # tsc --noEmit
 npm run lint      # eslint：no-floating-promises + 兩條架構界線（D-29 / D-31）
 npm run deadcode  # knip：沒人用的 export / file / dependency
