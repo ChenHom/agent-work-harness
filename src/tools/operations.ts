@@ -14,9 +14,17 @@ export interface OperationReceipt {
   actualUnits: number;
 }
 
+export type OperationLookupOutcome =
+  | { kind: 'confirmed-success'; receipt: OperationReceipt }
+  | { kind: 'confirmed-no-effect' }
+  | { kind: 'pending' }
+  | { kind: 'partial-effect'; detail: string }
+  | { kind: 'unsupported' };
+
 export interface OperationAdapter {
   readonly capabilities: AdapterCapabilitySnapshot;
   execute(request: OperationDispatchRequest): Promise<OperationReceipt>;
+  lookup(request: OperationDispatchRequest, completionWindowClosed: boolean): Promise<OperationLookupOutcome>;
   verifyPostcondition(request: OperationDispatchRequest, receipt: OperationReceipt): Promise<boolean>;
 }
 

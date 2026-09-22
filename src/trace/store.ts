@@ -31,6 +31,7 @@ export type EventType =
   | 'dependency.artifact_replaced' | 'milestone.completed' | 'milestone.stale'
   | 'operation.prepared' | 'operation.state_changed' | 'operation.attempt_recorded'
   | 'operation.attempt_state_changed'
+  | 'operation.reconciled'
   | 'compensation.prepared' | 'compensation.state_changed' | 'compensation.attempt_recorded'
   | 'budget.limit_configured' | 'budget.reservation_recorded' | 'budget.ledger_recorded'
   | 'usage.note';   // 人對結果的判讀 —— 機器不知道 evidence 判錯了，只有人知道

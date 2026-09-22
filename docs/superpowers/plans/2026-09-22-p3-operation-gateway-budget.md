@@ -47,12 +47,12 @@
 
 **Files:** `src/tools/gateway.ts`, `src/tools/fake-provider.ts`, `src/trace/store.ts`, `test/operation-recovery.test.ts`
 
-- [ ] UNKNOWN may enter RECONCILING but may not dispatch again.
-- [ ] Provider lookup outcomes are explicit: confirmed success, confirmed no-effect, pending/not-yet-visible, partial effect, unsupported.
-- [ ] Eventually-consistent not-found remains UNKNOWN until the provider completion window closes; only confirmed no-effect becomes FAILED and releases reservation.
-- [ ] Expired dedupe keys prohibit redispatch and move unresolved work to manual handling.
-- [ ] Simulate provider success followed by lost response, delayed lookup visibility, process restart, and duplicate reconciliation.
-- [ ] Run targeted tests, one full `npm run check`, review against this task, and commit.
+- [x] UNKNOWN may enter RECONCILING but may not dispatch again.
+- [x] Provider lookup outcomes are explicit: confirmed success, confirmed no-effect, pending/not-yet-visible, partial effect, unsupported.
+- [x] Eventually-consistent not-found remains UNKNOWN until the provider completion window closes; only confirmed no-effect becomes FAILED and releases reservation.
+- [x] Expired dedupe keys prohibit redispatch and move unresolved work to manual handling.
+- [x] Simulate provider success followed by lost response, delayed lookup visibility, process restart, and duplicate reconciliation.
+- [x] Run targeted tests, one full `npm run check`, review against this task, and commit.
 
 ## Task 5: Durable compensation workflow
 

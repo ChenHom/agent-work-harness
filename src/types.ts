@@ -212,6 +212,8 @@ export interface Operation {
   authorizationRef: string;
   capabilities: AdapterCapabilitySnapshot;
   reservationId?: string;
+  lastReconciliationArtifactId?: string;
+  manualReason?: string;
   status: OperationStatus;
   createdAt: string;
   updatedAt: string;

@@ -1,4 +1,4 @@
-import { newId, nowIso } from '../ids.ts';
+import { newId } from '../ids.ts';
 import type { ExecutionOwnership } from '../runtime/ownership.ts';
 import { BudgetLedger } from '../budget/ledger.ts';
 import { Store } from '../trace/store.ts';
@@ -24,15 +24,18 @@ export class OperationGateway {
   private readonly store: Store;
   private readonly budget: BudgetLedger;
   private readonly adapter: OperationAdapter;
+  private readonly clock: () => number;
 
   constructor(
     store: Store,
     budget: BudgetLedger,
     adapter: OperationAdapter,
+    clock: () => number = Date.now,
   ) {
     this.store = store;
     this.budget = budget;
     this.adapter = adapter;
+    this.clock = clock;
   }
 
   prepare(input: PrepareOperationInput): Operation {
@@ -47,7 +50,7 @@ export class OperationGateway {
     }
     if (!this.store.getWork(input.workId)) throw new Error(`OPERATION_WORK_NOT_FOUND: ${input.workId}`);
     const artifact = this.store.putArtifact('operation-input', canonicalJson(input.payload), 'json');
-    const at = nowIso();
+    const at = this.nowIso();
     const operationId = newId('OP');
     return this.store.withTransaction(() => {
       const reservation = this.budget.reserveInTransaction({
@@ -57,7 +60,7 @@ export class OperationGateway {
         schemaVersion: '1', id: operationId, workId: input.workId, intentKey: input.intentKey,
         kind: input.kind, targetScope: input.targetScope, canonicalInputHash: inputHash,
         inputArtifactId: artifact.id, idempotencyKey: newId('IDEM'),
-        dedupeExpiresAt: new Date(Date.now() + this.adapter.capabilities.idempotencyKeyTtlMs).toISOString(),
+        dedupeExpiresAt: new Date(this.clock() + this.adapter.capabilities.idempotencyKeyTtlMs).toISOString(),
         precondition: input.precondition, reconciliationStrategy: input.reconciliationStrategy,
         compensationPolicy: input.compensationPolicy, authorizationRef: input.authorizationRef,
         capabilities: structuredClone(this.adapter.capabilities), reservationId: reservation.id,
@@ -74,20 +77,19 @@ export class OperationGateway {
     try {
       const current = this.requireOperation(operationId);
       if (current.status === 'SUCCEEDED' || current.status === 'FAILED') return current;
-      if (current.status !== 'PREPARED' && current.status !== 'UNKNOWN') {
+      if (current.status === 'UNKNOWN' || current.status === 'RECONCILING') {
+        throw new Error(`OPERATION_RECONCILIATION_REQUIRED: ${operationId}`);
+      }
+      if (current.status !== 'PREPARED') {
         throw new Error(`OPERATION_INVALID_STATE: ${operationId} is ${current.status}`);
       }
       if (!ownership.validate()) throw new Error('OWNER_UNKNOWN: execution ownership was lost');
-      const payload = this.readInput(current);
-      const request: OperationDispatchRequest = {
-        idempotencyKey: current.idempotencyKey, targetScope: current.targetScope,
-        canonicalInputHash: current.canonicalInputHash, payload,
-      };
+      const request = this.requestFor(current);
       const attempt: OperationAttempt = {
         id: newId('OPA'), operationId, number: this.store.listOperationAttempts(operationId).length + 1,
-        status: 'DISPATCHED', dispatchedAt: nowIso(),
+        status: 'DISPATCHED', dispatchedAt: this.nowIso(),
       };
-      const dispatched: Operation = { ...current, status: 'DISPATCHED', updatedAt: nowIso() };
+      const dispatched: Operation = { ...current, status: 'DISPATCHED', updatedAt: this.nowIso() };
       this.store.withTransaction(() => {
         this.store.updateOperation(dispatched);
         this.store.insertOperationAttempt(attempt);
@@ -107,9 +109,79 @@ export class OperationGateway {
     }
   }
 
+  async reconcile(operationId: string, ownership: ExecutionOwnership): Promise<Operation> {
+    if (!ownership.validate()) throw new Error('OWNER_UNKNOWN: execution ownership is invalid');
+    if (!ownership.beginOperation()) throw new Error('OWNER_ACTIVE: another operation is running');
+    try {
+      const current = this.requireOperation(operationId);
+      if (current.status === 'SUCCEEDED' || current.status === 'FAILED' || current.status === 'WAITING_USER') {
+        return current;
+      }
+      if (current.status !== 'UNKNOWN' && current.status !== 'RECONCILING') {
+        throw new Error(`OPERATION_NOT_RECONCILABLE: ${operationId} is ${current.status}`);
+      }
+      const reconciling: Operation = current.status === 'RECONCILING' ? current
+        : { ...current, status: 'RECONCILING', updatedAt: this.nowIso() };
+      if (current.status !== 'RECONCILING') {
+        this.store.withTransaction(() => this.store.updateOperation(reconciling));
+      }
+      const request = this.requestFor(reconciling);
+      const firstDispatch = this.store.listOperationAttempts(operationId)[0];
+      if (!firstDispatch) throw new Error(`OPERATION_ATTEMPT_NOT_FOUND: ${operationId}`);
+      const completionWindowClosed = this.clock() >= Date.parse(firstDispatch.dispatchedAt)
+        + reconciling.capabilities.completionWindowMs;
+      let outcome;
+      if (reconciling.capabilities.lookup === 'unsupported') outcome = { kind: 'unsupported' } as const;
+      else {
+        try {
+          outcome = await this.adapter.lookup(request, completionWindowClosed);
+        } catch {
+          outcome = { kind: 'pending' } as const;
+        }
+      }
+      if (!ownership.validate()) throw new Error('OWNER_UNKNOWN: lost during reconciliation lookup');
+      const artifact = this.store.putArtifact('operation-reconciliation', canonicalJson(outcome), 'json');
+      if (outcome.kind === 'confirmed-success') {
+        if (!await this.adapter.verifyPostcondition(request, outcome.receipt)) {
+          return this.finishReconciliation(reconciling, artifact.id, 'WAITING_USER', 'reconciled receipt failed postcondition');
+        }
+        const succeeded: Operation = {
+          ...reconciling, status: 'SUCCEEDED', lastReconciliationArtifactId: artifact.id,
+          updatedAt: this.nowIso(),
+        };
+        this.store.withTransaction(() => {
+          this.store.updateOperation(succeeded);
+          this.budget.settleInTransaction(this.requireReservation(reconciling), outcome.receipt.actualUnits);
+          this.store.event('operation.reconciled', { operationId, outcome: outcome.kind, artifactId: artifact.id }, current.workId);
+        });
+        return succeeded;
+      }
+      if (outcome.kind === 'confirmed-no-effect') {
+        const failed: Operation = {
+          ...reconciling, status: 'FAILED', lastReconciliationArtifactId: artifact.id,
+          updatedAt: this.nowIso(),
+        };
+        this.store.withTransaction(() => {
+          this.store.updateOperation(failed);
+          this.budget.releaseConfirmedUnusedInTransaction(this.requireReservation(reconciling));
+          this.store.event('operation.reconciled', { operationId, outcome: outcome.kind, artifactId: artifact.id }, current.workId);
+        });
+        return failed;
+      }
+      const expired = this.clock() >= Date.parse(reconciling.dedupeExpiresAt);
+      if (expired || outcome.kind === 'partial-effect' || outcome.kind === 'unsupported') {
+        const reason = expired ? 'idempotency key expired while outcome remains unresolved' : `lookup ${outcome.kind}`;
+        return this.finishReconciliation(reconciling, artifact.id, 'WAITING_USER', reason);
+      }
+      return this.finishReconciliation(reconciling, artifact.id, 'UNKNOWN', 'provider result is not yet visible');
+    } finally {
+      ownership.endOperation();
+    }
+  }
+
   private recordSuccess(operation: Operation, attempt: OperationAttempt, receipt: OperationReceipt): Operation {
     const artifact = this.store.putArtifact('operation-receipt', canonicalJson(receipt), 'json');
-    const at = nowIso();
+    const at = this.nowIso();
     const succeeded: Operation = { ...operation, status: 'SUCCEEDED', updatedAt: at };
     const completed: OperationAttempt = {
       ...attempt, status: 'SUCCEEDED', completedAt: at, receiptArtifactId: artifact.id,
@@ -125,7 +197,7 @@ export class OperationGateway {
   private recordFailure(operation: Operation, attempt: OperationAttempt, error: unknown): Operation {
     const definitive = error instanceof AdapterDispatchError && error.outcome === 'definitive-no-effect';
     const status = definitive ? 'FAILED' : 'UNKNOWN';
-    const at = nowIso();
+    const at = this.nowIso();
     const updated: Operation = { ...operation, status, updatedAt: at };
     const completed: OperationAttempt = {
       ...attempt, status, completedAt: at, error: error instanceof Error ? error.message : String(error),
@@ -149,6 +221,34 @@ export class OperationGateway {
     }
     return payload;
   }
+
+  private requestFor(operation: Operation): OperationDispatchRequest {
+    return {
+      idempotencyKey: operation.idempotencyKey, targetScope: operation.targetScope,
+      canonicalInputHash: operation.canonicalInputHash, payload: this.readInput(operation),
+    };
+  }
+
+  private finishReconciliation(
+    operation: Operation,
+    artifactId: string,
+    status: 'UNKNOWN' | 'WAITING_USER',
+    reason: string,
+  ): Operation {
+    const updated: Operation = {
+      ...operation, status, lastReconciliationArtifactId: artifactId,
+      manualReason: status === 'WAITING_USER' ? reason : undefined, updatedAt: this.nowIso(),
+    };
+    this.store.withTransaction(() => {
+      this.store.updateOperation(updated);
+      this.store.event('operation.reconciled', {
+        operationId: operation.id, outcome: status, reason, artifactId,
+      }, operation.workId);
+    });
+    return updated;
+  }
+
+  private nowIso(): string { return new Date(this.clock()).toISOString(); }
 
   private requireOperation(id: string): Operation {
     const operation = this.store.getOperation(id);

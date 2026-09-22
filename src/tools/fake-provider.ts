@@ -3,13 +3,16 @@ import { dirname, join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import type { AdapterCapabilitySnapshot } from '../types.ts';
 import {
-  AdapterDispatchError, type OperationAdapter, type OperationDispatchRequest, type OperationReceipt,
+  AdapterDispatchError, type OperationAdapter, type OperationDispatchRequest,
+  type OperationLookupOutcome, type OperationReceipt,
 } from './operations.ts';
 
 interface FakePayload {
   businessId: string;
   value: string;
-  behavior?: 'success' | 'fail-before-effect' | 'lose-response-after-effect';
+  behavior?: 'success' | 'fail-before-effect' | 'lose-response-before-effect' | 'lose-response-after-effect';
+  lookupDelayCount?: number;
+  lookupMode?: 'normal' | 'partial' | 'unsupported';
 }
 
 interface FakeEffect {
@@ -18,6 +21,9 @@ interface FakeEffect {
   canonicalInputHash: string;
   value: string;
   receipt: OperationReceipt;
+  lookupCount: number;
+  lookupDelayCount: number;
+  lookupMode: 'normal' | 'partial' | 'unsupported';
 }
 
 interface FakeLedger { effects: FakeEffect[] }
@@ -55,6 +61,9 @@ export class FakeProvider implements OperationAdapter {
     if (payload.behavior === 'fail-before-effect') {
       throw new AdapterDispatchError('definitive-no-effect', 'FAKE_PROVIDER_REJECTED: no effect');
     }
+    if (payload.behavior === 'lose-response-before-effect') {
+      throw new AdapterDispatchError('ambiguous', 'FAKE_PROVIDER_RESPONSE_LOST: no receipt is available');
+    }
     const receipt: OperationReceipt = {
       providerReceiptId: `receipt-${randomUUID()}`,
       externalId: `fake-${payload.businessId}`,
@@ -63,12 +72,36 @@ export class FakeProvider implements OperationAdapter {
     ledger.effects.push({
       businessId: payload.businessId, idempotencyKey: request.idempotencyKey,
       canonicalInputHash: request.canonicalInputHash, value: payload.value, receipt,
+      lookupCount: 0, lookupDelayCount: payload.lookupDelayCount ?? 0,
+      lookupMode: payload.lookupMode ?? 'normal',
     });
     this.writeLedger(ledger);
     if (payload.behavior === 'lose-response-after-effect') {
       throw new AdapterDispatchError('ambiguous', 'FAKE_PROVIDER_RESPONSE_LOST: effect may have completed');
     }
     return receipt;
+  }
+
+  async lookup(
+    request: OperationDispatchRequest,
+    completionWindowClosed: boolean,
+  ): Promise<OperationLookupOutcome> {
+    const payload = this.payload(request.payload);
+    const ledger = this.readLedger();
+    const effect = ledger.effects.find((candidate) => candidate.idempotencyKey === request.idempotencyKey
+      || candidate.businessId === payload.businessId);
+    if (!effect) return completionWindowClosed ? { kind: 'confirmed-no-effect' } : { kind: 'pending' };
+    if (effect.idempotencyKey !== request.idempotencyKey
+      || effect.businessId !== payload.businessId
+      || effect.canonicalInputHash !== request.canonicalInputHash) {
+      return { kind: 'partial-effect', detail: 'provider identity points to a different payload' };
+    }
+    effect.lookupCount += 1;
+    this.writeLedger(ledger);
+    if (effect.lookupMode === 'unsupported') return { kind: 'unsupported' };
+    if (effect.lookupMode === 'partial') return { kind: 'partial-effect', detail: 'effect is incomplete' };
+    if (effect.lookupCount <= effect.lookupDelayCount) return { kind: 'pending' };
+    return { kind: 'confirmed-success', receipt: effect.receipt };
   }
 
   async verifyPostcondition(request: OperationDispatchRequest, receipt: OperationReceipt): Promise<boolean> {
@@ -80,6 +113,10 @@ export class FakeProvider implements OperationAdapter {
   }
 
   effectCount(): number { return this.readLedger().effects.length; }
+
+  lookupCount(): number {
+    return this.readLedger().effects.reduce((sum, effect) => sum + effect.lookupCount, 0);
+  }
 
   private payload(value: unknown): FakePayload {
     const payload = value as Partial<FakePayload>;
