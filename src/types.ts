@@ -237,8 +237,12 @@ export interface Compensation {
   workId: string;
   idempotencyKey: string;
   authorizationRef: string;
+  resourceIdentity: string;
+  ownershipRef: string;
   targetVersion: string;
   reservationId?: string;
+  lastReconciliationArtifactId?: string;
+  manualReason?: string;
   status: OperationStatus;
   createdAt: string;
   updatedAt: string;

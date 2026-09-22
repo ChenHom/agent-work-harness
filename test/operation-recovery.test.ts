@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import { BudgetLedger } from '../src/budget/ledger.ts';
 import { FakeProvider } from '../src/tools/fake-provider.ts';
 import { OperationGateway } from '../src/tools/gateway.ts';
+import { CompensationWorkflow } from '../src/tools/compensation.ts';
 import { Store } from '../src/trace/store.ts';
 import type { ExecutionOwnership } from '../src/runtime/ownership.ts';
 import type { Work } from '../src/types.ts';
@@ -266,5 +267,141 @@ test('fake provider persists dedupe identity and rejects payload conflicts', asy
     }), /FAKE_PROVIDER_PAYLOAD_CONFLICT/);
   } finally {
     rmSync(state, { recursive: true, force: true });
+  }
+});
+
+test('compensation validates the original receipt and persists its own intent and reservation', async () => {
+  const h = fixture();
+  try {
+    const operation = h.gateway.prepare(prepareInput());
+    assert.equal((await h.gateway.dispatch(operation.id, owner())).status, 'SUCCEEDED');
+    const workflow = new CompensationWorkflow(h.store, h.budget, h.provider);
+    assert.throws(() => workflow.prepare({
+      operationId: operation.id, authorizationRef: 'decision:D-1',
+      resourceIdentity: 'wrong-resource', ownershipRef: 'customer-7', targetVersion: 'fake-v1',
+    }), /COMPENSATION_RESOURCE_IDENTITY_MISMATCH/);
+    assert.throws(() => workflow.prepare({
+      operationId: operation.id, authorizationRef: 'decision:D-1',
+      resourceIdentity: 'fake-customer-7', ownershipRef: 'wrong-owner', targetVersion: 'fake-v1',
+    }), /COMPENSATION_OWNERSHIP_MISMATCH/);
+    assert.throws(() => workflow.prepare({
+      operationId: operation.id, authorizationRef: 'decision:D-1',
+      resourceIdentity: 'fake-customer-7', ownershipRef: 'customer-7', targetVersion: 'fake-v2',
+    }), /COMPENSATION_VERSION_MISMATCH/);
+
+    const compensation = workflow.prepare({
+      operationId: operation.id, authorizationRef: 'decision:D-1',
+      resourceIdentity: 'fake-customer-7', ownershipRef: 'customer-7', targetVersion: 'fake-v1',
+    });
+    assert.equal(compensation.status, 'PREPARED');
+    assert.notEqual(compensation.idempotencyKey, operation.idempotencyKey);
+    assert.equal(h.store.getBudgetReservation(compensation.reservationId!)?.status, 'HELD');
+    assert.equal(workflow.prepare({
+      operationId: operation.id, authorizationRef: 'decision:D-1',
+      resourceIdentity: 'fake-customer-7', ownershipRef: 'customer-7', targetVersion: 'fake-v1',
+    }).id, compensation.id);
+  } finally {
+    h.store.close();
+    rmSync(h.state, { recursive: true, force: true });
+  }
+});
+
+test('lost compensation response survives restart and repeated recovery removes at most once', async () => {
+  const state = mkdtempSync(join(tmpdir(), 'harness-compensation-restart-'));
+  const harnessState = join(state, 'harness');
+  const providerPath = join(state, 'provider-ledger.json');
+  let store = new Store(harnessState);
+  try {
+    const work: Work = {
+      id: 'W-comp', title: 'compensation fixture', repositoryId: 'repo', workspace: '/repo',
+      state: 'ACTIVE', currentContractVersion: 1, retryBudget: 2, createdAt: '2026-09-22T00:00:00.000Z',
+    };
+    store.insertWork(work);
+    let budget = new BudgetLedger(store);
+    budget.configureLimit({
+      workId: work.id, resourceKind: 'fake_write', currency: 'unit', limitUnits: 100, pricingVersion: 'fake-v1',
+    });
+    let provider = new FakeProvider(providerPath);
+    const gateway = new OperationGateway(store, budget, provider);
+    const operation = gateway.prepare({
+      ...prepareInput(), workId: work.id,
+      payload: {
+        businessId: 'customer-7', value: 'enabled', behavior: 'success' as const,
+        compensationBehavior: 'lose-response-after-effect' as const,
+      },
+    });
+    await gateway.dispatch(operation.id, owner());
+    let workflow = new CompensationWorkflow(store, budget, provider);
+    const compensation = workflow.prepare({
+      operationId: operation.id, authorizationRef: 'decision:D-compensate',
+      resourceIdentity: 'fake-customer-7', ownershipRef: 'customer-7', targetVersion: 'fake-v1',
+    });
+    const dispatchedAt = new Date().toISOString();
+    store.withTransaction(() => {
+      store.updateCompensation({ ...compensation, status: 'DISPATCHED', updatedAt: dispatchedAt });
+      store.insertCompensationAttempt({
+        id: 'COMPA-crash', compensationId: compensation.id, number: 1,
+        status: 'DISPATCHED', dispatchedAt,
+      });
+    });
+    await assert.rejects(provider.compensate({
+      idempotencyKey: compensation.idempotencyKey, externalId: compensation.resourceIdentity,
+      resourceVersion: compensation.targetVersion, ownershipRef: compensation.ownershipRef,
+    }), /FAKE_COMPENSATION_RESPONSE_LOST/);
+    assert.equal(provider.compensationEffectCount(), 1);
+    store.close();
+
+    store = new Store(harnessState);
+    budget = new BudgetLedger(store);
+    provider = new FakeProvider(providerPath);
+    workflow = new CompensationWorkflow(store, budget, provider);
+    assert.equal((await workflow.reconcile(compensation.id, owner())).status, 'SUCCEEDED');
+    assert.equal((await workflow.reconcile(compensation.id, owner())).status, 'SUCCEEDED');
+    assert.equal(provider.compensationEffectCount(), 1);
+    assert.equal(store.listCompensationAttempts(compensation.id)[0]?.status, 'UNKNOWN');
+    const reservation = store.getBudgetReservation(compensation.reservationId!)!;
+    assert.equal(reservation.status, 'SETTLED');
+    assert.equal(reservation.settledUnits, 3);
+    assert.equal(store.listBudgetLedger(reservation.limitId)
+      .filter((entry) => entry.reservationId === reservation.id && entry.kind === 'SETTLE').length, 1);
+  } finally {
+    store.close();
+    rmSync(state, { recursive: true, force: true });
+  }
+});
+
+test('unsupported and irreversible compensation wait for a person with durable cost history', async () => {
+  for (const mode of ['unsupported', 'irreversible'] as const) {
+    const h = fixture();
+    try {
+      const operation = h.gateway.prepare({
+        ...prepareInput(), intentKey: `create:${mode}`, targetScope: `customer-${mode}`,
+        payload: {
+          businessId: `customer-${mode}`, value: 'enabled', behavior: 'success' as const,
+          compensationBehavior: mode === 'unsupported' ? 'unsupported' as const : 'success' as const,
+        },
+      });
+      const succeeded = await h.gateway.dispatch(operation.id, owner());
+      if (mode === 'irreversible') {
+        h.store.updateOperation({
+          ...succeeded, capabilities: { ...succeeded.capabilities, reversibility: 'irreversible' },
+        });
+      }
+      const workflow = new CompensationWorkflow(h.store, h.budget, h.provider);
+      const compensation = workflow.prepare({
+        operationId: operation.id, authorizationRef: 'decision:D-compensate',
+        resourceIdentity: `fake-customer-${mode}`, ownershipRef: `customer-${mode}`, targetVersion: 'fake-v1',
+      });
+      const waiting = mode === 'unsupported' ? await workflow.dispatch(compensation.id, owner()) : compensation;
+      assert.equal(waiting.status, 'WAITING_USER');
+      assert.ok(waiting.manualReason);
+      assert.equal(h.store.getBudgetReservation(compensation.reservationId!)?.status, 'RELEASED');
+      assert.deepEqual(h.store.listBudgetLedger(
+        h.store.getBudgetReservation(compensation.reservationId!)!.limitId,
+      ).slice(-2).map((entry) => entry.kind), ['RESERVE', 'RELEASE']);
+    } finally {
+      h.store.close();
+      rmSync(h.state, { recursive: true, force: true });
+    }
   }
 });

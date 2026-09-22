@@ -58,12 +58,12 @@
 
 **Files:** `src/tools/compensation.ts`, `src/tools/gateway.ts`, `src/tools/fake-provider.ts`, `src/trace/store.ts`, `test/operation-recovery.test.ts`, `test/budget-ledger.test.ts`
 
-- [ ] Compensation is a separate durable workflow referencing the original operation, with its own idempotency key, attempts, receipt, reservation, and terminal/UNKNOWN state.
-- [ ] Verify resource identity, ownership, version, authorization, and adapter reversibility before dispatch.
-- [ ] Persist compensation intent before calling the provider. A lost response or crash becomes UNKNOWN and requires lookup; it never implies the original effect was removed.
-- [ ] Failed/unsupported/irreversible compensation becomes WAITING_USER with retained evidence and cost history.
-- [ ] Prove a compensation crash and repeated recovery produce at most one compensating provider effect.
-- [ ] Run targeted tests, one full `npm run check`, review against this task, and commit.
+- [x] Compensation is a separate durable workflow referencing the original operation, with its own idempotency key, attempts, receipt, reservation, and terminal/UNKNOWN state.
+- [x] Verify resource identity, ownership, version, authorization, and adapter reversibility before dispatch.
+- [x] Persist compensation intent before calling the provider. A lost response or crash becomes UNKNOWN and requires lookup; it never implies the original effect was removed.
+- [x] Failed/unsupported/irreversible compensation becomes WAITING_USER with retained evidence and cost history.
+- [x] Prove a compensation crash and repeated recovery produce at most one compensating provider effect.
+- [x] Run targeted tests, one full `npm run check`, review against this task, and commit.
 
 ## Task 6: CLI, G3 acceptance, and documentation
 

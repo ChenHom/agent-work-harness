@@ -33,6 +33,7 @@ export type EventType =
   | 'operation.attempt_state_changed'
   | 'operation.reconciled'
   | 'compensation.prepared' | 'compensation.state_changed' | 'compensation.attempt_recorded'
+  | 'compensation.attempt_state_changed' | 'compensation.reconciled'
   | 'budget.limit_configured' | 'budget.reservation_recorded' | 'budget.ledger_recorded'
   | 'usage.note';   // 人對結果的判讀 —— 機器不知道 evidence 判錯了，只有人知道
 
@@ -787,6 +788,17 @@ export class Store {
       JSON.stringify(attempt), attempt.dispatchedAt);
     const compensation = this.getCompensation(attempt.compensationId);
     this.event('compensation.attempt_recorded', {
+      compensationId: attempt.compensationId, compensationAttemptId: attempt.id,
+      number: attempt.number, status: attempt.status,
+    }, compensation?.workId);
+  }
+
+  updateCompensationAttempt(attempt: CompensationAttempt): void {
+    const changed = this.db.prepare('update compensation_attempts set status = ?, json = ? where id = ? and compensation_id = ?')
+      .run(attempt.status, JSON.stringify(attempt), attempt.id, attempt.compensationId);
+    if (Number(changed.changes) !== 1) throw new Error(`COMPENSATION_ATTEMPT_NOT_FOUND: ${attempt.id}`);
+    const compensation = this.getCompensation(attempt.compensationId);
+    this.event('compensation.attempt_state_changed', {
       compensationId: attempt.compensationId, compensationAttemptId: attempt.id,
       number: attempt.number, status: attempt.status,
     }, compensation?.workId);

@@ -56,7 +56,8 @@ test('operation, compensation, reservation, and ledger records round-trip', () =
     };
     const compensation: Compensation = {
       schemaVersion: '1', id: 'COMP-1', operationId: operation.id, workId: h.work.id,
-      idempotencyKey: 'idem-comp-1', authorizationRef: 'decision:D-1', targetVersion: 'provider-v1',
+      idempotencyKey: 'idem-comp-1', authorizationRef: 'decision:D-1', resourceIdentity: 'resource-1',
+      ownershipRef: 'owned-by-work', targetVersion: 'provider-v1',
       reservationId: 'BR-2', status: 'PREPARED', createdAt: '2026-09-22T00:04:00.000Z',
       updatedAt: '2026-09-22T00:04:00.000Z',
     };

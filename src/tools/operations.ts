@@ -11,8 +11,31 @@ export interface OperationDispatchRequest {
 export interface OperationReceipt {
   providerReceiptId: string;
   externalId: string;
+  resourceVersion: string;
+  ownershipRef: string;
   actualUnits: number;
 }
+
+export interface CompensationDispatchRequest {
+  idempotencyKey: string;
+  externalId: string;
+  resourceVersion: string;
+  ownershipRef: string;
+}
+
+export interface CompensationReceipt {
+  providerReceiptId: string;
+  externalId: string;
+  removedVersion: string;
+  actualUnits: number;
+}
+
+export type CompensationLookupOutcome =
+  | { kind: 'confirmed-success'; receipt: CompensationReceipt }
+  | { kind: 'confirmed-not-removed' }
+  | { kind: 'pending' }
+  | { kind: 'partial-effect'; detail: string }
+  | { kind: 'unsupported' };
 
 export type OperationLookupOutcome =
   | { kind: 'confirmed-success'; receipt: OperationReceipt }
@@ -26,6 +49,8 @@ export interface OperationAdapter {
   execute(request: OperationDispatchRequest): Promise<OperationReceipt>;
   lookup(request: OperationDispatchRequest, completionWindowClosed: boolean): Promise<OperationLookupOutcome>;
   verifyPostcondition(request: OperationDispatchRequest, receipt: OperationReceipt): Promise<boolean>;
+  compensate(request: CompensationDispatchRequest): Promise<CompensationReceipt>;
+  lookupCompensation(request: CompensationDispatchRequest): Promise<CompensationLookupOutcome>;
 }
 
 export class AdapterDispatchError extends Error {

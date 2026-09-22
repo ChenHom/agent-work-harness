@@ -3,7 +3,8 @@ import { dirname, join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import type { AdapterCapabilitySnapshot } from '../types.ts';
 import {
-  AdapterDispatchError, type OperationAdapter, type OperationDispatchRequest,
+  AdapterDispatchError, type CompensationDispatchRequest, type CompensationLookupOutcome,
+  type CompensationReceipt, type OperationAdapter, type OperationDispatchRequest,
   type OperationLookupOutcome, type OperationReceipt,
 } from './operations.ts';
 
@@ -13,6 +14,7 @@ interface FakePayload {
   behavior?: 'success' | 'fail-before-effect' | 'lose-response-before-effect' | 'lose-response-after-effect';
   lookupDelayCount?: number;
   lookupMode?: 'normal' | 'partial' | 'unsupported';
+  compensationBehavior?: 'success' | 'fail-before-effect' | 'lose-response-after-effect' | 'unsupported';
 }
 
 interface FakeEffect {
@@ -24,9 +26,19 @@ interface FakeEffect {
   lookupCount: number;
   lookupDelayCount: number;
   lookupMode: 'normal' | 'partial' | 'unsupported';
+  compensationBehavior: 'success' | 'fail-before-effect' | 'lose-response-after-effect' | 'unsupported';
+  removed: boolean;
 }
 
-interface FakeLedger { effects: FakeEffect[] }
+interface FakeCompensation {
+  idempotencyKey: string;
+  externalId: string;
+  resourceVersion: string;
+  ownershipRef: string;
+  receipt: CompensationReceipt;
+}
+
+interface FakeLedger { effects: FakeEffect[]; compensations: FakeCompensation[] }
 
 export class FakeProvider implements OperationAdapter {
   readonly capabilities: AdapterCapabilitySnapshot = {
@@ -67,6 +79,8 @@ export class FakeProvider implements OperationAdapter {
     const receipt: OperationReceipt = {
       providerReceiptId: `receipt-${randomUUID()}`,
       externalId: `fake-${payload.businessId}`,
+      resourceVersion: 'fake-v1',
+      ownershipRef: request.targetScope,
       actualUnits: 7,
     };
     ledger.effects.push({
@@ -74,6 +88,7 @@ export class FakeProvider implements OperationAdapter {
       canonicalInputHash: request.canonicalInputHash, value: payload.value, receipt,
       lookupCount: 0, lookupDelayCount: payload.lookupDelayCount ?? 0,
       lookupMode: payload.lookupMode ?? 'normal',
+      compensationBehavior: payload.compensationBehavior ?? 'success', removed: false,
     });
     this.writeLedger(ledger);
     if (payload.behavior === 'lose-response-after-effect') {
@@ -109,7 +124,54 @@ export class FakeProvider implements OperationAdapter {
     return this.readLedger().effects.some((effect) => effect.businessId === payload.businessId
       && effect.idempotencyKey === request.idempotencyKey
       && effect.canonicalInputHash === request.canonicalInputHash
-      && effect.receipt.providerReceiptId === receipt.providerReceiptId);
+      && effect.receipt.providerReceiptId === receipt.providerReceiptId && !effect.removed);
+  }
+
+  async compensate(request: CompensationDispatchRequest): Promise<CompensationReceipt> {
+    const ledger = this.readLedger();
+    const prior = ledger.compensations.find((item) => item.idempotencyKey === request.idempotencyKey);
+    if (prior) {
+      if (prior.externalId !== request.externalId || prior.resourceVersion !== request.resourceVersion
+        || prior.ownershipRef !== request.ownershipRef) {
+        throw new AdapterDispatchError('ambiguous', 'FAKE_COMPENSATION_PAYLOAD_CONFLICT');
+      }
+      return prior.receipt;
+    }
+    const effect = ledger.effects.find((item) => item.receipt.externalId === request.externalId);
+    if (!effect || effect.receipt.resourceVersion !== request.resourceVersion
+      || effect.receipt.ownershipRef !== request.ownershipRef) {
+      throw new AdapterDispatchError('definitive-no-effect', 'FAKE_COMPENSATION_TARGET_MISMATCH');
+    }
+    if (effect.compensationBehavior === 'unsupported') {
+      throw new AdapterDispatchError('definitive-no-effect', 'FAKE_COMPENSATION_UNSUPPORTED');
+    }
+    if (effect.compensationBehavior === 'fail-before-effect') {
+      throw new AdapterDispatchError('definitive-no-effect', 'FAKE_COMPENSATION_REJECTED');
+    }
+    const receipt: CompensationReceipt = {
+      providerReceiptId: `comp-receipt-${randomUUID()}`, externalId: request.externalId,
+      removedVersion: request.resourceVersion, actualUnits: 3,
+    };
+    effect.removed = true;
+    ledger.compensations.push({ ...request, receipt });
+    this.writeLedger(ledger);
+    if (effect.compensationBehavior === 'lose-response-after-effect') {
+      throw new AdapterDispatchError('ambiguous', 'FAKE_COMPENSATION_RESPONSE_LOST');
+    }
+    return receipt;
+  }
+
+  async lookupCompensation(request: CompensationDispatchRequest): Promise<CompensationLookupOutcome> {
+    const ledger = this.readLedger();
+    const prior = ledger.compensations.find((item) => item.idempotencyKey === request.idempotencyKey);
+    if (prior) return { kind: 'confirmed-success', receipt: prior.receipt };
+    const effect = ledger.effects.find((item) => item.receipt.externalId === request.externalId);
+    if (!effect) return { kind: 'unsupported' };
+    if (effect.receipt.resourceVersion !== request.resourceVersion
+      || effect.receipt.ownershipRef !== request.ownershipRef) {
+      return { kind: 'partial-effect', detail: 'compensation target identity changed' };
+    }
+    return effect.removed ? { kind: 'pending' } : { kind: 'confirmed-not-removed' };
   }
 
   effectCount(): number { return this.readLedger().effects.length; }
@@ -117,6 +179,8 @@ export class FakeProvider implements OperationAdapter {
   lookupCount(): number {
     return this.readLedger().effects.reduce((sum, effect) => sum + effect.lookupCount, 0);
   }
+
+  compensationEffectCount(): number { return this.readLedger().compensations.length; }
 
   private payload(value: unknown): FakePayload {
     const payload = value as Partial<FakePayload>;
@@ -127,7 +191,7 @@ export class FakeProvider implements OperationAdapter {
   }
 
   private readLedger(): FakeLedger {
-    if (!existsSync(this.ledgerPath)) return { effects: [] };
+    if (!existsSync(this.ledgerPath)) return { effects: [], compensations: [] };
     return JSON.parse(readFileSync(this.ledgerPath, 'utf8')) as FakeLedger;
   }
 
