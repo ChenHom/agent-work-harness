@@ -80,9 +80,11 @@ test('Continue-As-New input carries identity, budget, deadline, operation, artif
   const continued: DurableContinueAsNewInput = buildContinueAsNewInput(input, snapshot, inbox, 123_456);
 
   assert.equal(continued.workId, 'W-1');
+  assert.equal(continued.epoch, 8);
   assert.equal(continued.historyEventLimit, 10_000);
   assert.deepEqual(continued.carry, {
     budgetWorkId: 'W-1', deadlineAtMs: 123_456,
+    stage: 'WAITING_EXTERNAL', reconcileAttempt: 0,
     outputArtifactId: 'artifact-output', operationId: 'operation-1',
     operationStatus: 'UNKNOWN', receiptArtifactId: 'artifact-receipt', callbackInbox: inbox,
   });

@@ -6,9 +6,10 @@ import type {
 
 export const durableCallbackSignal = defineSignal<[DurableCallback]>('durable.callback');
 export const durableCancelSignal = defineSignal('durable.cancel');
+export const durableRolloverSignal = defineSignal('durable.rollover');
 export const durableStateQuery = defineQuery<DurableWorkflowSnapshot>('durable.state');
 export const DEFAULT_CALLBACK_DEDUPE_LIMIT = 128;
-const DEFAULT_DURABLE_HISTORY_EVENT_LIMIT = 10_000;
+export const DEFAULT_DURABLE_HISTORY_EVENT_LIMIT = 10_000;
 
 export function createCallbackInbox(): DurableCallbackInbox {
   return { recentEvents: [], lastSequence: -1, acceptedTransitionCount: 0, ignoredCount: 0 };
@@ -74,13 +75,17 @@ export function buildContinueAsNewInput(
   snapshot: DurableWorkflowSnapshot,
   callbackInbox: DurableCallbackInbox,
   deadlineAtMs: number,
+  reconcileAttempt = 0,
 ): DurableContinueAsNewInput {
   return {
     ...input,
+    epoch: input.epoch + 1,
     historyEventLimit: input.historyEventLimit ?? DEFAULT_DURABLE_HISTORY_EVENT_LIMIT,
     carry: {
       budgetWorkId: input.workId,
       deadlineAtMs,
+      stage: snapshot.status === 'RETRY_WAIT' ? 'RETRY_WAIT' : 'WAITING_EXTERNAL',
+      reconcileAttempt,
       outputArtifactId: snapshot.outputArtifactId,
       operationId: snapshot.operationId,
       operationStatus: snapshot.operationStatus,

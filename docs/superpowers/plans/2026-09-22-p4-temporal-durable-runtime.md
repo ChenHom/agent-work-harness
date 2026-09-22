@@ -84,12 +84,12 @@ Failure to run the server or any required scenario blocks the selection. Do not 
 
 **Files:** `src/durable/workflows.ts`, `src/durable/versioning.ts`, `test/workflow-replay.test.ts`, `test/workflow-versioning.test.ts`, `docs/runbooks/temporal-upgrade.md`
 
-- [ ] Record Worker build/version policy using the selected SDK's current supported deployment/versioning API. Pin behavior changes in deterministic Workflow code.
-- [ ] Save representative histories and replay them under the new worker without executing Activities, Gateway calls, provider writes, or publication.
-- [ ] Route incompatible executions to a compatible worker or explicit paused/manual state; never silently reset them under new code.
-- [ ] Exercise Continue-As-New while preserving Work identity, budget, pending operations, signal dedupe horizon, deadlines, and artifact/receipt references.
-- [ ] Document deploy, rollback, compatibility window, history export/replay, and stuck old-build recovery.
-- [ ] Run targeted replay/version tests, one full `npm run check`, review against this task, and commit.
+- [x] Record Worker build/version policy using the selected SDK's current supported deployment/versioning API. Pin behavior changes in deterministic Workflow code.
+- [x] Save representative histories and replay them under the new worker without executing Activities, Gateway calls, provider writes, or publication.
+- [x] Route incompatible executions to a compatible worker or explicit paused/manual state; never silently reset them under new code.
+- [x] Exercise Continue-As-New while preserving Work identity, budget, pending operations, signal dedupe horizon, deadlines, and artifact/receipt references.
+- [x] Document deploy, rollback, compatibility window, history export/replay, and stuck old-build recovery.
+- [x] Run targeted replay/version tests, one full `npm run check`, review against this task, and commit.
 
 ## Task 7: CLI, G4 fixture, operations runbook, and final gate
 

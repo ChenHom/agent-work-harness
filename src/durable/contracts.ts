@@ -32,6 +32,8 @@ export interface DurableWorkflowInput {
   compensationDelayMs?: number;
   compensationBehavior?: 'success' | 'fail-before-effect' | 'lose-response-after-effect' | 'unsupported';
   maxCompensationAttempts?: number;
+  requiredWorkflowVersion?: number;
+  carry?: DurableContinueAsNewState;
 }
 
 export interface DurableCallback {
@@ -55,6 +57,8 @@ export interface DurableCallbackInbox {
 interface DurableContinueAsNewState {
   budgetWorkId: string;
   deadlineAtMs: number;
+  stage: 'WAITING_EXTERNAL' | 'RETRY_WAIT';
+  reconcileAttempt: number;
   outputArtifactId?: string;
   operationId?: string;
   operationStatus?: string;
@@ -77,6 +81,10 @@ export interface DurableWorkflowSnapshot {
   callbackConflict?: string;
   compensationId?: string;
   compensationStatus?: string;
+  epoch?: number;
+  runId?: string;
+  deadlineAtMs?: number;
+  compatibilityReason?: string;
 }
 
 export interface DurableWorkflowResult extends DurableWorkflowSnapshot {
