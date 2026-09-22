@@ -66,3 +66,25 @@
 主機環境執行 `npm run check`：exit 0，257 pass、0 fail、0 skip，lint/typecheck/Knip 全部通過。
 受限工具沙箱執行含 Git fixture 的測試時會得到 `spawnSync git EPERM`；該結果記為環境限制，
 沒有 skip 測試檔，也沒有用這個失敗結果宣告通過，改在支援 Git process 的主機環境重跑。
+
+## Long-running v2 G2：P2 controlled plans and checkpoints
+
+| # | G2 條件 | 驗證來源 |
+|---|---|---|
+| 1 | 使用者 amend 建立新版 immutable WorkContract，保留既有限制 | `test/plans.test.ts` amendment fixture |
+| 2 | Plan 凍結 contractVersion，拒絕缺 criterion、缺 dependency 與 cycle | `test/plans.test.ts` validation matrix |
+| 3 | 同一 active parent 的競爭 proposals 只有一個能 activation | `test/plans.test.ts` compare-and-swap fixture |
+| 4 | Resume 保持 branch；fork 建立新 branch 與 parent/source lineage | `test/checkpoints.test.ts` resume/fork fixtures |
+| 5 | Fork 不重設 attempts/retry，也不修改 dirty workspace files | `test/checkpoints.test.ts` ledger/dirty file fixture |
+| 6 | 中間 milestone 成功不完成 Work；過期 plan 成功不推進 active plan | `test/attempt-flow.test.ts` planned lifecycle fixtures |
+| 7 | Dependency artifact 替換使已完成下游 milestone STALE，事件含 cause path | `test/checkpoints.test.ts` artifact replacement fixture |
+| 8 | Checkpoint append-only；pending_validation 不被 resume 提升 | `test/plans.test.ts`、`test/checkpoints.test.ts` |
+| 9 | CLI mutation 受 ownership 保護，show 為零事件副作用的唯讀查詢 | `test/cli.test.ts` P2 command fixture |
+| 10 | 真實 harness workspace 的二階段 checkpoint/fork 流程完成 | `test/checkpoints.test.ts` G2 acceptance fixture |
+
+G2 fixture 使用本 repository 作 Work workspace，驗證 fork 前後 `package.json` SHA-256、attempts 與
+retry budget 不變；舊 branch result 不能完成 active Work，fork branch 的兩個 required milestones
+依序完成後 Work 才進入 DONE。Checkpoint 是 logical reference，不執行 Git rollback。
+
+2026-09-22 驗收環境：Node v24.19.0、Linux 6.8.0-124-generic x86_64。
+主機環境執行 `npm run check`：exit 0，278 pass、0 fail、0 skip，lint/typecheck/Knip 全部通過。

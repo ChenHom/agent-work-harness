@@ -13,7 +13,8 @@ MVP                    ✅ 完成（Gate 1–6，見 docs/acceptance.md）
 Cross-Repo Validation  ✅ task-tracker（36.6k 行 TS）✅ rag-stack（10k 行 Python）
 Core abstraction       ✅ 跨兩種語言 / domain / runner，Core 0 修改
 P1 Recovery correctness ✅ G1 通過：durable inputs/outputs、ownership、transaction、recovery session
-P2–P5                  ◻ 設計中，尚未實作
+P2 Plans/checkpoints    ✅ G2 通過：versioned plans、logical checkpoints、verified resume/fork
+P3–P5                  ◻ 設計中，尚未實作
 需要修改 Core 的證據      無
 ```
 
@@ -41,6 +42,21 @@ node src/cli.ts run  <workId>     # --no-baseline 可跳過 pre-flight baseline�
 node src/cli.ts show <workId>     # contract / decisions / attempts / evidence
 node src/cli.ts trace <workId>    # append-only 事件流
 ```
+
+長任務可用 JSON 建立受控 plan，再逐 milestone 執行：
+
+```bash
+node src/cli.ts plan propose <workId> plan.json
+node src/cli.ts plan activate <planId>
+node src/cli.ts run <workId> --milestone M-1
+node src/cli.ts checkpoint create <workId> checkpoint.json
+node src/cli.ts checkpoint resume <checkpointId>
+node src/cli.ts plan fork <checkpointId> fork.json
+```
+
+`checkpoint` 是保存 plan/branch/contract、artifact hash 與 validation status 的 logical checkpoint；
+它不執行 `git reset`、不還原檔案，也不撤銷外部副作用。完整格式與操作差異見
+[使用手冊](docs/usage.md#受控-plan-與-logical-checkpointp2)。
 
 需要你決定時（`NEEDS_USER_DECISION`）：
 
@@ -128,7 +144,7 @@ agent 改不了自己的驗收規則。
 | 層 | 模組 | 職責 |
 |---|---|---|
 | 入口 | `cli.ts` | 子指令 → Orchestrator / Store，不含業務邏輯 |
-| 流程 | `orchestrator.ts` | attempt 生命週期、retry、recovery；`RuntimeDriver` 與 `EvidenceCollector` 兩個介面注入，測試可替換 |
+| 流程 | `orchestrator.ts`、`work/plans.ts`、`trace/checkpoints.ts` | attempt 生命週期、受控 plan、logical checkpoint、retry、recovery |
 | 輸入 | `work/parser`、`context/manifest`、`context/budget`、`prompt/compiler` | 需求 → pointers → 預算裁切 → 六區 prompt |
 | 執行 | `runtime/codex-driver`、`runtime/isolation`、`runtime/result` | prepare/run、bwrap 沙箱與 env、RuntimeResult 解析 |
 | 證據 | `evidence/{git,verification,exec,outcome}`、`repo/paths` | diff 觀察、隔離跑驗證指令、path policy → `OutcomeDecision` |
@@ -150,7 +166,7 @@ run  ┌ prepare  contract 快照 → admitSkills → manifest → budget → co
 
 ## 文件
 
-- [長任務架構 v2（P1 已實作；P2–P5 為設計）](docs/superpowers/specs/2026-09-09-long-running-harness-v2-design.md)
+- [長任務架構 v2（P1–P2 已實作；P3–P5 為設計）](docs/superpowers/specs/2026-09-09-long-running-harness-v2-design.md)
 - [v2 分階段實作計畫（P1 本機恢復優先）](docs/superpowers/plans/2026-09-09-long-running-harness-v2.md)
 
 - 決策記錄：`DECISIONS.md`
@@ -166,7 +182,7 @@ run  ┌ prepare  contract 快照 → admitSkills → manifest → budget → co
 ```bash
 npm run check     # lint + typecheck + test + deadcode，提交前跑這個
 
-npm test          # 257 個測試，不需要 codex
+npm test          # 278 個測試，不需要 codex
 npm run typecheck # tsc --noEmit
 npm run lint      # eslint：no-floating-promises + 兩條架構界線（D-29 / D-31）
 npm run deadcode  # knip：沒人用的 export / file / dependency

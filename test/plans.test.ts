@@ -5,6 +5,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Store } from '../src/trace/store.ts';
 import { PlanService, acceptanceCriterionId } from '../src/work/plans.ts';
+import { Orchestrator } from '../src/orchestrator.ts';
+import { DEFAULT_POLICY } from '../src/policy.ts';
 import type { LogicalCheckpoint, PlanMilestone, Work, WorkContract, WorkPlan } from '../src/types.ts';
 
 function fixture(): { state: string; store: Store; work: Work } {
@@ -236,6 +238,27 @@ test('only one competing child plan can activate from the same parent', () => {
     assert.equal(h.store.getActivePlan(h.work.id)!.id, childA.id);
     assert.equal(h.store.getPlan(parent.id)!.status, 'SUPERSEDED');
     assert.equal(h.store.getPlan(childB.id)!.status, 'VALIDATED');
+  } finally {
+    h.store.close();
+    rmSync(h.state, { recursive: true, force: true });
+  }
+});
+
+test('user amendment versions the goal while preserving accumulated restrictions', () => {
+  const h = fixture();
+  try {
+    const original = contract();
+    h.store.insertContract(original);
+    const orchestrator = new Orchestrator({ ...DEFAULT_POLICY, stateDir: h.state }, h.store);
+    const amended = orchestrator.amend(h.work.id, '完成新版恢復流程，不要碰 production/**');
+
+    assert.equal(amended.version, 2);
+    assert.equal(amended.request, '完成新版恢復流程，不要碰 production/**');
+    assert.ok(amended.constraints.includes('never deploy'));
+    assert.ok(amended.deniedPaths.includes('secret/**'));
+    assert.ok(amended.deniedPaths.includes('production/**'));
+    assert.deepEqual(h.store.getContract(h.work.id, 1), original);
+    assert.equal(h.store.getWork(h.work.id)!.currentContractVersion, 2);
   } finally {
     h.store.close();
     rmSync(h.state, { recursive: true, force: true });

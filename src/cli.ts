@@ -6,6 +6,8 @@ import { writeFileSync, mkdirSync, existsSync, readFileSync } from 'node:fs';
 import { loadPolicy } from './policy.ts';
 import { Store, StoreOpenError } from './trace/store.ts';
 import { Orchestrator } from './orchestrator.ts';
+import { PlanService, type PlanProposal } from './work/plans.ts';
+import { CheckpointService } from './trace/checkpoints.ts';
 import { detectCandidate, loadSnapshot, CONTRACT_REL_PATH, ContractError } from './repo/contract.ts';
 import { approveSkill, loadRegistry, admitSkills } from './security/skills.ts';
 import { ensureRuntimeDirs } from './runtime/isolation.ts';
@@ -15,6 +17,7 @@ import {
 import { runIsolated } from './evidence/exec.ts';
 import {
   formatContextDropped, formatPreExistingDirty, formatRecoverySession, formatWorkListRow,
+  formatCheckpoint, formatMilestone, formatPlan,
 } from './cli-format.ts';
 import { formatPromptChars } from './response.ts';
 import type { GlobalPolicy } from './types.ts';
@@ -23,9 +26,15 @@ const USAGE = `harness — Agent Work Harness (MVP)
 
   harness init [dir]                    產生候選 .harness/config.json（需人工確認後才生效）
   harness new "<需求>" [--dir .] [--title T] [--retry N]
-  harness run <workId> [--no-baseline]  執行下一個 attempt
-  harness retry <workId> [--no-baseline]  以 previous evidence 建立 retry attempt
+  harness run <workId> [--milestone M] [--no-baseline]  執行下一個 attempt
+  harness retry <workId> [--milestone M] [--no-baseline]  以 previous evidence 建立 retry attempt
   harness answer <workId> "<回覆>"       記錄使用者決策（不累積對話）
+  harness amend <workId> "<新版目標>"     建立新版 goal contract（保留既有限制）
+  harness plan propose <workId> <json-file>
+  harness plan activate <planId>
+  harness plan fork <checkpointId> <json-file>
+  harness checkpoint create <workId> <json-file>
+  harness checkpoint resume <checkpointId>
   harness recover <workId>              重新收集中斷 attempt 的 evidence
   harness list                          列出所有 work
   harness show <workId>                 contract / decisions / attempts / evidence
@@ -49,9 +58,14 @@ note 的 kind 對應 DECISIONS.md 的升級判準：
 
 const NOTE_KINDS = ['false-accept', 'false-block', 'retry-churn', 'blocked-work', 'friction', 'other'];
 
-const STORE_COMMANDS = new Set(['new', 'run', 'retry', 'recover', 'answer', 'list', 'show', 'trace', 'prompt', 'note', 'notes', 'stats']);
+const STORE_COMMANDS = new Set([
+  'new', 'run', 'retry', 'recover', 'answer', 'amend', 'plan', 'checkpoint',
+  'list', 'show', 'trace', 'prompt', 'note', 'notes', 'stats',
+]);
 const READ_ONLY_COMMANDS = new Set(['list', 'show', 'trace', 'prompt', 'notes', 'stats']);
-const MUTATING_COMMANDS = new Set(['init', 'new', 'run', 'retry', 'recover', 'answer', 'note', 'doctor']);
+const MUTATING_COMMANDS = new Set([
+  'init', 'new', 'run', 'retry', 'recover', 'answer', 'amend', 'plan', 'checkpoint', 'note', 'doctor',
+]);
 
 export async function main(argv: string[], policy: GlobalPolicy = loadPolicy()): Promise<number> {
   const [cmd, ...rest] = argv;
@@ -111,8 +125,10 @@ export async function main(argv: string[], policy: GlobalPolicy = loadPolicy()):
       // pre-flight baseline 讓 verification 時間翻倍；測試很慢的 repo 可以關掉，
       // 代價是失去「有沒有比動手前少跑」這個判斷。
       const noBaseline = rest.includes('--no-baseline');
-      const report = cmd === 'run' ? await orch!.runAttempt(workId, { noBaseline, ownership })
-        : cmd === 'retry' ? await orch!.retry(workId, { noBaseline, ownership })
+      const milestoneOption = rest.indexOf('--milestone');
+      const milestoneId = milestoneOption >= 0 ? rest[milestoneOption + 1] : undefined;
+      const report = cmd === 'run' ? await orch!.runAttempt(workId, { noBaseline, milestoneId, ownership })
+        : cmd === 'retry' ? await orch!.retry(workId, { noBaseline, milestoneId, ownership })
         : await orch!.recover(workId, ownership);
       console.log(`\n${report.response}\n`);
       return report.decision.outcome === 'SUCCESS' ? 0 : 3;
@@ -126,6 +142,66 @@ export async function main(argv: string[], policy: GlobalPolicy = loadPolicy()):
       for (const d of added) console.log(`- ${d.kind}: ${d.value}`);
       console.log(`\n下一步：harness retry ${workId}`);
       return 0;
+    }
+
+    case 'amend': {
+      const [workId, request] = rest;
+      if (!workId || !request) { console.error('用法：harness amend <workId> "<新版目標>"'); return 1; }
+      const contract = orch!.amend(workId, request, ownership);
+      console.log(`contract: ${contract.id} v${contract.version}`);
+      console.log(`request: ${contract.request}`);
+      console.log(`denied: ${contract.deniedPaths.join(', ') || '-'}`);
+      console.log(`constraints: ${contract.constraints.join(' / ') || '-'}`);
+      return 0;
+    }
+
+    case 'plan': {
+      const [sub, id, jsonPath] = rest;
+      const plans = new PlanService(store!);
+      if (sub === 'propose' && id && jsonPath) {
+        const work = store!.getWork(id);
+        if (!work) { console.error(`找不到 work ${id}`); return 1; }
+        const input = readJson(jsonPath) as Omit<PlanProposal, 'workId'>;
+        const proposed = plans.propose({ ...input, workId: id });
+        console.log(`plan: ${proposed.plan.id} status=${proposed.plan.status} branch=${proposed.plan.branchId}`);
+        for (const milestone of proposed.milestones) console.log(formatMilestone(milestone));
+        return 0;
+      }
+      if (sub === 'activate' && id) {
+        const activated = plans.activate(id);
+        console.log(`plan: ${activated.id} status=${activated.status} branch=${activated.branchId}`);
+        return 0;
+      }
+      if (sub === 'fork' && id && jsonPath) {
+        const input = readJson(jsonPath) as { reason: string; milestones: PlanProposal['milestones'] };
+        const forked = new CheckpointService(store!).fork({
+          checkpointId: id, reason: input.reason, milestones: input.milestones,
+        });
+        console.log(`plan: ${forked.plan.id} status=${forked.plan.status} branch=${forked.plan.branchId}`
+          + ` sourceCheckpoint=${forked.plan.sourceCheckpointId}`);
+        return 0;
+      }
+      console.error('用法：harness plan propose <workId> <json-file> | activate <planId> | fork <checkpointId> <json-file>');
+      return 1;
+    }
+
+    case 'checkpoint': {
+      const [sub, id, jsonPath] = rest;
+      const checkpoints = new CheckpointService(store!);
+      if (sub === 'create' && id && jsonPath) {
+        const input = readJson(jsonPath) as Parameters<CheckpointService['create']>[0];
+        const checkpoint = checkpoints.create({ ...input, workId: id });
+        console.log(`checkpoint: ${checkpoint.id} branch=${checkpoint.branchId} plan=${checkpoint.planId}`);
+        return 0;
+      }
+      if (sub === 'resume' && id) {
+        const resumed = checkpoints.resume(id);
+        console.log(`checkpoint: ${resumed.checkpoint.id} branch=${resumed.checkpoint.branchId}`
+          + ` plan=${resumed.activePlan.id} validation=${resumed.checkpoint.validationStatus}`);
+        return 0;
+      }
+      console.error('用法：harness checkpoint create <workId> <json-file> | resume <checkpointId>');
+      return 1;
     }
 
     case 'list': {
@@ -152,6 +228,17 @@ export async function main(argv: string[], policy: GlobalPolicy = loadPolicy()):
       console.log(`success criteria (semantic): ${contract.successCriteria.join(' / ')}`);
       console.log('\n[decisions]');
       for (const d of store!.listDecisions(work.id)) console.log(`- ${d.kind}: ${d.value}  (${d.sourceMessageId})`);
+      console.log('\n[active plan]');
+      const activePlan = store!.getActivePlan(work.id);
+      if (!activePlan) console.log('(none)');
+      else {
+        console.log(formatPlan(activePlan));
+        for (const milestone of store!.listMilestones(activePlan.id)) console.log(formatMilestone(milestone));
+      }
+      console.log('\n[checkpoints]');
+      const checkpoints = store!.listCheckpoints(work.id);
+      if (!checkpoints.length) console.log('(none)');
+      for (const checkpoint of checkpoints) console.log(formatCheckpoint(checkpoint));
       console.log('\n[attempts]');
       for (const a of store!.listAttempts(work.id)) {
         console.log(`- #${a.number} ${a.id} ${a.mode} ${a.status} base=${a.baseRevision.slice(0, 8)} contract=v${a.contractVersion} snapshot=${a.contractSnapshotHash.slice(0, 8)}${a.retryOf ? ` retryOf=${a.retryOf}` : ''}`);
@@ -304,6 +391,10 @@ export async function main(argv: string[], policy: GlobalPolicy = loadPolicy()):
     store?.close();
     ownership?.release();
   }
+}
+
+function readJson(path: string): unknown {
+  return JSON.parse(readFileSync(resolve(path), 'utf8')) as unknown;
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {

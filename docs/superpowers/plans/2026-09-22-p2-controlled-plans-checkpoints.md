@@ -191,39 +191,39 @@ Commit: `feat: bind attempts and completion to active milestones`.
 - Modify: `README.md`
 - Modify: `docs/superpowers/plans/2026-09-09-long-running-harness-v2.md`
 
-- [ ] **Step 1: Write failing amendment and CLI tests**
+- [x] **Step 1: Write failing amendment and CLI tests**
 
 Cover user-authored `amend` creating a new WorkContract version while preserving accumulated constraints; JSON-file plan proposal/activation; `show` displaying active plan, milestone status, and checkpoints; checkpoint resume/fork output; and read-only display causing no events.
 
-- [ ] **Step 2: Verify RED**
+- [x] **Step 2: Verify RED**
 
 Run `node --test test/cli.test.ts test/plans.test.ts test/checkpoints.test.ts`.
 Expected: P2 commands are unavailable.
 
-- [ ] **Step 3: Implement mutation commands under P1 ownership**
+- [x] **Step 3: Implement mutation commands under P1 ownership**
 
 Add `amend`, `plan propose|activate|fork`, and `checkpoint create|resume` as mutating commands. Add plan/checkpoint sections to read-only `show`. User amendment may change request and add restrictions, but cannot silently remove existing constraints or denied paths.
 
-- [ ] **Step 4: Run the real two-milestone harness acceptance fixture**
+- [x] **Step 4: Run the real two-milestone harness acceptance fixture**
 
 Use this repository as the Work workspace. Activate a plan with two required milestones, checkpoint the first, fork from it, verify the original dirty file hash is unchanged, finish the fork, and assert the old branch result cannot complete the active Work. Record exact automated fixtures rather than keeping disposable runtime state.
 
-- [ ] **Step 5: Complete G2 docs and plan checkboxes**
+- [x] **Step 5: Complete G2 docs and plan checkboxes**
 
 Document the difference between resume, fork, audit replay, and re-execution; state that checkpoints are logical and never imply Git rollback; record schema/test environment and G2 evidence. Mark only P2/G2 complete; leave P3–P5 unchanged.
 
-- [ ] **Step 6: Final verification and commit**
+- [x] **Step 6: Final verification and commit**
 
 Run `npm run check`, then Markdown relative-link and `git diff --check` validation. Record pass/fail/skip counts.
 Commit: `docs: record controlled plan and checkpoint guarantees`.
 
 ## G2 acceptance checklist
 
-- [ ] User amendment creates a new immutable WorkContract version and preserves restrictions.
-- [ ] Plans freeze contractVersion; deterministic validation rejects missing criteria and dependency cycles.
-- [ ] Two competing proposals cannot both activate.
-- [ ] Resume keeps branch identity; fork creates a new identity and plan lineage.
-- [ ] Fork preserves attempts/retry accounting and never modifies dirty workspace files.
-- [ ] Intermediate milestone success does not complete Work; only the active plan can complete it.
-- [ ] Replaced dependency artifacts mark downstream milestones stale with a traceable cause chain.
-- [ ] Checkpoints remain append-only and `pending_validation` is never treated as acceptance.
+- [x] User amendment creates a new immutable WorkContract version and preserves restrictions.
+- [x] Plans freeze contractVersion; deterministic validation rejects missing criteria and dependency cycles.
+- [x] Two competing proposals cannot both activate.
+- [x] Resume keeps branch identity; fork creates a new identity and plan lineage.
+- [x] Fork preserves attempts/retry accounting and never modifies dirty workspace files.
+- [x] Intermediate milestone success does not complete Work; only the active plan can complete it.
+- [x] Replaced dependency artifacts mark downstream milestones stale with a traceable cause chain.
+- [x] Checkpoints remain append-only and `pending_validation` is never treated as acceptance.

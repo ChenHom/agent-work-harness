@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { createHash } from 'node:crypto';
 import { CheckpointService } from '../src/trace/checkpoints.ts';
 import { Store } from '../src/trace/store.ts';
 import { PlanService, acceptanceCriterionId } from '../src/work/plans.ts';
@@ -263,6 +264,86 @@ test('artifact replacement marks completed downstream milestones stale with depe
         logicalName: 'build', dependencyPath: ['M-1', 'M-2', 'M-3'],
       },
     ]);
+  } finally {
+    store.close();
+    rmSync(base, { recursive: true, force: true });
+  }
+});
+
+test('G2 acceptance: real harness workspace forks a two-milestone checkpoint without rewriting history', () => {
+  const base = mkdtempSync(join(tmpdir(), 'harness-g2-'));
+  const store = new Store(join(base, 'state'));
+  const workspace = process.cwd();
+  const trackedPath = join(workspace, 'package.json');
+  const fileHash = (): string => createHash('sha256').update(readFileSync(trackedPath)).digest('hex');
+  const work: Work = {
+    id: 'W-G2', title: 'G2 real workspace', repositoryId: 'agent-work-harness', workspace,
+    state: 'ACTIVE', currentContractVersion: 1, retryBudget: 3,
+    createdAt: '2026-09-22T00:00:00.000Z',
+  };
+  const complete = (attempt: Attempt): void => {
+    store.insertAttempt(attempt);
+    store.setWorkState(work.id, 'VERIFYING');
+    attempt.status = 'COMPLETED';
+    attempt.phase = 'terminal';
+    attempt.endedAt = '2026-09-22T00:10:00.000Z';
+    store.finalizeAttempt({
+      attempt, outcome: 'SUCCESS', reasons: ['G2 fixture verified'], workState: 'DONE', evidenceIds: [],
+      expectedAttemptStatus: 'RUNNING', expectedWorkState: 'VERIFYING',
+    });
+  };
+  const attempt = (id: string, number: number, planId: string, branchId: string, milestoneId: string): Attempt => ({
+    id, workId: work.id, planId, branchId, milestoneId, number, mode: 'write', contractVersion: 1,
+    contractSnapshotHash: 'fixture-snapshot', baseRevision: 'fixture-base', promptArtifactId: 'AR-fixture',
+    runtime: 'codex', status: 'RUNNING', phase: 'executing', startedAt: '2026-09-22T00:05:00.000Z',
+  });
+  try {
+    store.insertWork(work);
+    store.insertContract({
+      id: 'C-G2', workId: work.id, version: 1, request: 'finish two milestones', mode: 'write',
+      constraints: ['never deploy'], deniedPaths: ['secret/**'],
+      successCriteria: ['first accepted', 'second accepted'], sourceMessageIds: ['MSG-G2'],
+      createdAt: '2026-09-22T00:00:00.000Z',
+    });
+    const milestones = [
+      { id: 'M-1', objective: 'first', acceptanceCriterionIds: [acceptanceCriterionId('first accepted')] },
+      {
+        id: 'M-2', objective: 'second', dependsOn: ['M-1'],
+        acceptanceCriterionIds: [acceptanceCriterionId('second accepted')],
+      },
+    ];
+    const plans = new PlanService(store);
+    const original = plans.propose({
+      workId: work.id, contractVersion: 1, branchId: 'B-original', reason: 'original', milestones,
+    }).plan;
+    plans.activate(original.id);
+    complete(attempt('A-original-M1', 1, original.id, original.branchId, 'M-1'));
+    const checkpoints = new CheckpointService(store);
+    const checkpoint = checkpoints.create({
+      workId: work.id, planId: original.id, milestoneId: 'M-1', artifacts: [],
+      validationStatus: 'validated', validationEvidenceIds: [],
+    });
+    const attemptsBeforeFork = store.listAttempts(work.id);
+    const retryBudgetBeforeFork = store.getWork(work.id)!.retryBudget;
+    const workspaceHashBeforeFork = fileHash();
+
+    const forked = checkpoints.fork({ checkpointId: checkpoint.id, reason: 'G2 fork', milestones });
+    assert.notEqual(forked.plan.branchId, original.branchId);
+    assert.equal(forked.plan.parentPlanId, original.id);
+    assert.deepEqual(store.listAttempts(work.id), attemptsBeforeFork);
+    assert.equal(store.getWork(work.id)!.retryBudget, retryBudgetBeforeFork);
+    assert.equal(fileHash(), workspaceHashBeforeFork);
+    plans.activate(forked.plan.id);
+
+    complete(attempt('A-old-M2', 2, original.id, original.branchId, 'M-2'));
+    assert.equal(store.getMilestone(original.id, 'M-2')!.status, 'PENDING');
+    assert.equal(store.getWork(work.id)!.state, 'ACTIVE');
+
+    complete(attempt('A-fork-M1', 3, forked.plan.id, forked.plan.branchId, 'M-1'));
+    assert.equal(store.getWork(work.id)!.state, 'ACTIVE');
+    complete(attempt('A-fork-M2', 4, forked.plan.id, forked.plan.branchId, 'M-2'));
+    assert.equal(store.getWork(work.id)!.state, 'DONE');
+    assert.equal(fileHash(), workspaceHashBeforeFork);
   } finally {
     store.close();
     rmSync(base, { recursive: true, force: true });

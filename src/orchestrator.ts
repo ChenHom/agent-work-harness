@@ -207,6 +207,39 @@ export class Orchestrator {
     return all.slice(before);
   }
 
+  /** 使用者明確修訂 goal；舊 contract 保持不可變，既有限制只累積、不靜默移除。 */
+  amend(workId: string, request: string, ownership?: ExecutionOwnership): WorkContract {
+    return this.withOwnershipSync(ownership, () => this.amendOwned(workId, request));
+  }
+
+  private amendOwned(workId: string, request: string): WorkContract {
+    if (!request.trim()) throw new Error('AMEND_INVALID: request must not be empty');
+    const work = this.requireWork(workId);
+    const current = this.currentContract(work);
+    const parsed = parseRequest(request);
+    let next!: WorkContract;
+    this.store.withTransaction(() => {
+      const messageId = this.store.insertMessage('user', request, workId);
+      this.recordDecisions(workId, messageId, parsed);
+      next = {
+        ...current,
+        id: newId('WC'),
+        version: current.version + 1,
+        request,
+        mode: parsed.mode,
+        constraints: [...new Set([...current.constraints, ...parsed.constraints])],
+        deniedPaths: [...new Set([...current.deniedPaths, ...parsed.deniedPaths])],
+        allowedPaths: mergeAllowed(current.allowedPaths, parsed.allowedPaths, parsed.allowPathDecisions),
+        sourceMessageIds: [...current.sourceMessageIds, messageId],
+        createdAt: nowIso(),
+      };
+      this.store.insertContract(next);
+      this.store.setContractVersion(workId, next.version);
+      this.store.setWorkState(workId, 'ACTIVE');
+    });
+    return next;
+  }
+
   // ---------------------------------------------------------------- attempt
 
   /**

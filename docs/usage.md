@@ -84,6 +84,63 @@ harness retry W-xxx
 
 `answer` 只累積**決策**，不累積對話。既有的 deny 不會因為新的授權而消失。
 
+### 受控 Plan 與 Logical Checkpoint（P2）
+
+使用者要改原始目標時，用 `amend` 建立新版 immutable WorkContract。舊版本保留，既有
+constraints 與 denied paths 會累積到新版，不會因改寫 goal 而消失：
+
+```bash
+harness amend W-xxx "完成新版恢復流程，不要碰 production"
+```
+
+Plan 從 JSON 檔提出並經 deterministic validation；milestone 必須覆蓋目前 contract 的
+acceptance criteria，dependency 不可缺失、自依賴或成環：
+
+```json
+{
+  "contractVersion": 2,
+  "branchId": "B-main",
+  "reason": "initial plan",
+  "milestones": [
+    { "id": "M-1", "objective": "implement", "acceptanceCriterionIds": ["AC-..."] },
+    { "id": "M-2", "objective": "verify", "acceptanceCriterionIds": ["AC-..."], "dependsOn": ["M-1"] }
+  ]
+}
+```
+
+```bash
+harness plan propose W-xxx plan.json
+harness plan activate P-xxx
+harness run W-xxx --milestone M-1
+```
+
+有 active plan 時，每個 run/retry 都必須綁定 milestone。單一 milestone 的 SUCCESS 只完成該
+milestone；active plan 的 required milestones 全部通過後，Work 才會 DONE。過期 plan 的
+成功結果不會推進目前 active plan。
+
+Checkpoint JSON 指定 `planId`、選用的 `parentCheckpointId`/`milestoneId`、`artifacts`、
+`validationStatus` 與 `validationEvidenceIds`。Runtime 會驗證 artifact 存在且 hash 正確後才保存：
+
+```bash
+harness checkpoint create W-xxx checkpoint.json
+harness checkpoint resume CP-xxx
+harness plan fork CP-xxx fork.json
+```
+
+四種操作的語意不同：
+
+| 操作 | 行為 |
+|---|---|
+| resume | 驗證 checkpoint schema、refs 與 artifact hash，回傳同 branch 的可用狀態；不執行模型、不改檔、不把 pending 提升為 validated |
+| fork | 從 checkpoint 提出新 branch/child plan；保留 attempts、retry 計數、artifact 與 workspace 現況 |
+| audit replay | 讀取既有 trace、artifact 與 checkpoint 做稽核；不重新執行模型或工具 |
+| re-execution | 用 active plan/milestone 建立全新 attempt，重新計入執行與 retry 帳本 |
+
+Checkpoint 是 append-only 的 logical state reference。它不代表 Git commit、worktree snapshot 或
+filesystem rollback；resume/fork 都不會執行 `git reset`／`git clean`，也不能撤銷已發生的外部副作用。
+同一 producer milestone 與 logical artifact name 的 hash 被替換時，已完成的下游 milestone 會
+轉為 STALE，trace 會保存來源 artifact 與 dependency path。
+
 ### 讀懂結果
 
 回應分成三塊，來源不同，不要混著看：

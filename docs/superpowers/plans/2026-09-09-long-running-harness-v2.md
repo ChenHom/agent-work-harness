@@ -1,12 +1,12 @@
 # Long-Running Harness v2 Implementation Plan
 
 > **For agentic workers:** 使用 `executing-plans` 逐項執行；若使用者明確選擇代理分工，
-> 可使用 `subagent-driven-development`。下列 checkbox 是尚未執行的工作。
+> 可使用 `subagent-driven-development`。下列 checkbox 記錄各階段的實際完成狀態。
 
 **Goal:** 先讓既有本機 harness 的中斷恢復使用原始證據與明確執行所有權，再分階段接入長任務控制。
 
 **Architecture:** 延續 Work／Attempt、SQLite、deterministic prompt 與 evidence-first outcome。
-P1 不增加線上 LLM 或 workflow engine；P2–P5 是有前置條件的演進路線，各自通過 gate 才擴張保證。
+P1–P2 不增加線上 LLM 或 workflow engine；P3–P5 是有前置條件的演進路線，各自通過 gate 才擴張保證。
 
 **Tech Stack:** TypeScript、Node 24、node:sqlite、node:test、Codex CLI、既有 bwrap runner。
 
@@ -14,7 +14,7 @@ P1 不增加線上 LLM 或 workflow engine；P2–P5 是有前置條件的演進
 
 **基線:** `9f04360`；2026-09-09 主機 `npm run check`：173 pass／0 fail／0 skip。
 
-**本文件狀態:** **規劃完成，所有實作項目未開始。** 本輪只提交既有修正及撰寫文件。
+**本文件狀態:** **P1/G1 與 P2/G2 已完成；P3–P5 尚未開始。**
 
 ## 1. 可交付範圍
 
@@ -357,17 +357,17 @@ G1 必須全部通過：
 **預定模組：** `src/work/plans.ts`、`src/trace/checkpoints.ts`、
 現有 types/store/orchestrator/context/cli；測試 `test/plans.test.ts`、`test/checkpoints.test.ts`。
 
-- [ ] 加入固定 contractVersion 的 plan proposal／validation／activation；初期允許使用者輸入 milestones，
+- [x] 加入固定 contractVersion 的 plan proposal／validation／activation；初期允許使用者輸入 milestones，
   不為拆計畫強制新增 Planner LLM。
-- [ ] milestone 指向 acceptance criterion IDs；依賴 cycle、缺失 step、過期 parent version 都拒絕。
-- [ ] checkpoint 保存工作引用與 validation status；允許 pending_validation，不等於驗收通過。
-- [ ] fork 建立新 branch／plan，保留最新 attempt／dispatch 計數與舊 branch history。
+- [x] milestone 指向 acceptance criterion IDs；依賴 cycle、缺失 step、過期 parent version 都拒絕。
+- [x] checkpoint 保存工作引用與 validation status；允許 pending_validation，不等於驗收通過。
+- [x] fork 建立新 branch／plan，保留最新 attempt／dispatch 計數與舊 branch history。
   P3 尚未接入時不虛構費用／operation 帳本；接入後這些帳本也不受 fork 回退。
-- [ ] 將 Attempt 綁定 milestone；調整 applyWorkState，milestone SUCCESS 不直接 Work DONE。
+- [x] 將 Attempt 綁定 milestone；調整 applyWorkState，milestone SUCCESS 不直接 Work DONE。
   目前 plan 的必要 milestones 與全域 mechanical checks 全部通過，才標 Work 完成；
   過期分支的成功不能滿足新 plan 的驗收。
-- [ ] dependency artifact 被替換時，標記下游成果 stale，不能自動沿用。
-- [ ] 明確限定 logical checkpoint；若需要檔案還原，另驗證隔離 worktree／artifact manifest 的完整性。
+- [x] dependency artifact 被替換時，標記下游成果 stale，不能自動沿用。
+- [x] 明確限定 logical checkpoint；若需要檔案還原，另驗證隔離 worktree／artifact manifest 的完整性。
 
 **G2：** 使用者 amend goal 建新版本；LLM 不可改 constraints；
 兩個競爭 plan 只一個 activation 成功；resume 與 fork 身份不同；
