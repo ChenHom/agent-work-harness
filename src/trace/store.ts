@@ -12,6 +12,8 @@ import type {
   Work, WorkContract, Attempt, DecisionRecord, EvidenceRecord,
   Outcome, WorkState, AttemptStatus, RecoverySession,
   WorkPlan, PlanMilestone, LogicalCheckpoint,
+  Operation, OperationAttempt, Compensation, CompensationAttempt,
+  BudgetLimit, BudgetReservation, BudgetLedgerEntry,
 } from '../types.ts';
 
 const ARTIFACT_READ_FLAGS = constants.O_RDONLY | constants.O_NONBLOCK | constants.O_NOFOLLOW;
@@ -27,6 +29,9 @@ export type EventType =
   | 'recovery.required' | 'recovery.observed'
   | 'plan.proposed' | 'plan.activated' | 'plan.superseded' | 'plan.completed' | 'checkpoint.created'
   | 'dependency.artifact_replaced' | 'milestone.completed' | 'milestone.stale'
+  | 'operation.prepared' | 'operation.state_changed' | 'operation.attempt_recorded'
+  | 'compensation.prepared' | 'compensation.state_changed' | 'compensation.attempt_recorded'
+  | 'budget.limit_configured' | 'budget.reservation_recorded' | 'budget.ledger_recorded'
   | 'usage.note';   // 人對結果的判讀 —— 機器不知道 evidence 判錯了，只有人知道
 
 export type VerifiedArtifact =
@@ -663,6 +668,199 @@ export class Store {
     const rows = this.db.prepare('select json from checkpoints where work_id = ? order by created_at, rowid')
       .all(workId) as Array<{ json: string }>;
     return rows.map((row) => JSON.parse(row.json) as LogicalCheckpoint);
+  }
+
+  // ---- operations / external effects ----
+  insertOperation(operation: Operation): void {
+    this.db.prepare(`
+      insert into operations(id,work_id,intent_key,idempotency_key,status,json,created_at)
+      values (?,?,?,?,?,?,?)
+    `).run(operation.id, operation.workId, operation.intentKey, operation.idempotencyKey,
+      operation.status, JSON.stringify(operation), operation.createdAt);
+    this.event('operation.prepared', {
+      operationId: operation.id, intentKey: operation.intentKey,
+      idempotencyKey: operation.idempotencyKey, status: operation.status,
+    }, operation.workId);
+  }
+
+  updateOperation(operation: Operation): void {
+    const changed = this.db.prepare('update operations set status = ?, json = ? where id = ? and work_id = ?')
+      .run(operation.status, JSON.stringify(operation), operation.id, operation.workId);
+    if (Number(changed.changes) !== 1) throw new Error(`OPERATION_NOT_FOUND: ${operation.id}`);
+    this.event('operation.state_changed', {
+      operationId: operation.id, status: operation.status,
+    }, operation.workId);
+  }
+
+  getOperation(id: string): Operation | null {
+    const row = this.db.prepare('select json from operations where id = ?').get(id) as { json: string } | undefined;
+    return row ? JSON.parse(row.json) as Operation : null;
+  }
+
+  findOperationByIntent(workId: string, intentKey: string): Operation | null {
+    const row = this.db.prepare('select json from operations where work_id = ? and intent_key = ?')
+      .get(workId, intentKey) as { json: string } | undefined;
+    return row ? JSON.parse(row.json) as Operation : null;
+  }
+
+  findOperationByIdempotencyKey(idempotencyKey: string): Operation | null {
+    const row = this.db.prepare('select json from operations where idempotency_key = ?')
+      .get(idempotencyKey) as { json: string } | undefined;
+    return row ? JSON.parse(row.json) as Operation : null;
+  }
+
+  listOperations(workId: string): Operation[] {
+    const rows = this.db.prepare('select json from operations where work_id = ? order by created_at, rowid')
+      .all(workId) as Array<{ json: string }>;
+    return rows.map((row) => JSON.parse(row.json) as Operation);
+  }
+
+  insertOperationAttempt(attempt: OperationAttempt): void {
+    this.db.prepare(`
+      insert into operation_attempts(id,operation_id,number,status,json,dispatched_at)
+      values (?,?,?,?,?,?)
+    `).run(attempt.id, attempt.operationId, attempt.number, attempt.status,
+      JSON.stringify(attempt), attempt.dispatchedAt);
+    const operation = this.getOperation(attempt.operationId);
+    this.event('operation.attempt_recorded', {
+      operationId: attempt.operationId, operationAttemptId: attempt.id,
+      number: attempt.number, status: attempt.status,
+    }, operation?.workId);
+  }
+
+  listOperationAttempts(operationId: string): OperationAttempt[] {
+    const rows = this.db.prepare('select json from operation_attempts where operation_id = ? order by number')
+      .all(operationId) as Array<{ json: string }>;
+    return rows.map((row) => JSON.parse(row.json) as OperationAttempt);
+  }
+
+  insertCompensation(compensation: Compensation): void {
+    this.db.prepare(`
+      insert into compensations(id,operation_id,work_id,idempotency_key,status,json,created_at)
+      values (?,?,?,?,?,?,?)
+    `).run(compensation.id, compensation.operationId, compensation.workId,
+      compensation.idempotencyKey, compensation.status, JSON.stringify(compensation), compensation.createdAt);
+    this.event('compensation.prepared', {
+      compensationId: compensation.id, operationId: compensation.operationId,
+      status: compensation.status,
+    }, compensation.workId);
+  }
+
+  updateCompensation(compensation: Compensation): void {
+    const changed = this.db.prepare('update compensations set status = ?, json = ? where id = ? and work_id = ?')
+      .run(compensation.status, JSON.stringify(compensation), compensation.id, compensation.workId);
+    if (Number(changed.changes) !== 1) throw new Error(`COMPENSATION_NOT_FOUND: ${compensation.id}`);
+    this.event('compensation.state_changed', {
+      compensationId: compensation.id, operationId: compensation.operationId, status: compensation.status,
+    }, compensation.workId);
+  }
+
+  getCompensation(id: string): Compensation | null {
+    const row = this.db.prepare('select json from compensations where id = ?').get(id) as { json: string } | undefined;
+    return row ? JSON.parse(row.json) as Compensation : null;
+  }
+
+  getCompensationForOperation(operationId: string): Compensation | null {
+    const row = this.db.prepare('select json from compensations where operation_id = ?')
+      .get(operationId) as { json: string } | undefined;
+    return row ? JSON.parse(row.json) as Compensation : null;
+  }
+
+  insertCompensationAttempt(attempt: CompensationAttempt): void {
+    this.db.prepare(`
+      insert into compensation_attempts(id,compensation_id,number,status,json,dispatched_at)
+      values (?,?,?,?,?,?)
+    `).run(attempt.id, attempt.compensationId, attempt.number, attempt.status,
+      JSON.stringify(attempt), attempt.dispatchedAt);
+    const compensation = this.getCompensation(attempt.compensationId);
+    this.event('compensation.attempt_recorded', {
+      compensationId: attempt.compensationId, compensationAttemptId: attempt.id,
+      number: attempt.number, status: attempt.status,
+    }, compensation?.workId);
+  }
+
+  listCompensationAttempts(compensationId: string): CompensationAttempt[] {
+    const rows = this.db.prepare('select json from compensation_attempts where compensation_id = ? order by number')
+      .all(compensationId) as Array<{ json: string }>;
+    return rows.map((row) => JSON.parse(row.json) as CompensationAttempt);
+  }
+
+  // ---- budget records ----
+  insertBudgetLimit(limit: BudgetLimit): void {
+    this.db.prepare(`
+      insert into budget_limits(id,work_id,resource_kind,currency,json,created_at) values (?,?,?,?,?,?)
+    `).run(limit.id, limit.workId, limit.resourceKind, limit.currency ?? '', JSON.stringify(limit), limit.createdAt);
+    this.event('budget.limit_configured', {
+      limitId: limit.id, resourceKind: limit.resourceKind,
+      currency: limit.currency, limitUnits: limit.limitUnits,
+    }, limit.workId);
+  }
+
+  getBudgetLimit(id: string): BudgetLimit | null {
+    const row = this.db.prepare('select json from budget_limits where id = ?').get(id) as { json: string } | undefined;
+    return row ? JSON.parse(row.json) as BudgetLimit : null;
+  }
+
+  findBudgetLimit(workId: string, resourceKind: string, currency?: string): BudgetLimit | null {
+    const row = this.db.prepare(`
+      select json from budget_limits where work_id = ? and resource_kind = ? and currency = ?
+    `).get(workId, resourceKind, currency ?? '') as { json: string } | undefined;
+    return row ? JSON.parse(row.json) as BudgetLimit : null;
+  }
+
+  insertBudgetReservation(reservation: BudgetReservation): void {
+    this.db.prepare(`
+      insert into budget_reservations(id,work_id,limit_id,operation_id,compensation_id,status,json,created_at)
+      values (?,?,?,?,?,?,?,?)
+    `).run(reservation.id, reservation.workId, reservation.limitId,
+      reservation.operationId ?? null, reservation.compensationId ?? null,
+      reservation.status, JSON.stringify(reservation), reservation.createdAt);
+    this.event('budget.reservation_recorded', {
+      reservationId: reservation.id, limitId: reservation.limitId,
+      amountUnits: reservation.amountUnits, status: reservation.status,
+    }, reservation.workId);
+  }
+
+  updateBudgetReservation(reservation: BudgetReservation): void {
+    const changed = this.db.prepare(`
+      update budget_reservations set status = ?, json = ? where id = ? and work_id = ?
+    `).run(reservation.status, JSON.stringify(reservation), reservation.id, reservation.workId);
+    if (Number(changed.changes) !== 1) throw new Error(`BUDGET_RESERVATION_NOT_FOUND: ${reservation.id}`);
+    this.event('budget.reservation_recorded', {
+      reservationId: reservation.id, limitId: reservation.limitId,
+      amountUnits: reservation.amountUnits, status: reservation.status,
+    }, reservation.workId);
+  }
+
+  getBudgetReservation(id: string): BudgetReservation | null {
+    const row = this.db.prepare('select json from budget_reservations where id = ?')
+      .get(id) as { json: string } | undefined;
+    return row ? JSON.parse(row.json) as BudgetReservation : null;
+  }
+
+  listBudgetReservations(limitId: string): BudgetReservation[] {
+    const rows = this.db.prepare('select json from budget_reservations where limit_id = ? order by created_at, rowid')
+      .all(limitId) as Array<{ json: string }>;
+    return rows.map((row) => JSON.parse(row.json) as BudgetReservation);
+  }
+
+  insertBudgetLedgerEntry(entry: BudgetLedgerEntry): void {
+    this.db.prepare(`
+      insert into budget_ledger(id,work_id,limit_id,reservation_id,kind,json,created_at)
+      values (?,?,?,?,?,?,?)
+    `).run(entry.id, entry.workId, entry.limitId, entry.reservationId,
+      entry.kind, JSON.stringify(entry), entry.createdAt);
+    this.event('budget.ledger_recorded', {
+      ledgerEntryId: entry.id, limitId: entry.limitId, reservationId: entry.reservationId,
+      kind: entry.kind, reservedDeltaUnits: entry.reservedDeltaUnits,
+      spentDeltaUnits: entry.spentDeltaUnits,
+    }, entry.workId);
+  }
+
+  listBudgetLedger(limitId: string): BudgetLedgerEntry[] {
+    const rows = this.db.prepare('select json from budget_ledger where limit_id = ? order by created_at, rowid')
+      .all(limitId) as Array<{ json: string }>;
+    return rows.map((row) => JSON.parse(row.json) as BudgetLedgerEntry);
   }
 
   // ---- outcome ----

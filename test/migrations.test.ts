@@ -199,10 +199,44 @@ test('v2 migration preserves authoritative rows and adds P2 plan tables', () => 
 
   const migrated = new Store(state);
   try {
-    assert.equal(CURRENT_SCHEMA_VERSION, 3);
+    assert.equal(CURRENT_SCHEMA_VERSION, 4);
     assert.equal(migrated.getWork('W-v2')!.title, 'v2 row');
     assert.equal(migrated.events('W-v2')[0]!.type, 'v2.event');
     for (const table of ['plans', 'milestones', 'checkpoints']) {
+      assert.ok(migrated.db.prepare(`select name from sqlite_master where type='table' and name=?`).get(table));
+    }
+  } finally {
+    migrated.close();
+    rmSync(state, { recursive: true, force: true });
+  }
+});
+
+test('v3 migration preserves authoritative rows and adds P3 operation and budget tables', () => {
+  const state = mkdtempSync(join(tmpdir(), 'harness-migration-'));
+  const seeded = new Store(state);
+  seeded.db.exec(`
+    insert into works values ('W-v3','v3 row','repo','/repo','ACTIVE',1,2,'t0');
+    insert into events(type,work_id,attempt_id,data,created_at) values ('v3.event','W-v3',null,'{"keep":true}','t1');
+    drop table if exists budget_ledger;
+    drop table if exists budget_reservations;
+    drop table if exists budget_limits;
+    drop table if exists compensation_attempts;
+    drop table if exists compensations;
+    drop table if exists operation_attempts;
+    drop table if exists operations;
+    pragma user_version = 3;
+  `);
+  seeded.close();
+
+  const migrated = new Store(state);
+  try {
+    assert.equal(CURRENT_SCHEMA_VERSION, 4);
+    assert.equal(migrated.getWork('W-v3')!.title, 'v3 row');
+    assert.equal(migrated.events('W-v3')[0]!.type, 'v3.event');
+    for (const table of [
+      'operations', 'operation_attempts', 'compensations', 'compensation_attempts',
+      'budget_limits', 'budget_reservations', 'budget_ledger',
+    ]) {
       assert.ok(migrated.db.prepare(`select name from sqlite_master where type='table' and name=?`).get(table));
     }
   } finally {

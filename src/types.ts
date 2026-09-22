@@ -171,6 +171,120 @@ export interface LogicalCheckpoint {
   createdAt: string;
 }
 
+type OperationStatus =
+  | 'PREPARED' | 'DISPATCHED' | 'SUCCEEDED' | 'FAILED'
+  | 'UNKNOWN' | 'RECONCILING' | 'WAITING_USER';
+
+export interface AdapterCapabilitySnapshot {
+  adapter: string;
+  version: string;
+  effectType: 'read' | 'write';
+  retrySafety: 'idempotent' | 'deduplicated' | 'unsafe';
+  reversibility: 'compensable' | 'irreversible';
+  lookup: 'supported' | 'unsupported';
+  idempotencyKeyTtlMs: number;
+  completionWindowMs: number;
+  cost: {
+    mode: 'bounded' | 'estimated' | 'unknown';
+    resourceKind: string;
+    currency?: string;
+    upperBoundUnits?: number;
+    pricingVersion?: string;
+  };
+}
+
+export interface Operation {
+  schemaVersion: '1';
+  id: string;
+  workId: string;
+  intentKey: string;
+  kind: string;
+  targetScope: string;
+  canonicalInputHash: string;
+  inputArtifactId: string;
+  idempotencyKey: string;
+  dedupeExpiresAt: string;
+  precondition: string;
+  reconciliationStrategy: string;
+  compensationPolicy: string;
+  authorizationRef: string;
+  capabilities: AdapterCapabilitySnapshot;
+  reservationId?: string;
+  status: OperationStatus;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface OperationAttempt {
+  id: string;
+  operationId: string;
+  number: number;
+  status: 'DISPATCHED' | 'SUCCEEDED' | 'FAILED' | 'UNKNOWN';
+  dispatchedAt: string;
+  completedAt?: string;
+  receiptArtifactId?: string;
+  error?: string;
+}
+
+export interface Compensation {
+  schemaVersion: '1';
+  id: string;
+  operationId: string;
+  workId: string;
+  idempotencyKey: string;
+  authorizationRef: string;
+  targetVersion: string;
+  reservationId?: string;
+  status: OperationStatus;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface CompensationAttempt {
+  id: string;
+  compensationId: string;
+  number: number;
+  status: 'DISPATCHED' | 'SUCCEEDED' | 'FAILED' | 'UNKNOWN';
+  dispatchedAt: string;
+  completedAt?: string;
+  receiptArtifactId?: string;
+  error?: string;
+}
+
+export interface BudgetLimit {
+  id: string;
+  workId: string;
+  resourceKind: string;
+  currency?: string;
+  limitUnits: number;
+  pricingVersion: string;
+  createdAt: string;
+}
+
+export interface BudgetReservation {
+  id: string;
+  workId: string;
+  limitId: string;
+  operationId?: string;
+  compensationId?: string;
+  amountUnits: number;
+  settledUnits?: number;
+  status: 'HELD' | 'SETTLED' | 'RELEASED' | 'UNKNOWN';
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface BudgetLedgerEntry {
+  id: string;
+  workId: string;
+  limitId: string;
+  reservationId: string;
+  kind: 'RESERVE' | 'SETTLE' | 'RELEASE';
+  reservedDeltaUnits: number;
+  spentDeltaUnits: number;
+  createdAt: string;
+}
+
 // §13
 type DecisionKind =
   | 'allow_path' | 'deny_path' | 'allow_change' | 'deny_change' | 'constraint';

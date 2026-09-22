@@ -1,6 +1,6 @@
 import type { DatabaseSync } from 'node:sqlite';
 
-export const CURRENT_SCHEMA_VERSION = 3;
+export const CURRENT_SCHEMA_VERSION = 4;
 
 const SCHEMA = `
 create table if not exists works(
@@ -50,6 +50,31 @@ create table if not exists checkpoints(
   id text primary key, work_id text not null, plan_id text not null,
   branch_id text not null, parent_checkpoint_id text,
   validation_status text not null, json text not null, created_at text not null);
+create table if not exists operations(
+  id text primary key, work_id text not null, intent_key text not null,
+  idempotency_key text not null, status text not null, json text not null, created_at text not null,
+  unique(work_id, intent_key), unique(idempotency_key));
+create table if not exists operation_attempts(
+  id text primary key, operation_id text not null, number integer not null,
+  status text not null, json text not null, dispatched_at text not null,
+  unique(operation_id, number));
+create table if not exists compensations(
+  id text primary key, operation_id text not null, work_id text not null,
+  idempotency_key text not null, status text not null, json text not null, created_at text not null,
+  unique(operation_id), unique(idempotency_key));
+create table if not exists compensation_attempts(
+  id text primary key, compensation_id text not null, number integer not null,
+  status text not null, json text not null, dispatched_at text not null,
+  unique(compensation_id, number));
+create table if not exists budget_limits(
+  id text primary key, work_id text not null, resource_kind text not null, currency text not null,
+  json text not null, created_at text not null, unique(work_id, resource_kind, currency));
+create table if not exists budget_reservations(
+  id text primary key, work_id text not null, limit_id text not null,
+  operation_id text, compensation_id text, status text not null, json text not null, created_at text not null);
+create table if not exists budget_ledger(
+  id text primary key, work_id text not null, limit_id text not null, reservation_id text not null,
+  kind text not null, json text not null, created_at text not null);
 create index if not exists idx_attempts_work on attempts(work_id);
 create index if not exists idx_evidence_attempt on evidence(attempt_id);
 create index if not exists idx_outcomes_attempt on outcomes(attempt_id);
@@ -61,6 +86,13 @@ create unique index if not exists idx_plans_one_active on plans(work_id) where s
 create index if not exists idx_milestones_plan on milestones(plan_id, sequence);
 create index if not exists idx_checkpoints_work on checkpoints(work_id, created_at);
 create index if not exists idx_checkpoints_plan on checkpoints(plan_id, created_at);
+create index if not exists idx_operations_work on operations(work_id, created_at);
+create index if not exists idx_operation_attempts_operation on operation_attempts(operation_id, number);
+create index if not exists idx_compensations_work on compensations(work_id, created_at);
+create index if not exists idx_compensation_attempts_compensation on compensation_attempts(compensation_id, number);
+create index if not exists idx_budget_limits_work on budget_limits(work_id, resource_kind);
+create index if not exists idx_budget_reservations_limit on budget_reservations(limit_id, status);
+create index if not exists idx_budget_ledger_limit on budget_ledger(limit_id, created_at);
 `;
 
 interface ColumnRequirement {
@@ -113,6 +145,31 @@ const REQUIRED_TABLES: Record<string, Record<string, ColumnRequirement>> = {
     id: PK_TEXT, work_id: TEXT, plan_id: TEXT, branch_id: TEXT,
     parent_checkpoint_id: NULLABLE_TEXT, validation_status: TEXT, json: TEXT, created_at: TEXT,
   },
+  operations: {
+    id: PK_TEXT, work_id: TEXT, intent_key: TEXT, idempotency_key: TEXT,
+    status: TEXT, json: TEXT, created_at: TEXT,
+  },
+  operation_attempts: {
+    id: PK_TEXT, operation_id: TEXT, number: INTEGER, status: TEXT, json: TEXT, dispatched_at: TEXT,
+  },
+  compensations: {
+    id: PK_TEXT, operation_id: TEXT, work_id: TEXT, idempotency_key: TEXT,
+    status: TEXT, json: TEXT, created_at: TEXT,
+  },
+  compensation_attempts: {
+    id: PK_TEXT, compensation_id: TEXT, number: INTEGER, status: TEXT, json: TEXT, dispatched_at: TEXT,
+  },
+  budget_limits: {
+    id: PK_TEXT, work_id: TEXT, resource_kind: TEXT, currency: TEXT, json: TEXT, created_at: TEXT,
+  },
+  budget_reservations: {
+    id: PK_TEXT, work_id: TEXT, limit_id: TEXT, operation_id: NULLABLE_TEXT,
+    compensation_id: NULLABLE_TEXT, status: TEXT, json: TEXT, created_at: TEXT,
+  },
+  budget_ledger: {
+    id: PK_TEXT, work_id: TEXT, limit_id: TEXT, reservation_id: TEXT,
+    kind: TEXT, json: TEXT, created_at: TEXT,
+  },
 };
 
 const REQUIRED_INDEXES: Record<string, { table: string; columns: readonly string[] }> = {
@@ -126,6 +183,13 @@ const REQUIRED_INDEXES: Record<string, { table: string; columns: readonly string
   idx_milestones_plan: { table: 'milestones', columns: ['plan_id', 'sequence'] },
   idx_checkpoints_work: { table: 'checkpoints', columns: ['work_id', 'created_at'] },
   idx_checkpoints_plan: { table: 'checkpoints', columns: ['plan_id', 'created_at'] },
+  idx_operations_work: { table: 'operations', columns: ['work_id', 'created_at'] },
+  idx_operation_attempts_operation: { table: 'operation_attempts', columns: ['operation_id', 'number'] },
+  idx_compensations_work: { table: 'compensations', columns: ['work_id', 'created_at'] },
+  idx_compensation_attempts_compensation: { table: 'compensation_attempts', columns: ['compensation_id', 'number'] },
+  idx_budget_limits_work: { table: 'budget_limits', columns: ['work_id', 'resource_kind'] },
+  idx_budget_reservations_limit: { table: 'budget_reservations', columns: ['limit_id', 'status'] },
+  idx_budget_ledger_limit: { table: 'budget_ledger', columns: ['limit_id', 'created_at'] },
 };
 
 export function validateSchema(db: DatabaseSync): void {
@@ -173,6 +237,19 @@ export function validateSchema(db: DatabaseSync): void {
   if (!hasUnique('plans', 'work_id,version')) problems.push('plans must have unique(work_id, version)');
   if (!hasUnique('milestones', 'plan_id,id')) problems.push('milestones must have unique(plan_id, id)');
   if (!hasUnique('milestones', 'plan_id,sequence')) problems.push('milestones must have unique(plan_id, sequence)');
+  if (!hasUnique('operations', 'work_id,intent_key')) problems.push('operations must have unique(work_id, intent_key)');
+  if (!hasUnique('operations', 'idempotency_key')) problems.push('operations must have unique(idempotency_key)');
+  if (!hasUnique('operation_attempts', 'operation_id,number')) {
+    problems.push('operation_attempts must have unique(operation_id, number)');
+  }
+  if (!hasUnique('compensations', 'operation_id')) problems.push('compensations must have unique(operation_id)');
+  if (!hasUnique('compensations', 'idempotency_key')) problems.push('compensations must have unique(idempotency_key)');
+  if (!hasUnique('compensation_attempts', 'compensation_id,number')) {
+    problems.push('compensation_attempts must have unique(compensation_id, number)');
+  }
+  if (!hasUnique('budget_limits', 'work_id,resource_kind,currency')) {
+    problems.push('budget_limits must have unique(work_id, resource_kind, currency)');
+  }
   const planIndexes = db.prepare('pragma index_list(plans)').all() as Array<{
     name: string; unique: number; partial: number;
   }>;

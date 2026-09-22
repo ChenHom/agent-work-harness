@@ -14,11 +14,11 @@
 
 **Files:** `src/types.ts`, `src/trace/migrations.ts`, `src/trace/store.ts`, `test/migrations.test.ts`, `test/operations.test.ts`
 
-- [ ] Add finite operation, operation-attempt, compensation, reservation, and ledger types. Keep money/resource quantities as integer units with explicit kind/currency and pricing version.
-- [ ] Add schema-v4 tables and indexes for operations, operation attempts, compensation workflows/attempts, budget limits/reservations/ledger.
-- [ ] Enforce unique logical intent and unique idempotency key; keep attempts and ledger append-only while operation/reservation status is a mutable projection backed by events.
-- [ ] Test fresh migration, v3 preservation, round trips, uniqueness, and current-schema fail-closed validation.
-- [ ] Run targeted tests, one full `npm run check`, review against this task, and commit.
+- [x] Add finite operation, operation-attempt, compensation, reservation, and ledger types. Keep money/resource quantities as integer units with explicit kind/currency and pricing version.
+- [x] Add schema-v4 tables and indexes for operations, operation attempts, compensation workflows/attempts, budget limits/reservations/ledger.
+- [x] Enforce unique logical intent and unique idempotency key; keep attempts and ledger append-only while operation/reservation status is a mutable projection backed by events.
+- [x] Test fresh migration, v3 preservation, round trips, uniqueness, and current-schema fail-closed validation.
+- [x] Run targeted tests, one full `npm run check`, review against this task, and commit.
 
 ## Task 2: Atomic integer budget ledger
 
