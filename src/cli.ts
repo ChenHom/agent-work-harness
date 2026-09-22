@@ -13,7 +13,9 @@ import {
   acquireExecutionOwnership, inspectExecutionOwnership, type ExecutionOwnership,
 } from './runtime/ownership.ts';
 import { runIsolated } from './evidence/exec.ts';
-import { formatContextDropped, formatPreExistingDirty, formatWorkListRow } from './cli-format.ts';
+import {
+  formatContextDropped, formatPreExistingDirty, formatRecoverySession, formatWorkListRow,
+} from './cli-format.ts';
 import { formatPromptChars } from './response.ts';
 import type { GlobalPolicy } from './types.ts';
 
@@ -160,6 +162,11 @@ export async function main(argv: string[], policy: GlobalPolicy = loadPolicy()):
       }
       const last = store!.lastOutcome(work.id);
       if (last) console.log(`\n[outcome] ${last.outcome}: ${last.reasons.join(' / ')}`);
+      const recoverySessions = store!.listRecoverySessions(work.id);
+      if (recoverySessions.length) {
+        console.log('\n[recovery sessions]');
+        for (const session of recoverySessions) console.log(formatRecoverySession(session));
+      }
       return 0;
     }
 

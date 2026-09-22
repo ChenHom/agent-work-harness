@@ -103,3 +103,21 @@ export function buildResponse(input: {
   }
   return out.join('\n');
 }
+
+export function buildRecoveryResponse(input: {
+  attempt: Attempt;
+  status: string;
+  known: readonly string[];
+  unknown: readonly string[];
+  actions: readonly string[];
+}): string {
+  const section = (title: string, items: readonly string[]): string[] => [
+    '', title, ...(items.length ? items.map((item) => `- ${item}`) : ['- 無']),
+  ];
+  return [
+    `恢復觀察（attempt #${input.attempt.number}，${input.status}）`,
+    ...section('已知', input.known),
+    ...section('未知', input.unknown),
+    ...section('可採取動作', input.actions),
+  ].join('\n');
+}

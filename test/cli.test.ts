@@ -3,7 +3,9 @@ import assert from 'node:assert/strict';
 import { existsSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { formatContextDropped, formatPreExistingDirty, formatWorkListRow } from '../src/cli-format.ts';
+import {
+  formatContextDropped, formatPreExistingDirty, formatRecoverySession, formatWorkListRow,
+} from '../src/cli-format.ts';
 import { main } from '../src/cli.ts';
 import { DEFAULT_POLICY } from '../src/policy.ts';
 import type { Attempt, GlobalPolicy, Work } from '../src/types.ts';
@@ -91,6 +93,14 @@ test('show attempt formatting includes context dropped statistics', () => {
 
 test('show attempt formatting explicitly marks context that was not dropped', () => {
   assert.equal(formatContextDropped(attempt), '    contextDropped: -');
+});
+
+test('show recovery formatting includes session status and evidence', () => {
+  assert.equal(formatRecoverySession({
+    id: 'RS-1', workId: work.id, attemptId: attempt.id,
+    observedAt: '2026-09-22T00:00:00.000Z', evidenceIds: ['E-1'],
+    reason: 'OBSERVED: readback only', status: 'OBSERVED',
+  }), '- RS-1 OBSERVED attempt=A-123 evidence=E-1: OBSERVED: readback only');
 });
 
 test('read-only CLI commands show empty state without creating it', async () => {

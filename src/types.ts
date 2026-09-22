@@ -97,6 +97,19 @@ export interface Attempt {
   endedAt?: string;
 }
 
+export type RecoverySessionStatus =
+  | 'OBSERVED' | 'POLICY_DENIED' | 'SNAPSHOT_UNAVAILABLE' | 'ARTIFACT_CORRUPT';
+
+export interface RecoverySession {
+  id: string;
+  workId: string;
+  attemptId: string;
+  observedAt: string;
+  evidenceIds: string[];
+  reason: string;
+  status: RecoverySessionStatus;
+}
+
 // §13
 type DecisionKind =
   | 'allow_path' | 'deny_path' | 'allow_change' | 'deny_change' | 'constraint';

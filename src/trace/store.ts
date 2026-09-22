@@ -10,7 +10,7 @@ import { newId, nowIso } from '../ids.ts';
 import { CURRENT_SCHEMA_VERSION, migrate, rethrowAfterRollback, validateSchema } from './migrations.ts';
 import type {
   Work, WorkContract, Attempt, DecisionRecord, EvidenceRecord,
-  Outcome, WorkState, AttemptStatus,
+  Outcome, WorkState, AttemptStatus, RecoverySession,
 } from '../types.ts';
 
 const ARTIFACT_READ_FLAGS = constants.O_RDONLY | constants.O_NONBLOCK | constants.O_NOFOLLOW;
@@ -23,7 +23,7 @@ export type EventType =
   | 'prompt.compiled' | 'attempt.started' | 'attempt.completed'
   | 'runtime.protocol_failed' | 'evidence.collected' | 'outcome.decided'
   | 'work.completed' | 'work.blocked' | 'work.state_changed'
-  | 'recovery.required'
+  | 'recovery.required' | 'recovery.observed'
   | 'usage.note';   // 人對結果的判讀 —— 機器不知道 evidence 判錯了，只有人知道
 
 export type VerifiedArtifact =
@@ -453,6 +453,34 @@ export class Store {
       type: r.type as EvidenceRecord['type'], label: r.label as string,
       status: r.status as EvidenceRecord['status'], data: JSON.parse(r.data as string) as unknown,
       observedAt: r.observed_at as string,
+    }));
+  }
+
+  // ---- recovery ----
+  insertRecoverySession(session: RecoverySession): void {
+    this.db.prepare(`
+      insert into recovery_sessions(id,work_id,attempt_id,observed_at,evidence_ids,reason,status)
+      values (?,?,?,?,?,?,?)
+    `).run(session.id, session.workId, session.attemptId, session.observedAt,
+      JSON.stringify(session.evidenceIds), session.reason, session.status);
+    this.event('recovery.observed', {
+      recoverySessionId: session.id, status: session.status,
+      evidenceIds: session.evidenceIds, reason: session.reason,
+    }, session.workId, session.attemptId);
+  }
+
+  listRecoverySessions(workId: string): RecoverySession[] {
+    const rows = this.db.prepare(`
+      select * from recovery_sessions where work_id = ? order by observed_at, rowid
+    `).all(workId) as Array<Record<string, unknown>>;
+    return rows.map((row) => ({
+      id: row.id as string,
+      workId: row.work_id as string,
+      attemptId: row.attempt_id as string,
+      observedAt: row.observed_at as string,
+      evidenceIds: JSON.parse(row.evidence_ids as string) as string[],
+      reason: row.reason as string,
+      status: row.status as RecoverySession['status'],
     }));
   }
 

@@ -20,11 +20,12 @@ import { baseRevision, snapshotDirty, observeGit, gitDiffEvidence, pathPolicyEvi
   type DirtyEntry, type GitObservation } from './evidence/git.ts';
 import { runVerification, collectBaseline, type VerificationOutcome } from './evidence/verification.ts';
 import { decideOutcome } from './evidence/outcome.ts';
-import { buildResponse } from './response.ts';
+import { buildRecoveryResponse, buildResponse } from './response.ts';
 import type {
   GlobalPolicy, Work, WorkContract, Attempt, AttemptAuthority, DecisionRecord,
   EvidenceRecord, OutcomeDecision, RuntimeResult, SkillAdmission, RepositoryContractSnapshot,
   AttemptInputSnapshot, Mode, VerificationBaseline,
+  RecoverySession, RecoverySessionStatus,
 } from './types.ts';
 
 /**
@@ -570,20 +571,127 @@ export class Orchestrator {
 
   private async recoverOwned(workId: string): Promise<AttemptReport> {
     const work = this.requireWork(workId);
-    const contract = this.currentContract(work);
     const attempt = this.store.listAttempts(workId).at(-1);
     if (!attempt) throw new Error('沒有 attempt 可恢復');
-    const snapshot = loadSnapshot(work.workspace, this.policy);
-    const evidence = await this.collectEvidence({
-      work, contract, snapshot, attempt, base: attempt.baseRevision, runWrite: contract.mode === 'write',
-    });
+    if (attempt.status !== 'RECOVERY_REQUIRED') {
+      throw new Error(`RECOVERY_NOT_APPLICABLE: attempt ${attempt.id} status is ${attempt.status}`);
+    }
+
     const decision: OutcomeDecision = {
       outcome: 'NEEDS_USER_DECISION',
-      reasons: ['上一個 attempt 在執行中中斷，已重新收集 evidence；請確認要接受現況、捨棄或建立新的 retry attempt'],
+      reasons: ['恢復只完成只讀觀察；需要有效授權建立 new attempt 才能繼續執行或驗證'],
     };
-    this.store.insertOutcome(workId, attempt.id, decision.outcome, decision.reasons);
-    this.store.setWorkState(workId, 'WAITING_USER');
-    return { attempt, decision, evidence, response: buildResponse({ attempt, decision, evidence, notExecuted: [] }) };
+    const unavailable = (status: RecoverySessionStatus, reason: string): AttemptReport => {
+      const session: RecoverySession = {
+        id: newId('RS'), workId, attemptId: attempt.id, observedAt: nowIso(), evidenceIds: [], reason, status,
+      };
+      this.store.withTransaction(() => {
+        this.store.insertRecoverySession(session);
+        this.store.setWorkState(workId, 'WAITING_USER');
+      });
+      return {
+        attempt, decision, evidence: [],
+        response: buildRecoveryResponse({
+          attempt, status,
+          known: [`原 attempt 狀態為 ${attempt.status}`],
+          unknown: [`${reason}；無法證明原始執行輸入`],
+          actions: ['以目前有效的 contract 建立 new attempt'],
+        }),
+      };
+    };
+
+    if (!attempt.inputSnapshotArtifactId) {
+      return unavailable('SNAPSHOT_UNAVAILABLE', 'SNAPSHOT_UNAVAILABLE: legacy attempt 沒有 input snapshot');
+    }
+    const artifact = this.store.readVerifiedArtifact(attempt.inputSnapshotArtifactId);
+    if (artifact.status !== 'verified') {
+      const status = artifact.status === 'missing' ? 'SNAPSHOT_UNAVAILABLE' : 'ARTIFACT_CORRUPT';
+      return unavailable(status, `${status}: ${artifact.reason ?? artifact.status}`);
+    }
+
+    let original: AttemptInputSnapshot;
+    try {
+      original = JSON.parse(artifact.content.toString('utf8')) as AttemptInputSnapshot;
+    } catch {
+      return unavailable('ARTIFACT_CORRUPT', 'ARTIFACT_CORRUPT: input snapshot 不是合法 JSON');
+    }
+    if (!validRecoveryInput(original, work, attempt)) {
+      return unavailable('ARTIFACT_CORRUPT', 'ARTIFACT_CORRUPT: input snapshot 與 attempt 綁定不一致');
+    }
+    const promptArtifact = this.store.readVerifiedArtifact(original.promptArtifactId);
+    if (promptArtifact.status !== 'verified') {
+      const status = promptArtifact.status === 'missing' ? 'SNAPSHOT_UNAVAILABLE' : 'ARTIFACT_CORRUPT';
+      return unavailable(status, `${status}: 原始 prompt artifact ${promptArtifact.reason ?? promptArtifact.status}`);
+    }
+
+    const persistedOriginalContract = this.store.getContract(workId, attempt.contractVersion);
+    if (!persistedOriginalContract || JSON.stringify(persistedOriginalContract) !== JSON.stringify(original.contract)) {
+      return unavailable('ARTIFACT_CORRUPT', 'ARTIFACT_CORRUPT: 原始 contract 版本無法驗證');
+    }
+    const currentContract = this.currentContract(work);
+    let currentRepository: RepositoryContractSnapshot | null = null;
+    let readbackError: string | undefined;
+    try {
+      currentRepository = loadSnapshot(work.workspace, this.policy);
+    } catch (error) {
+      readbackError = error instanceof Error ? error.message : String(error);
+    }
+    const observedRepository = currentRepository;
+    const currentAuthority = observedRepository ? buildAuthority(currentContract, observedRepository) : null;
+    const policyAllowed = currentAuthority !== null && authorityStillAllows(original.authority, currentAuthority)
+      && observedRepository !== null
+      && observedRepository.contract.repositoryId === original.repository.contract.repositoryId;
+    const repositoryContractChanged = observedRepository?.hash !== original.repository.hash;
+    const verificationChanged = observedRepository === null
+      || JSON.stringify(observedRepository.contract.verification) !== JSON.stringify(original.repository.contract.verification);
+    const status: RecoverySessionStatus = policyAllowed ? 'OBSERVED' : 'POLICY_DENIED';
+    const sessionId = newId('RS');
+    const evidence: EvidenceRecord = {
+      id: newId('E'), workId, attemptId: attempt.id, type: 'readback',
+      label: 'recovery readback', status: currentRepository ? 'PASS' : 'INCONCLUSIVE',
+      data: {
+        recoverySessionId: sessionId,
+        inputSnapshotArtifactId: attempt.inputSnapshotArtifactId,
+        originalContractVersion: attempt.contractVersion,
+        currentContractVersion: work.currentContractVersion,
+        originalContract: original.contract,
+        originalRepository: original.repository,
+        currentRepository,
+        readbackError,
+        policyAllowed,
+        repositoryContractChanged,
+        verificationChanged,
+      },
+      observedAt: nowIso(),
+    };
+    const reason = policyAllowed
+      ? 'OBSERVED: 原始輸入已驗證，完成目前 workspace 的只讀 readback'
+      : 'POLICY_DENIED: current authority 或 repository identity 不允許延續原 attempt';
+    const session: RecoverySession = {
+      id: sessionId, workId, attemptId: attempt.id, observedAt: evidence.observedAt,
+      evidenceIds: [evidence.id], reason, status,
+    };
+    this.store.withTransaction(() => {
+      this.store.insertEvidence(evidence);
+      this.store.insertRecoverySession(session);
+      this.store.setWorkState(workId, 'WAITING_USER');
+    });
+    return {
+      attempt, decision, evidence: [evidence],
+      response: buildRecoveryResponse({
+        attempt, status,
+        known: [
+          `原始 input snapshot ${attempt.inputSnapshotArtifactId} 已驗證`,
+          `原始 contract v${attempt.contractVersion}；目前 contract v${work.currentContractVersion}`,
+          currentRepository ? '目前 workspace 已取得只讀 readback' : '目前 workspace readback 失敗',
+          `repository contract ${repositoryContractChanged ? '已變更' : '未變更'}；verification ${verificationChanged ? '已變更或無法讀取' : '未變更'}`,
+        ],
+        unknown: ['中斷前外部 runtime 是否完成所有動作', '尚未以凍結 checks 執行新的 verification'],
+        actions: [policyAllowed
+          ? '檢視 readback 後，以有效授權建立 new attempt 重新驗證或繼續'
+          : '目前限制已改變；以目前有效的 contract 建立 new attempt'],
+      }),
+    };
   }
 
   // ---------------------------------------------------------------- helpers
@@ -709,6 +817,27 @@ export function buildAuthority(contract: WorkContract, snapshot: RepositoryContr
     deniedPaths: [...new Set([...snapshot.contract.filesystem.protectedPaths, ...contract.deniedPaths])].sort(),
     network: 'deny',   // Global Policy 上限，repo 不能放寬
   };
+}
+
+function validRecoveryInput(input: AttemptInputSnapshot, work: Work, attempt: Attempt): boolean {
+  return input?.schemaVersion === '2'
+    && input.workId === work.id
+    && input.attemptId === attempt.id
+    && input.contract?.workId === work.id
+    && input.contract?.version === attempt.contractVersion
+    && input.repository?.hash === attempt.contractSnapshotHash
+    && input.promptArtifactId === attempt.promptArtifactId;
+}
+
+function authorityStillAllows(original: AttemptAuthority, current: AttemptAuthority): boolean {
+  if (original.network !== current.network) return false;
+  if (original.filesystem === 'workspace-write' && current.filesystem !== 'workspace-write') return false;
+  const originalDenied = new Set(original.deniedPaths);
+  if (current.deniedPaths.some((path) => !originalDenied.has(path))) return false;
+  const originalWritable = original.writablePaths?.slice().sort();
+  const currentWritable = current.writablePaths?.slice().sort();
+  if (originalWritable === undefined) return currentWritable === undefined;
+  return currentWritable !== undefined && originalWritable.every((path) => currentWritable.includes(path));
 }
 
 function mergeAllowed(current: string[] | undefined, onlyPaths: string[] | undefined, allowDecisions: string[]): string[] | undefined {
