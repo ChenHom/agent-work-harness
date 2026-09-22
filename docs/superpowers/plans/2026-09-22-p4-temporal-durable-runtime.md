@@ -29,12 +29,12 @@ Failure to run the server or any required scenario blocks the selection. Do not 
 
 **Files:** `package.json`, `package-lock.json`, `docs/adr/0001-temporal-lifecycle-owner.md`, `src/durable/spike-workflow.ts`, `src/durable/spike-activities.ts`, `test/temporal-selection.test.ts`
 
-- [ ] Pin compatible Temporal client, worker, workflow, activity, and testing packages. Record Node and server compatibility used by the test.
-- [ ] Implement the smallest deterministic Workflow and Activity needed to exercise worker restart, durable timer, retry after lost completion acknowledgement, signals, cancellation, and replay.
-- [ ] Use a stable operation identity and a provider-owned idempotency key in the retry scenario; assert multiple Activity executions produce one provider effect.
-- [ ] Compare the executable result with the local orchestrator and LangGraph designs. Record why local locking cannot establish cross-host fencing and why checkpoint replay that re-executes nodes is not audit replay.
-- [ ] Write the ADR with Temporal as the sole lifecycle owner only if Gate 0 passes. Record rejected alternatives, operational prerequisites, and the rule that SDK/Gateway retry must not multiply Temporal retries.
-- [ ] Run `node --test test/temporal-selection.test.ts`, one full `npm run check`, review this task against Gate 0, and commit. If infrastructure is unavailable, commit only reproducible evidence and mark P4 blocked.
+- [x] Pin compatible Temporal client, worker, workflow, activity, and testing packages. Record Node and server compatibility used by the test.
+- [x] Implement the smallest deterministic Workflow and Activity needed to exercise worker restart, durable timer, retry after lost completion acknowledgement, signals, cancellation, and replay.
+- [x] Use a stable operation identity and a provider-owned idempotency key in the retry scenario; assert multiple Activity executions produce one provider effect.
+- [x] Compare the executable result with the local orchestrator and LangGraph designs. Record why local locking cannot establish cross-host fencing and why checkpoint replay that re-executes nodes is not audit replay.
+- [x] Write the ADR with Temporal as the sole lifecycle owner only if Gate 0 passes. Record rejected alternatives, operational prerequisites, and the rule that SDK/Gateway retry must not multiply Temporal retries.
+- [x] Run `node --test test/temporal-selection.test.ts`, one full `npm run check`, review this task against Gate 0, and commit. If infrastructure is unavailable, commit only reproducible evidence and mark P4 blocked.
 
 ## Task 2: Runtime identity, epoch, and dispatch authority
 

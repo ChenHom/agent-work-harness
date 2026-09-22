@@ -12,6 +12,7 @@
   "scripts": {
     "harness": "node src/cli.ts",
     "test": "node --test test/*.test.ts",
+    "test:temporal-selection": "node --test test/temporal-selection.test.ts",
     "typecheck": "tsc --noEmit",
     "lint": "eslint .",
     "check": "npm run lint && npm run typecheck && npm test && npm run deadcode",
@@ -21,6 +22,7 @@
   },
   "devDependencies": {
     "@stryker-mutator/core": "^10.0.0",
+    "@temporalio/testing": "1.24.0",
     "@types/node": "^26.2.0",
     "eslint": "^10.9.0",
     "knip": "^6.32.2",
@@ -29,5 +31,11 @@
   },
   "overrides": {
     "qs": "^6.15.2"
+  },
+  "dependencies": {
+    "@temporalio/activity": "1.24.0",
+    "@temporalio/client": "1.24.0",
+    "@temporalio/worker": "1.24.0",
+    "@temporalio/workflow": "1.24.0"
   }
 }
