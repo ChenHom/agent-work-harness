@@ -24,12 +24,12 @@
 
 **Files:** `src/budget/ledger.ts`, `src/trace/store.ts`, `test/budget-ledger.test.ts`
 
-- [ ] Configure per-Work limits by resource kind and currency. Reject floats, negative quantities, currency mismatch, and unsupported hard caps.
-- [ ] Atomically enforce `spent + reserved + requested <= limit` while creating a durable reservation and ledger entry.
-- [ ] Settle from verified receipts, release only confirmed-unused reservations, and keep UNKNOWN cost reserved.
-- [ ] Make fork/replan reuse the same Work ledger; concurrent reservations must not exceed the limit.
-- [ ] Represent Codex usage as `unknown` or `estimated`; never derive token/currency usage from prompt characters.
-- [ ] Run targeted tests, one full `npm run check`, review against this task, and commit.
+- [x] Configure per-Work limits by resource kind and currency. Reject floats, negative quantities, currency mismatch, and unsupported hard caps.
+- [x] Atomically enforce `spent + reserved + requested <= limit` while creating a durable reservation and ledger entry.
+- [x] Settle from verified receipts, release only confirmed-unused reservations, and keep UNKNOWN cost reserved.
+- [x] Make fork/replan reuse the same Work ledger; concurrent reservations must not exceed the limit.
+- [x] Represent Codex usage as `unknown` or `estimated`; never derive token/currency usage from prompt characters.
+- [x] Run targeted tests, one full `npm run check`, review against this task, and commit.
 
 ## Task 3: Fake adapter and intent-first Gateway dispatch
 
