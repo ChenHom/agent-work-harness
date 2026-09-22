@@ -136,6 +136,11 @@ export class Store {
       .all(workId) as never;
   }
 
+  latestEventSeq(): number {
+    const row = this.db.prepare('select coalesce(max(seq), 0) as seq from events').get() as { seq: number };
+    return Number(row.seq);
+  }
+
   /** 跨 work 的 note 查詢。watch list 的升級判準需要看趨勢，不是單一 work。 */
   notes(kind?: string): Array<{ seq: number; workId: string | null; kind: string; text: string; createdAt: string; title: string | null }> {
     const rows = this.db.prepare(`

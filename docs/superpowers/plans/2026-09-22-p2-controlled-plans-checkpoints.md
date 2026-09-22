@@ -99,24 +99,24 @@ Commit: `feat: validate and activate milestone plans`.
 - Modify: `src/trace/store.ts`
 - Create: `test/checkpoints.test.ts`
 
-- [ ] **Step 1: Write failing checkpoint tests**
+- [x] **Step 1: Write failing checkpoint tests**
 
 Cover append-only parent chains, `pending_validation`, missing/corrupt artifacts, same-branch resume, new-branch fork, stale source plan, retained attempt/retry counts, and unchanged dirty workspace files.
 
-- [ ] **Step 2: Verify RED**
+- [x] **Step 2: Verify RED**
 
 Run `node --test test/checkpoints.test.ts`.
 Expected: checkpoint service is absent.
 
-- [ ] **Step 3: Implement checkpoint creation and resume**
+- [x] **Step 3: Implement checkpoint creation and resume**
 
 Create checkpoints only from persisted work/plan/branch refs. Verify every artifact through `readVerifiedArtifact`, save its hash in the manifest, and capture the latest event sequence. `resume()` verifies schema/hash/refs and returns reusable confirmed state on the same branch; it does not run a model, alter files, or change validation status.
 
-- [ ] **Step 4: Implement fork**
+- [x] **Step 4: Implement fork**
 
 `fork()` creates a new branch ID and proposed child plan referencing `sourceCheckpointId`; activation still uses Task 2 compare-and-swap. It never deletes attempts, resets retry counts, rewrites artifacts, or executes Git commands.
 
-- [ ] **Step 5: Verify and commit**
+- [x] **Step 5: Verify and commit**
 
 Run `npm run typecheck` and `node --test test/checkpoints.test.ts test/artifact-integrity.test.ts test/recovery.test.ts`.
 Commit: `feat: add verified logical checkpoint resume and fork`.
