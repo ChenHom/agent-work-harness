@@ -32,7 +32,7 @@
 - Modify: `test/migrations.test.ts`
 - Create: `test/plans.test.ts`
 
-- [ ] **Step 1: Write failing schema and round-trip tests**
+- [x] **Step 1: Write failing schema and round-trip tests**
 
 Test that a v2 database migrates without changing existing authoritative rows and adds `plans`, `milestones`, and `checkpoints`. Round-trip this exact shape:
 
@@ -45,20 +45,20 @@ const plan: WorkPlan = {
 };
 ```
 
-- [ ] **Step 2: Verify RED**
+- [x] **Step 2: Verify RED**
 
 Run `node --test test/migrations.test.ts test/plans.test.ts`.
 Expected: missing plan types/store methods/tables.
 
-- [ ] **Step 3: Add v3 types and schema**
+- [x] **Step 3: Add v3 types and schema**
 
 Define `WorkPlan`, `PlanMilestone`, `LogicalCheckpoint`, `CheckpointArtifact`, and their finite statuses. Add optional `planId`, `branchId`, and `milestoneId` to `Attempt`. Store plans/milestones as JSON plus indexed identity/status columns; store checkpoints append-only as JSON. Add a partial unique index allowing one `ACTIVE` plan per work.
 
-- [ ] **Step 4: Add Store round-trip methods**
+- [x] **Step 4: Add Store round-trip methods**
 
 Implement `insertPlan`, `getPlan`, `listPlans`, `insertMilestones`, `getMilestone`, `listMilestones`, `insertCheckpoint`, `getCheckpoint`, and `listCheckpoints`. Reject updates to checkpoint rows; current milestone status remains a mutable projection with append-only events.
 
-- [ ] **Step 5: Verify and commit**
+- [x] **Step 5: Verify and commit**
 
 Run `npm run typecheck` and `node --test test/migrations.test.ts test/plans.test.ts`.
 Commit: `feat: persist versioned plans and logical checkpoints`.

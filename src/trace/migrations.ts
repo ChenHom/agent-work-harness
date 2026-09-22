@@ -1,6 +1,6 @@
 import type { DatabaseSync } from 'node:sqlite';
 
-export const CURRENT_SCHEMA_VERSION = 2;
+export const CURRENT_SCHEMA_VERSION = 3;
 
 const SCHEMA = `
 create table if not exists works(
@@ -36,12 +36,31 @@ create table if not exists artifacts(
 create table if not exists recovery_sessions(
   id text primary key, work_id text not null, attempt_id text not null,
   observed_at text not null, evidence_ids text not null, reason text not null, status text not null);
+create table if not exists plans(
+  id text primary key, work_id text not null, version integer not null,
+  branch_id text not null, contract_version integer not null,
+  parent_plan_id text, source_checkpoint_id text, status text not null,
+  json text not null, created_at text not null,
+  unique(work_id, version));
+create table if not exists milestones(
+  row_id text primary key, id text not null, plan_id text not null,
+  sequence integer not null, status text not null, json text not null,
+  unique(plan_id, id), unique(plan_id, sequence));
+create table if not exists checkpoints(
+  id text primary key, work_id text not null, plan_id text not null,
+  branch_id text not null, parent_checkpoint_id text,
+  validation_status text not null, json text not null, created_at text not null);
 create index if not exists idx_attempts_work on attempts(work_id);
 create index if not exists idx_evidence_attempt on evidence(attempt_id);
 create index if not exists idx_outcomes_attempt on outcomes(attempt_id);
 create index if not exists idx_events_work on events(work_id);
 create index if not exists idx_recovery_sessions_work on recovery_sessions(work_id, status);
 create index if not exists idx_recovery_sessions_attempt on recovery_sessions(attempt_id);
+create index if not exists idx_plans_work on plans(work_id, version);
+create unique index if not exists idx_plans_one_active on plans(work_id) where status = 'ACTIVE';
+create index if not exists idx_milestones_plan on milestones(plan_id, sequence);
+create index if not exists idx_checkpoints_work on checkpoints(work_id, created_at);
+create index if not exists idx_checkpoints_plan on checkpoints(plan_id, created_at);
 `;
 
 interface ColumnRequirement {
@@ -82,6 +101,18 @@ const REQUIRED_TABLES: Record<string, Record<string, ColumnRequirement>> = {
     id: PK_TEXT, work_id: TEXT, attempt_id: TEXT, observed_at: TEXT,
     evidence_ids: TEXT, reason: TEXT, status: TEXT,
   },
+  plans: {
+    id: PK_TEXT, work_id: TEXT, version: INTEGER, branch_id: TEXT, contract_version: INTEGER,
+    parent_plan_id: NULLABLE_TEXT, source_checkpoint_id: NULLABLE_TEXT, status: TEXT,
+    json: TEXT, created_at: TEXT,
+  },
+  milestones: {
+    row_id: PK_TEXT, id: TEXT, plan_id: TEXT, sequence: INTEGER, status: TEXT, json: TEXT,
+  },
+  checkpoints: {
+    id: PK_TEXT, work_id: TEXT, plan_id: TEXT, branch_id: TEXT,
+    parent_checkpoint_id: NULLABLE_TEXT, validation_status: TEXT, json: TEXT, created_at: TEXT,
+  },
 };
 
 const REQUIRED_INDEXES: Record<string, { table: string; columns: readonly string[] }> = {
@@ -91,6 +122,10 @@ const REQUIRED_INDEXES: Record<string, { table: string; columns: readonly string
   idx_events_work: { table: 'events', columns: ['work_id'] },
   idx_recovery_sessions_work: { table: 'recovery_sessions', columns: ['work_id', 'status'] },
   idx_recovery_sessions_attempt: { table: 'recovery_sessions', columns: ['attempt_id'] },
+  idx_plans_work: { table: 'plans', columns: ['work_id', 'version'] },
+  idx_milestones_plan: { table: 'milestones', columns: ['plan_id', 'sequence'] },
+  idx_checkpoints_work: { table: 'checkpoints', columns: ['work_id', 'created_at'] },
+  idx_checkpoints_plan: { table: 'checkpoints', columns: ['plan_id', 'created_at'] },
 };
 
 export function validateSchema(db: DatabaseSync): void {
@@ -126,13 +161,32 @@ export function validateSchema(db: DatabaseSync): void {
       problems.push(`${name} must index ${required.table}(${required.columns.join(', ')})`);
     }
   }
-  const contractIndexes = db.prepare('pragma index_list(contracts)').all() as Array<{
+  const hasUnique = (table: string, columns: string): boolean => {
+    const indexes = db.prepare(`pragma index_list(${table})`).all() as Array<{
+      name: string; unique: number; partial: number;
+    }>;
+    return indexes.some((index) => index.unique === 1 && index.partial === 0
+      && (db.prepare('select name from pragma_index_info(?) order by seqno').all(index.name) as Array<{ name: string }>)
+        .map((column) => column.name).join() === columns);
+  };
+  if (!hasUnique('contracts', 'work_id,version')) problems.push('contracts must have unique(work_id, version)');
+  if (!hasUnique('plans', 'work_id,version')) problems.push('plans must have unique(work_id, version)');
+  if (!hasUnique('milestones', 'plan_id,id')) problems.push('milestones must have unique(plan_id, id)');
+  if (!hasUnique('milestones', 'plan_id,sequence')) problems.push('milestones must have unique(plan_id, sequence)');
+  const planIndexes = db.prepare('pragma index_list(plans)').all() as Array<{
     name: string; unique: number; partial: number;
   }>;
-  const hasContractVersionUnique = contractIndexes.some((index) => index.unique === 1 && index.partial === 0
-    && (db.prepare('select name from pragma_index_info(?) order by seqno').all(index.name) as Array<{ name: string }>)
-      .map((column) => column.name).join() === 'work_id,version');
-  if (!hasContractVersionUnique) problems.push('contracts must have unique(work_id, version)');
+  const activePlanIndex = planIndexes.find((index) => index.name === 'idx_plans_one_active');
+  const activeColumns = activePlanIndex
+    ? (db.prepare('select name from pragma_index_info(?) order by seqno').all(activePlanIndex.name) as Array<{ name: string }>)
+      .map((column) => column.name).join()
+    : '';
+  const activeSql = (db.prepare("select sql from sqlite_master where type='index' and name='idx_plans_one_active'")
+    .get() as { sql?: string } | undefined)?.sql ?? '';
+  if (!activePlanIndex || activePlanIndex.unique !== 1 || activePlanIndex.partial !== 1
+    || activeColumns !== 'work_id' || !/where\s+status\s*=\s*'ACTIVE'/i.test(activeSql)) {
+    problems.push("idx_plans_one_active must uniquely index plans(work_id) where status = 'ACTIVE'");
+  }
   if (problems.length) throw new Error(`SCHEMA_INVALID: ${problems.join('; ')}`);
 }
 

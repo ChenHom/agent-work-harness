@@ -70,6 +70,9 @@ export interface AttemptInputSnapshot {
 export interface Attempt {
   id: string;
   workId: string;
+  planId?: string;
+  branchId?: string;
+  milestoneId?: string;
   number: number;
   mode: Mode;
   contractVersion: number;
@@ -108,6 +111,64 @@ export interface RecoverySession {
   evidenceIds: string[];
   reason: string;
   status: RecoverySessionStatus;
+}
+
+type PlanStatus = 'PROPOSED' | 'VALIDATED' | 'ACTIVE' | 'SUPERSEDED' | 'COMPLETED' | 'REJECTED';
+
+export interface WorkPlan {
+  id: string;
+  workId: string;
+  version: number;
+  branchId: string;
+  parentPlanId?: string;
+  contractVersion: number;
+  reason: string;
+  changedMilestoneIds: string[];
+  dependencyImpact: string[];
+  reusableArtifactIds: string[];
+  sourceCheckpointId?: string;
+  validationEvidenceIds: string[];
+  status: PlanStatus;
+  createdAt: string;
+  activatedAt?: string;
+}
+
+type MilestoneStatus = 'PENDING' | 'ACTIVE' | 'COMPLETED' | 'STALE' | 'BLOCKED';
+
+export interface PlanMilestone {
+  id: string;
+  planId: string;
+  sequence: number;
+  objective: string;
+  acceptanceCriterionIds: string[];
+  dependsOn: string[];
+  required: boolean;
+  status: MilestoneStatus;
+  completedAttemptId?: string;
+  staleReason?: string;
+}
+
+interface CheckpointArtifact {
+  artifactId: string;
+  hash: string;
+  logicalName: string;
+  producerMilestoneId?: string;
+}
+
+export interface LogicalCheckpoint {
+  schemaVersion: '1';
+  id: string;
+  workId: string;
+  parentCheckpointId?: string;
+  planId: string;
+  branchId: string;
+  contractVersion: number;
+  milestoneId?: string;
+  artifactManifest: CheckpointArtifact[];
+  validationStatus: 'pending_validation' | 'validated' | 'invalid';
+  validationEvidenceIds: string[];
+  createdEventSeq: number;
+  createdAt: string;
 }
 
 // §13

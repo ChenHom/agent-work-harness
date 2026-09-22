@@ -184,6 +184,33 @@ test('v1 migration preserves recovery rows while replacing the provisional colum
   }
 });
 
+test('v2 migration preserves authoritative rows and adds P2 plan tables', () => {
+  const state = mkdtempSync(join(tmpdir(), 'harness-migration-'));
+  const seeded = new Store(state);
+  seeded.db.exec(`
+    insert into works values ('W-v2','v2 row','repo','/repo','ACTIVE',1,2,'t0');
+    insert into events(type,work_id,attempt_id,data,created_at) values ('v2.event','W-v2',null,'{"keep":true}','t1');
+    drop table if exists checkpoints;
+    drop table if exists milestones;
+    drop table if exists plans;
+    pragma user_version = 2;
+  `);
+  seeded.close();
+
+  const migrated = new Store(state);
+  try {
+    assert.equal(CURRENT_SCHEMA_VERSION, 3);
+    assert.equal(migrated.getWork('W-v2')!.title, 'v2 row');
+    assert.equal(migrated.events('W-v2')[0]!.type, 'v2.event');
+    for (const table of ['plans', 'milestones', 'checkpoints']) {
+      assert.ok(migrated.db.prepare(`select name from sqlite_master where type='table' and name=?`).get(table));
+    }
+  } finally {
+    migrated.close();
+    rmSync(state, { recursive: true, force: true });
+  }
+});
+
 test('writable open rejects a newer schema without downgrading it', () => {
   const state = mkdtempSync(join(tmpdir(), 'harness-migration-'));
   const path = join(state, 'harness.db');

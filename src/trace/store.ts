@@ -11,6 +11,7 @@ import { CURRENT_SCHEMA_VERSION, migrate, rethrowAfterRollback, validateSchema }
 import type {
   Work, WorkContract, Attempt, DecisionRecord, EvidenceRecord,
   Outcome, WorkState, AttemptStatus, RecoverySession,
+  WorkPlan, PlanMilestone, LogicalCheckpoint,
 } from '../types.ts';
 
 const ARTIFACT_READ_FLAGS = constants.O_RDONLY | constants.O_NONBLOCK | constants.O_NOFOLLOW;
@@ -24,6 +25,7 @@ export type EventType =
   | 'runtime.protocol_failed' | 'evidence.collected' | 'outcome.decided'
   | 'work.completed' | 'work.blocked' | 'work.state_changed'
   | 'recovery.required' | 'recovery.observed'
+  | 'plan.proposed' | 'checkpoint.created'
   | 'usage.note';   // 人對結果的判讀 —— 機器不知道 evidence 判錯了，只有人知道
 
 export type VerifiedArtifact =
@@ -482,6 +484,78 @@ export class Store {
       reason: row.reason as string,
       status: row.status as RecoverySession['status'],
     }));
+  }
+
+  // ---- plans / milestones ----
+  insertPlan(plan: WorkPlan): void {
+    this.db.prepare(`
+      insert into plans(id,work_id,version,branch_id,contract_version,parent_plan_id,
+        source_checkpoint_id,status,json,created_at) values (?,?,?,?,?,?,?,?,?,?)
+    `).run(plan.id, plan.workId, plan.version, plan.branchId, plan.contractVersion,
+      plan.parentPlanId ?? null, plan.sourceCheckpointId ?? null, plan.status,
+      JSON.stringify(plan), plan.createdAt);
+    this.event('plan.proposed', {
+      planId: plan.id, version: plan.version, branchId: plan.branchId,
+      contractVersion: plan.contractVersion,
+    }, plan.workId);
+  }
+
+  getPlan(id: string): WorkPlan | null {
+    const row = this.db.prepare('select json from plans where id = ?').get(id) as { json: string } | undefined;
+    return row ? JSON.parse(row.json) as WorkPlan : null;
+  }
+
+  listPlans(workId: string): WorkPlan[] {
+    const rows = this.db.prepare('select json from plans where work_id = ? order by version, id')
+      .all(workId) as Array<{ json: string }>;
+    return rows.map((row) => JSON.parse(row.json) as WorkPlan);
+  }
+
+  insertMilestones(milestones: readonly PlanMilestone[]): void {
+    const insert = this.db.prepare(`
+      insert into milestones(row_id,id,plan_id,sequence,status,json) values (?,?,?,?,?,?)
+    `);
+    for (const milestone of milestones) {
+      insert.run(`${milestone.planId}:${milestone.id}`, milestone.id, milestone.planId,
+        milestone.sequence, milestone.status, JSON.stringify(milestone));
+    }
+  }
+
+  getMilestone(planId: string, milestoneId: string): PlanMilestone | null {
+    const row = this.db.prepare('select json from milestones where plan_id = ? and id = ?')
+      .get(planId, milestoneId) as { json: string } | undefined;
+    return row ? JSON.parse(row.json) as PlanMilestone : null;
+  }
+
+  listMilestones(planId: string): PlanMilestone[] {
+    const rows = this.db.prepare('select json from milestones where plan_id = ? order by sequence, id')
+      .all(planId) as Array<{ json: string }>;
+    return rows.map((row) => JSON.parse(row.json) as PlanMilestone);
+  }
+
+  // ---- logical checkpoints ----
+  insertCheckpoint(checkpoint: LogicalCheckpoint): void {
+    this.db.prepare(`
+      insert into checkpoints(id,work_id,plan_id,branch_id,parent_checkpoint_id,
+        validation_status,json,created_at) values (?,?,?,?,?,?,?,?)
+    `).run(checkpoint.id, checkpoint.workId, checkpoint.planId, checkpoint.branchId,
+      checkpoint.parentCheckpointId ?? null, checkpoint.validationStatus,
+      JSON.stringify(checkpoint), checkpoint.createdAt);
+    this.event('checkpoint.created', {
+      checkpointId: checkpoint.id, planId: checkpoint.planId, branchId: checkpoint.branchId,
+      validationStatus: checkpoint.validationStatus,
+    }, checkpoint.workId);
+  }
+
+  getCheckpoint(id: string): LogicalCheckpoint | null {
+    const row = this.db.prepare('select json from checkpoints where id = ?').get(id) as { json: string } | undefined;
+    return row ? JSON.parse(row.json) as LogicalCheckpoint : null;
+  }
+
+  listCheckpoints(workId: string): LogicalCheckpoint[] {
+    const rows = this.db.prepare('select json from checkpoints where work_id = ? order by created_at, rowid')
+      .all(workId) as Array<{ json: string }>;
+    return rows.map((row) => JSON.parse(row.json) as LogicalCheckpoint);
   }
 
   // ---- outcome ----
