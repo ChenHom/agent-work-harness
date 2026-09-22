@@ -17,10 +17,14 @@ import {
 import { runIsolated } from './evidence/exec.ts';
 import {
   formatContextDropped, formatPreExistingDirty, formatRecoverySession, formatWorkListRow,
-  formatCheckpoint, formatMilestone, formatPlan,
+  formatBudget, formatCheckpoint, formatCompensation, formatMilestone, formatOperation, formatPlan,
 } from './cli-format.ts';
 import { formatPromptChars } from './response.ts';
 import type { GlobalPolicy } from './types.ts';
+import { BudgetLedger } from './budget/ledger.ts';
+import { FakeProvider } from './tools/fake-provider.ts';
+import { OperationGateway } from './tools/gateway.ts';
+import { CompensationWorkflow } from './tools/compensation.ts';
 
 const USAGE = `harness — Agent Work Harness (MVP)
 
@@ -44,6 +48,13 @@ const USAGE = `harness — Agent Work Harness (MVP)
   harness notes [kind]                  列出所有記錄
   harness stats                         work / attempt / retry / outcome 彙總
   harness ownership                     顯示目前 execution ownership（唯讀）
+  harness fake budget configure <workId> <kind> <limit> <pricing> [currency]
+  harness fake budget show <workId>      顯示 Work 預算與 reservation（唯讀）
+  harness fake operation prepare <workId> <json-file>
+  harness fake operation dispatch|reconcile <operationId>
+  harness fake operation show <workId>   顯示 operation／compensation（唯讀）
+  harness fake compensation prepare <operationId> <json-file>
+  harness fake compensation dispatch|reconcile <compensationId>
   harness skills list|approve <id> <dir>
   harness doctor [dir]                  檢查 runtime 與隔離是否真的生效
 
@@ -60,26 +71,32 @@ const NOTE_KINDS = ['false-accept', 'false-block', 'retry-churn', 'blocked-work'
 
 const STORE_COMMANDS = new Set([
   'new', 'run', 'retry', 'recover', 'answer', 'amend', 'plan', 'checkpoint',
-  'list', 'show', 'trace', 'prompt', 'note', 'notes', 'stats',
+  'list', 'show', 'trace', 'prompt', 'note', 'notes', 'stats', 'fake',
 ]);
 const READ_ONLY_COMMANDS = new Set(['list', 'show', 'trace', 'prompt', 'notes', 'stats']);
 const MUTATING_COMMANDS = new Set([
-  'init', 'new', 'run', 'retry', 'recover', 'answer', 'amend', 'plan', 'checkpoint', 'note', 'doctor',
+  'init', 'new', 'run', 'retry', 'recover', 'answer', 'amend', 'plan', 'checkpoint', 'note', 'doctor', 'fake',
 ]);
+
+function isReadOnlyCommand(cmd: string | undefined, rest: string[]): boolean {
+  return Boolean(cmd && (READ_ONLY_COMMANDS.has(cmd)
+    || (cmd === 'fake' && rest[1] === 'show')));
+}
 
 export async function main(argv: string[], policy: GlobalPolicy = loadPolicy()): Promise<number> {
   const [cmd, ...rest] = argv;
   let store: Store | undefined;
   let ownership: ExecutionOwnership | undefined;
   try {
-    if ((cmd && MUTATING_COMMANDS.has(cmd)) || (cmd === 'skills' && rest[0] === 'approve')) {
+    const readOnlyCommand = isReadOnlyCommand(cmd, rest);
+    if ((cmd && MUTATING_COMMANDS.has(cmd) && !readOnlyCommand) || (cmd === 'skills' && rest[0] === 'approve')) {
       ownership = acquireExecutionOwnership(policy.stateDir);
     }
     if (cmd && STORE_COMMANDS.has(cmd)) {
-      store = new Store(policy.stateDir, { readOnly: READ_ONLY_COMMANDS.has(cmd) });
+      store = new Store(policy.stateDir, { readOnly: readOnlyCommand });
     }
     const log = (m: string): void => { process.stderr.write(`  · ${m}\n`); };
-    const orch = store && !READ_ONLY_COMMANDS.has(cmd ?? '') ? new Orchestrator(policy, store, log) : undefined;
+    const orch = store && !readOnlyCommand ? new Orchestrator(policy, store, log) : undefined;
 
   switch (cmd) {
     case 'init': {
@@ -326,6 +343,72 @@ export async function main(argv: string[], policy: GlobalPolicy = loadPolicy()):
       return 0;
     }
 
+    case 'fake': {
+      const [area, action, id, extra, extra2, extra3, extra4] = rest;
+      if (area === 'budget' && action === 'configure' && id && extra && extra2 && extra3) {
+        const limit = new BudgetLedger(store!).configureLimit({
+          workId: id, resourceKind: extra, limitUnits: Number(extra2),
+          pricingVersion: extra3, currency: extra4,
+        });
+        console.log(`budget: ${limit.id} ${limit.resourceKind}/${limit.currency ?? '-'} limit=${limit.limitUnits}`);
+        return 0;
+      }
+      if (area === 'budget' && action === 'show' && id) {
+        const ledger = new BudgetLedger(store!);
+        const limits = store!.listBudgetLimits(id);
+        if (!limits.length) console.log('(沒有 budget limit)');
+        for (const limit of limits) {
+          const summary = ledger.summary(limit.id);
+          console.log(formatBudget(
+            limit, store!.listBudgetReservations(limit.id), summary.spentUnits, summary.reservedUnits,
+          ));
+        }
+        return 0;
+      }
+      if (area === 'operation' && action === 'show' && id) {
+        const operations = store!.listOperations(id);
+        if (!operations.length) console.log('(沒有 operation)');
+        for (const operation of operations) {
+          console.log(formatOperation(operation));
+          const compensation = store!.getCompensationForOperation(operation.id);
+          if (compensation) console.log(`  compensation ${formatCompensation(compensation).slice(2)}`);
+        }
+        return 0;
+      }
+      const providerDir = join(policy.stateDir, 'fake-provider');
+      mkdirSync(providerDir, { recursive: true });
+      const budget = new BudgetLedger(store!);
+      const provider = new FakeProvider(join(providerDir, 'ledger.json'));
+      const gateway = new OperationGateway(store!, budget, provider);
+      const compensations = new CompensationWorkflow(store!, budget, provider);
+      if (area === 'operation' && action === 'prepare' && id && extra) {
+        const input = readJson(extra) as Omit<Parameters<OperationGateway['prepare']>[0], 'workId'>;
+        const operation = gateway.prepare({ ...input, workId: id });
+        console.log(formatOperation(operation));
+        return 0;
+      }
+      if (area === 'operation' && (action === 'dispatch' || action === 'reconcile') && id) {
+        const operation = action === 'dispatch'
+          ? await gateway.dispatch(id, ownership!) : await gateway.reconcile(id, ownership!);
+        console.log(formatOperation(operation));
+        return 0;
+      }
+      if (area === 'compensation' && action === 'prepare' && id && extra) {
+        const input = readJson(extra) as Omit<Parameters<CompensationWorkflow['prepare']>[0], 'operationId'>;
+        const compensation = compensations.prepare({ ...input, operationId: id });
+        console.log(formatCompensation(compensation));
+        return 0;
+      }
+      if (area === 'compensation' && (action === 'dispatch' || action === 'reconcile') && id) {
+        const compensation = action === 'dispatch'
+          ? await compensations.dispatch(id, ownership!) : await compensations.reconcile(id, ownership!);
+        console.log(formatCompensation(compensation));
+        return 0;
+      }
+      console.error('用法：harness fake budget configure|show | operation prepare|dispatch|reconcile|show | compensation prepare|dispatch|reconcile');
+      return 1;
+    }
+
     case 'skills': {
       const [sub, id, dir] = rest;
       if (sub === 'list') {
@@ -379,12 +462,13 @@ export async function main(argv: string[], policy: GlobalPolicy = loadPolicy()):
       return cmd ? 1 : 0;
   }
   } catch (error) {
-    if (error instanceof StoreOpenError && error.code === 'NO_STATE' && cmd && READ_ONLY_COMMANDS.has(cmd)) {
+    if (error instanceof StoreOpenError && error.code === 'NO_STATE' && cmd && isReadOnlyCommand(cmd, rest)) {
       if (cmd === 'list') console.log('(沒有 work)');
       else if (cmd === 'notes') console.log('(還沒有任何記錄)');
       else if (cmd === 'stats') console.log('works: 0   attempts: 0   retries: 0\n\noutcome 分佈\n  (無)');
+      else if (cmd === 'fake') console.log('(沒有 operation/budget state)');
       else console.error(cmd === 'prompt' ? '找不到 attempt' : '找不到 work');
-      return ['list', 'notes', 'stats'].includes(cmd) ? 0 : 1;
+      return ['list', 'notes', 'stats', 'fake'].includes(cmd) ? 0 : 1;
     }
     throw error;
   } finally {

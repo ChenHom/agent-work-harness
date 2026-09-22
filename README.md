@@ -14,7 +14,8 @@ Cross-Repo Validation  ✅ task-tracker（36.6k 行 TS）✅ rag-stack（10k 行
 Core abstraction       ✅ 跨兩種語言 / domain / runner，Core 0 修改
 P1 Recovery correctness ✅ G1 通過：durable inputs/outputs、ownership、transaction、recovery session
 P2 Plans/checkpoints    ✅ G2 通過：versioned plans、logical checkpoints、verified resume/fork
-P3–P5                  ◻ 設計中，尚未實作
+P3 Operation/Budget    ✅ G3 通過：fake adapter、UNKNOWN reconciliation、compensation、integer hard cap
+P4–P5                  ◻ 設計中，尚未實作
 需要修改 Core 的證據      無
 ```
 
@@ -57,6 +58,12 @@ node src/cli.ts plan fork <checkpointId> fork.json
 `checkpoint` 是保存 plan/branch/contract、artifact hash 與 validation status 的 logical checkpoint；
 它不執行 `git reset`、不還原檔案，也不撤銷外部副作用。完整格式與操作差異見
 [使用手冊](docs/usage.md#受控-plan-與-logical-checkpointp2)。
+
+P3 提供 `harness fake ...` 命令驗證外部副作用協定。Provider ledger 與 harness DB 分開持久化；
+operation 在 dispatch 前保存 intent、authorization、capability snapshot 與 budget reservation，
+UNKNOWN 只能 lookup reconcile，不能盲目重送。這一階段只有本機 fake provider，尚未接上任何
+真實外部 API；Codex 與 repository shell 的 network deny 也未放寬。詳見
+[使用手冊](docs/usage.md#fake-operation-gatewayp3)。
 
 需要你決定時（`NEEDS_USER_DECISION`）：
 
@@ -144,12 +151,12 @@ agent 改不了自己的驗收規則。
 | 層 | 模組 | 職責 |
 |---|---|---|
 | 入口 | `cli.ts` | 子指令 → Orchestrator / Store，不含業務邏輯 |
-| 流程 | `orchestrator.ts`、`work/plans.ts`、`trace/checkpoints.ts` | attempt 生命週期、受控 plan、logical checkpoint、retry、recovery |
+| 流程 | `orchestrator.ts`、`work/plans.ts`、`trace/checkpoints.ts`、`tools/{gateway,compensation}.ts` | attempt、plan/checkpoint、外部 operation 與 compensation 生命週期 |
 | 輸入 | `work/parser`、`context/manifest`、`context/budget`、`prompt/compiler` | 需求 → pointers → 預算裁切 → 六區 prompt |
 | 執行 | `runtime/codex-driver`、`runtime/isolation`、`runtime/result` | prepare/run、bwrap 沙箱與 env、RuntimeResult 解析 |
 | 證據 | `evidence/{git,verification,exec,outcome}`、`repo/paths` | diff 觀察、隔離跑驗證指令、path policy → `OutcomeDecision` |
 | 邊界 | `repo/contract`、`security/skills`、`policy` | `.harness/config.json` 凍結、skill hash 准入、authority 上限 |
-| 儲存 | `trace/store` | append-only 事件流 + work / attempt / evidence 查詢 |
+| 儲存 | `trace/store`、`budget/ledger.ts` | append-only 事件流、work/attempt/evidence 與整數 budget ledger |
 | 輸出 | `response`、`cli-format` | 給人看的字串，不參與決策 |
 
 一次 attempt 的資料流：
@@ -166,7 +173,7 @@ run  ┌ prepare  contract 快照 → admitSkills → manifest → budget → co
 
 ## 文件
 
-- [長任務架構 v2（P1–P2 已實作；P3–P5 為設計）](docs/superpowers/specs/2026-09-09-long-running-harness-v2-design.md)
+- [長任務架構 v2（P1–P3 已實作；P4–P5 為設計）](docs/superpowers/specs/2026-09-09-long-running-harness-v2-design.md)
 - [v2 分階段實作計畫（P1 本機恢復優先）](docs/superpowers/plans/2026-09-09-long-running-harness-v2.md)
 
 - 決策記錄：`DECISIONS.md`
@@ -182,7 +189,7 @@ run  ┌ prepare  contract 快照 → admitSkills → manifest → budget → co
 ```bash
 npm run check     # lint + typecheck + test + deadcode，提交前跑這個
 
-npm test          # 278 個測試，不需要 codex
+npm test          # 300 個測試，不需要 codex 或網路
 npm run typecheck # tsc --noEmit
 npm run lint      # eslint：no-floating-promises + 兩條架構界線（D-29 / D-31）
 npm run deadcode  # knip：沒人用的 export / file / dependency

@@ -88,3 +88,25 @@ retry budget 不變；舊 branch result 不能完成 active Work，fork branch �
 
 2026-09-22 驗收環境：Node v24.19.0、Linux 6.8.0-124-generic x86_64。
 主機環境執行 `npm run check`：exit 0，278 pass、0 fail、0 skip，lint/typecheck/Knip 全部通過。
+
+## Long-running v2 G3：P3 operation gateway and budget
+
+| # | G3 條件 | 驗證來源 |
+|---|---|---|
+| 1 | Dispatch 前持久化 intent、authorization、capability snapshot 與 reservation | `test/operation-recovery.test.ts` prepare fixture、`test/g3-acceptance.test.ts` |
+| 2 | 相同 logical intent 沿用 identity/key；不同 canonical payload 拒絕 | `test/operation-recovery.test.ts`、`test/g3-acceptance.test.ts` |
+| 3 | 成功但 response 遺失進 UNKNOWN，只經 lookup 收斂且 provider effect 不重複 | `test/operation-recovery.test.ts` restart fixture、`test/g3-acceptance.test.ts` |
+| 4 | Eventual-consistency not-found 與過期 key 不觸發 blind redispatch | `test/operation-recovery.test.ts` completion-window/expiry fixtures |
+| 5 | Receipt + postcondition 才能 SUCCEEDED 並結算；UNKNOWN 保留 reservation | `test/operation-recovery.test.ts` dispatch/reconciliation fixtures |
+| 6 | Confirmed no-effect 才釋放 reservation | `test/operation-recovery.test.ts` no-effect fixture |
+| 7 | 並行 reservation 的 spent + reserved 不超過 Work 整數 hard cap | `test/budget-ledger.test.ts` contention fixture、`test/g3-acceptance.test.ts` |
+| 8 | Compensation 有獨立 identity、attempt、receipt、cost 與 crash recovery | `test/operation-recovery.test.ts` compensation fixtures |
+| 9 | 獨立 provider ledger 證明每個 business identity 至多一個 effect | `test/g3-acceptance.test.ts` |
+| 10 | CLI restart 沿用 fake ledger；唯讀 display 不建立 ownership 或事件 | `test/cli.test.ts` P3 command fixture |
+
+G3 只驗收本機 fake provider。沒有 real adapter，Codex 與 repository shell 仍由既有 bwrap network
+namespace 阻斷網路，產品明示外部副作用治理尚未接入真實服務。Fake provider ledger 位於 harness DB
+之外，測試涵蓋 lost response、eventual consistency、TTL expiry、補償 crash 與 budget contention。
+
+2026-09-22 驗收環境：Node v24.19.0、Linux 6.8.0-124-generic x86_64。
+主機環境執行 `npm run check`：exit 0，300 pass、0 fail、0 skip，lint/typecheck/Knip 全部通過。

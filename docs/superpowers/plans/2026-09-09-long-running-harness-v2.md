@@ -14,7 +14,7 @@ P1–P2 不增加線上 LLM 或 workflow engine；P3–P5 是有前置條件的�
 
 **基線:** `9f04360`；2026-09-09 主機 `npm run check`：173 pass／0 fail／0 skip。
 
-**本文件狀態:** **P1/G1 與 P2/G2 已完成；P3–P5 尚未開始。**
+**本文件狀態:** **P1/G1、P2/G2 與 P3/G3 已完成；P4–P5 尚未開始。**
 
 ## 1. 可交付範圍
 
@@ -382,14 +382,14 @@ P2 plan UI 不阻擋此子專案，但所有 operation identity 必須能跨未�
 `src/tools/compensation.ts`、`src/budget/ledger.ts`；測試
 `test/operation-recovery.test.ts`、`test/budget-ledger.test.ts`。
 
-- [ ] Operation／attempt 分開；同 intent 沿用 key，同 key 不同 payload 拒絕。
-- [ ] transaction 保存授權、intent、reservation，再派發；receipt 回來先保存再判定。
-- [ ] Adapter 定義 lookup／postcondition／key TTL／部分完成／unsafe retry 行為。
-- [ ] UNKNOWN 先對帳；查不到且可能晚到，不標成 FAILED。
-- [ ] Compensation 有獨立持久進度與 budget；失敗轉人工，不自動假設已撤銷。
-- [ ] 上限可驗的工具才提供 hard cap；CodexDriver 目前沒有精確費用 receipt，
+- [x] Operation／attempt 分開；同 intent 沿用 key，同 key 不同 payload 拒絕。
+- [x] transaction 保存授權、intent、reservation，再派發；receipt 回來先保存再判定。
+- [x] Adapter 定義 lookup／postcondition／key TTL／部分完成／unsafe retry 行為。
+- [x] UNKNOWN 先對帳；查不到且可能晚到，不標成 FAILED。
+- [x] Compensation 有獨立持久進度與 budget；失敗轉人工，不自動假設已撤銷。
+- [x] 上限可驗的工具才提供 hard cap；CodexDriver 目前沒有精確費用 receipt，
   維持 unknown／estimated，不用字元數冒充 token usage。
-- [ ] 證明 model／shell 無繞過 Gateway 的寫入路徑，才開放實際外部操作；
+- [x] 證明 model／shell 無繞過 Gateway 的寫入路徑，才開放實際外部操作；
   原有 network deny 不因新增 adapter 自動放寬。
 
 **G3：** fake provider 已完成但 response 遺失、重複派送、TTL 到期、
@@ -451,7 +451,7 @@ callback 重複亂序只處理一次有效狀態轉移；deadline 經重啟仍�
 ## 16. 執行順序與交接
 
 先執行 P1 Task 1–7，每個提交都能獨立驗證。
-P2／P3 是後續子專案，實作前補成各自的詳細任務計畫；P4 選型取決於實測 gate，
+P1／P2／P3 已各自完成實作與 gate；P4 選型取決於實測 gate，
 P5 語意驗收取決於獨立 oracle。這些是明確延後的工作，不代表整個 v2 已完成。
 
 本輪文件驗證只包含來源對照、章節與 review 覆蓋、相對連結與 diff 檢查。

@@ -1,5 +1,6 @@
 import type {
-  Attempt, LogicalCheckpoint, Outcome, PlanMilestone, RecoverySession, Work, WorkPlan,
+  Attempt, BudgetLimit, BudgetReservation, Compensation, LogicalCheckpoint, Operation,
+  Outcome, PlanMilestone, RecoverySession, Work, WorkPlan,
 } from './types.ts';
 
 export function formatWorkListRow(work: Work, outcome: Outcome | null): string {
@@ -35,4 +36,26 @@ export function formatMilestone(milestone: PlanMilestone): string {
 export function formatCheckpoint(checkpoint: LogicalCheckpoint): string {
   return `- ${checkpoint.id} ${checkpoint.validationStatus} branch=${checkpoint.branchId} plan=${checkpoint.planId}`
     + ` milestone=${checkpoint.milestoneId ?? '-'} artifacts=${checkpoint.artifactManifest.length}`;
+}
+
+export function formatOperation(operation: Operation): string {
+  return `- ${operation.id} ${operation.status} intent=${operation.intentKey}`
+    + ` target=${operation.targetScope} key=${operation.idempotencyKey}`;
+}
+
+export function formatCompensation(compensation: Compensation): string {
+  return `- ${compensation.id} ${compensation.status} operation=${compensation.operationId}`
+    + ` target=${compensation.resourceIdentity} key=${compensation.idempotencyKey}`;
+}
+
+export function formatBudget(
+  limit: BudgetLimit,
+  reservations: BudgetReservation[],
+  spentUnits: number,
+  reservedUnits: number,
+): string {
+  return `- ${limit.resourceKind}/${limit.currency ?? '-'} limit=${limit.limitUnits}`
+    + ` spent=${spentUnits} reserved=${reservedUnits}`
+    + ` available=${limit.limitUnits - spentUnits - reservedUnits}`
+    + ` reservations=${reservations.length} pricing=${limit.pricingVersion}`;
 }

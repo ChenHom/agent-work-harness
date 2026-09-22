@@ -141,6 +141,66 @@ filesystem rollback；resume/fork 都不會執行 `git reset`／`git clean`，�
 同一 producer milestone 與 logical artifact name 的 hash 被替換時，已完成的下游 milestone 會
 轉為 STALE，trace 會保存來源 artifact 與 dependency path。
 
+### Fake Operation Gateway（P3）
+
+P3 只接本機 fake provider，用來驗證 side-effect protocol。它不會呼叫真實外部 API；provider
+狀態存放在 state directory 的 `fake-provider/ledger.json`，與 `harness.db` 分開，CLI 重啟後仍會
+沿用相同 business identity 與 idempotency key。Codex runtime 與 repository verification shell
+仍在 network-denied sandbox，不能直接走這條 provider path。
+
+先為 Work 設整數 hard cap，再從 JSON 建立 operation：
+
+```bash
+harness fake budget configure W-xxx fake_write 30 fake-v1 unit
+harness fake operation prepare W-xxx operation.json
+harness fake operation dispatch OP-xxx
+```
+
+`operation.json` 範例：
+
+```json
+{
+  "intentKey": "create:customer-7",
+  "kind": "fake.create",
+  "targetScope": "customer-7",
+  "payload": { "businessId": "customer-7", "value": "enabled", "behavior": "success" },
+  "precondition": "customer absent",
+  "reconciliationStrategy": "lookup by idempotency key",
+  "compensationPolicy": "remove exact owned version",
+  "authorizationRef": "contract:C-1"
+}
+```
+
+Gateway 會先持久化 intent、authorization reference、adapter capability snapshot 與 reservation，
+再呼叫 provider。只有 receipt 與 postcondition 都通過才會進入 `SUCCEEDED` 並以 receipt 的實際整數
+用量結算。Response 遺失或結果不明會進入 `UNKNOWN`，額度維持 reserved：
+
+```bash
+harness fake operation reconcile OP-xxx
+harness fake operation show W-xxx
+harness fake budget show W-xxx
+```
+
+UNKNOWN operation 不接受再次 dispatch。Lookup 的 not-found 在 completion window 內仍是 UNKNOWN；
+confirmed no-effect 才會 `FAILED` 並釋放額度。Partial、unsupported 或 idempotency key 過期會轉
+`WAITING_USER`。這套 hard cap 只適用 adapter 能提供可信 upper bound 與 receipt 的資源；Codex
+token／費用目前維持 unknown 或 estimated，不能用 prompt 字元數冒充 token 或金額。
+
+補償是另一個持久 workflow，有自己的 key、attempt、receipt 與 reservation：
+
+```bash
+harness fake compensation prepare OP-xxx compensation.json
+harness fake compensation dispatch COMP-xxx
+harness fake compensation reconcile COMP-xxx
+```
+
+`compensation.json` 必須指定 `authorizationRef`、原 receipt 的 `resourceIdentity`、`ownershipRef` 與
+`targetVersion`。Identity、ownership、version 或 reversibility 不符時不會 dispatch。補償 UNKNOWN
+也只能 lookup；原 operation 不會因補償意圖或不明結果就被視為已撤銷。
+
+目前「外部副作用治理未接入」任何真實 provider。若未來加入 real adapter，必須另外證明 model／
+shell 沒有繞過 Gateway 的寫入路徑，並保留現在的 network deny，才能擴大承諾。
+
 ### 讀懂結果
 
 回應分成三塊，來源不同，不要混著看：

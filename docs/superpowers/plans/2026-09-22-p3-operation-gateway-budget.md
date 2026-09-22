@@ -69,23 +69,23 @@
 
 **Files:** `src/cli.ts`, `src/cli-format.ts`, `test/cli.test.ts`, `docs/usage.md`, `docs/acceptance.md`, `README.md`, `docs/superpowers/plans/2026-09-09-long-running-harness-v2.md`
 
-- [ ] Add ownership-guarded fake-provider commands for budget configuration, prepare/dispatch, reconcile, and compensation; add read-only operation/budget display.
-- [ ] Keep fake-provider state outside the harness DB and make CLI restarts reuse it.
-- [ ] Add one G3 fixture covering lost success response, duplicate dispatch, expired TTL, eventual consistency, compensation crash, and concurrent budget reservation.
-- [ ] Assert each provider business identity has the authorized effect count and the Work ledger never exceeds its hard limit.
-- [ ] Test/document that Codex and repository shell remain network-denied and cannot invoke a real external write path; without a real adapter the product states that external side-effect governance is not connected.
-- [ ] Document receipt, UNKNOWN, reconciliation, compensation, reservation, and hard-cap limits. Mark only P3/G3 complete; leave P4–P5 unchanged.
-- [ ] Run one final `npm run check`, validate Markdown relative links and `git diff --check`, record pass/fail/skip counts, review all G3 items, and commit.
+- [x] Add ownership-guarded fake-provider commands for budget configuration, prepare/dispatch, reconcile, and compensation; add read-only operation/budget display.
+- [x] Keep fake-provider state outside the harness DB and make CLI restarts reuse it.
+- [x] Add one G3 fixture covering lost success response, duplicate dispatch, expired TTL, eventual consistency, compensation crash, and concurrent budget reservation.
+- [x] Assert each provider business identity has the authorized effect count and the Work ledger never exceeds its hard limit.
+- [x] Test/document that Codex and repository shell remain network-denied and cannot invoke a real external write path; without a real adapter the product states that external side-effect governance is not connected.
+- [x] Document receipt, UNKNOWN, reconciliation, compensation, reservation, and hard-cap limits. Mark only P3/G3 complete; leave P4–P5 unchanged.
+- [x] Run one final `npm run check`, validate Markdown relative links and `git diff --check`, record pass/fail/skip counts, review all G3 items, and commit.
 
 ## G3 acceptance checklist
 
-- [ ] Intent, authorization, capability snapshot, and reservation are durable before dispatch.
-- [ ] Same logical intent reuses identity/key; same key with different payload is rejected.
-- [ ] Provider success with lost response becomes UNKNOWN and reconciles without duplicate effect.
-- [ ] Eventual-consistency not-found and expired dedupe windows never trigger blind redispatch.
-- [ ] Receipt/postcondition gates SUCCEEDED and budget settlement.
-- [ ] UNKNOWN retains reservation; confirmed no-effect releases it.
-- [ ] Concurrent reservations cannot exceed the integer hard limit.
-- [ ] Compensation has independent identity, attempts, receipt, cost, and UNKNOWN recovery.
-- [ ] Provider ledger proves one authorized effect per business identity across duplicate/crash cases.
-- [ ] No real external adapter or model/shell bypass path is enabled in P3.
+- [x] Intent, authorization, capability snapshot, and reservation are durable before dispatch.
+- [x] Same logical intent reuses identity/key; same key with different payload is rejected.
+- [x] Provider success with lost response becomes UNKNOWN and reconciles without duplicate effect.
+- [x] Eventual-consistency not-found and expired dedupe windows never trigger blind redispatch.
+- [x] Receipt/postcondition gates SUCCEEDED and budget settlement.
+- [x] UNKNOWN retains reservation; confirmed no-effect releases it.
+- [x] Concurrent reservations cannot exceed the integer hard limit.
+- [x] Compensation has independent identity, attempts, receipt, cost, and UNKNOWN recovery.
+- [x] Provider ledger proves one authorized effect per business identity across duplicate/crash cases.
+- [x] No real external adapter or model/shell bypass path is enabled in P3.

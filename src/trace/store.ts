@@ -826,6 +826,12 @@ export class Store {
     return row ? JSON.parse(row.json) as BudgetLimit : null;
   }
 
+  listBudgetLimits(workId: string): BudgetLimit[] {
+    const rows = this.db.prepare('select json from budget_limits where work_id = ? order by created_at, rowid')
+      .all(workId) as Array<{ json: string }>;
+    return rows.map((row) => JSON.parse(row.json) as BudgetLimit);
+  }
+
   findBudgetLimit(workId: string, resourceKind: string, currency?: string): BudgetLimit | null {
     const row = this.db.prepare(`
       select json from budget_limits where work_id = ? and resource_kind = ? and currency = ?
