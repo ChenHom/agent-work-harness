@@ -35,13 +35,13 @@
 
 **Files:** `src/tools/operations.ts`, `src/tools/gateway.ts`, `src/tools/fake-provider.ts`, `src/trace/store.ts`, `test/operation-recovery.test.ts`
 
-- [ ] Define explicit adapter capabilities: effect type, retry safety, reversibility, lookup support, key TTL, postcondition, upper-bound support, and adapter version.
-- [ ] Back the fake provider with a separate durable ledger keyed by business identity and idempotency key.
-- [ ] `prepare()` reuses the same operation/idempotency key for the same logical intent and rejects the same identity/key with a different canonical payload.
-- [ ] In one local transaction save authorization/capability snapshot, PREPARED intent, and budget reservation. Dispatch only afterward under P1 ownership.
-- [ ] Record DISPATCHED before the provider call. Save receipt and postcondition before SUCCEEDED; definitive no-effect errors become FAILED; ambiguous errors/timeouts become UNKNOWN.
-- [ ] Prove duplicate delivery produces one provider effect and one settled charge.
-- [ ] Run targeted tests, one full `npm run check`, review against this task, and commit.
+- [x] Define explicit adapter capabilities: effect type, retry safety, reversibility, lookup support, key TTL, postcondition, upper-bound support, and adapter version.
+- [x] Back the fake provider with a separate durable ledger keyed by business identity and idempotency key.
+- [x] `prepare()` reuses the same operation/idempotency key for the same logical intent and rejects the same identity/key with a different canonical payload.
+- [x] In one local transaction save authorization/capability snapshot, PREPARED intent, and budget reservation. Dispatch only afterward under P1 ownership.
+- [x] Record DISPATCHED before the provider call. Save receipt and postcondition before SUCCEEDED; definitive no-effect errors become FAILED; ambiguous errors/timeouts become UNKNOWN.
+- [x] Prove duplicate delivery produces one provider effect and one settled charge.
+- [x] Run targeted tests, one full `npm run check`, review against this task, and commit.
 
 ## Task 4: UNKNOWN reconciliation and expiry policy
 

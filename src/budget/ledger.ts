@@ -88,42 +88,49 @@ export class BudgetLedger {
   }
 
   markUnknown(reservationId: string): BudgetReservation {
-    return this.store.withTransaction(() => {
-      const current = this.requireReservation(reservationId);
-      if (current.status !== 'HELD' && current.status !== 'UNKNOWN') {
-        throw new Error(`BUDGET_INVALID_STATE: ${reservationId} is ${current.status}`);
-      }
-      if (current.status === 'UNKNOWN') return current;
-      const updated: BudgetReservation = { ...current, status: 'UNKNOWN', updatedAt: nowIso() };
-      this.store.updateBudgetReservation(updated);
-      return updated;
-    });
+    return this.store.withTransaction(() => this.markUnknownInTransaction(reservationId));
+  }
+
+  markUnknownInTransaction(reservationId: string): BudgetReservation {
+    const current = this.requireReservation(reservationId);
+    if (current.status !== 'HELD' && current.status !== 'UNKNOWN') {
+      throw new Error(`BUDGET_INVALID_STATE: ${reservationId} is ${current.status}`);
+    }
+    if (current.status === 'UNKNOWN') return current;
+    const updated: BudgetReservation = { ...current, status: 'UNKNOWN', updatedAt: nowIso() };
+    this.store.updateBudgetReservation(updated);
+    return updated;
   }
 
   settle(reservationId: string, actualUnits: number): BudgetReservation {
     units(actualUnits, 'actualUnits');
-    return this.store.withTransaction(() => {
-      const current = this.requireOpenReservation(reservationId);
-      if (actualUnits > current.amountUnits) {
-        throw new Error(`BUDGET_RECEIPT_EXCEEDS_RESERVATION: ${actualUnits} > ${current.amountUnits}`);
-      }
-      const updated: BudgetReservation = {
-        ...current, status: 'SETTLED', settledUnits: actualUnits, updatedAt: nowIso(),
-      };
-      this.store.updateBudgetReservation(updated);
-      this.store.insertBudgetLedgerEntry(this.entry(current, 'SETTLE', -current.amountUnits, actualUnits));
-      return updated;
-    });
+    return this.store.withTransaction(() => this.settleInTransaction(reservationId, actualUnits));
+  }
+
+  settleInTransaction(reservationId: string, actualUnits: number): BudgetReservation {
+    units(actualUnits, 'actualUnits');
+    const current = this.requireOpenReservation(reservationId);
+    if (actualUnits > current.amountUnits) {
+      throw new Error(`BUDGET_RECEIPT_EXCEEDS_RESERVATION: ${actualUnits} > ${current.amountUnits}`);
+    }
+    const updated: BudgetReservation = {
+      ...current, status: 'SETTLED', settledUnits: actualUnits, updatedAt: nowIso(),
+    };
+    this.store.updateBudgetReservation(updated);
+    this.store.insertBudgetLedgerEntry(this.entry(current, 'SETTLE', -current.amountUnits, actualUnits));
+    return updated;
   }
 
   releaseConfirmedUnused(reservationId: string): BudgetReservation {
-    return this.store.withTransaction(() => {
-      const current = this.requireOpenReservation(reservationId);
-      const updated: BudgetReservation = { ...current, status: 'RELEASED', updatedAt: nowIso() };
-      this.store.updateBudgetReservation(updated);
-      this.store.insertBudgetLedgerEntry(this.entry(current, 'RELEASE', -current.amountUnits, 0));
-      return updated;
-    });
+    return this.store.withTransaction(() => this.releaseConfirmedUnusedInTransaction(reservationId));
+  }
+
+  releaseConfirmedUnusedInTransaction(reservationId: string): BudgetReservation {
+    const current = this.requireOpenReservation(reservationId);
+    const updated: BudgetReservation = { ...current, status: 'RELEASED', updatedAt: nowIso() };
+    this.store.updateBudgetReservation(updated);
+    this.store.insertBudgetLedgerEntry(this.entry(current, 'RELEASE', -current.amountUnits, 0));
+    return updated;
   }
 
   summary(limitId: string): BudgetSummary {

@@ -182,6 +182,8 @@ export interface AdapterCapabilitySnapshot {
   retrySafety: 'idempotent' | 'deduplicated' | 'unsafe';
   reversibility: 'compensable' | 'irreversible';
   lookup: 'supported' | 'unsupported';
+  postcondition: string;
+  upperBoundSupport: 'supported' | 'unsupported';
   idempotencyKeyTtlMs: number;
   completionWindowMs: number;
   cost: {

@@ -11,7 +11,8 @@ import type {
 
 const capabilities: AdapterCapabilitySnapshot = {
   adapter: 'fake', version: '1', effectType: 'write', retrySafety: 'deduplicated',
-  reversibility: 'compensable', lookup: 'supported', idempotencyKeyTtlMs: 60_000,
+  reversibility: 'compensable', lookup: 'supported', postcondition: 'resource exists',
+  upperBoundSupport: 'supported', idempotencyKeyTtlMs: 60_000,
   completionWindowMs: 5_000,
   cost: { mode: 'bounded', resourceKind: 'provider_write', currency: 'TWD', upperBoundUnits: 10, pricingVersion: 'fake-v1' },
 };

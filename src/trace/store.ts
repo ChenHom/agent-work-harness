@@ -30,6 +30,7 @@ export type EventType =
   | 'plan.proposed' | 'plan.activated' | 'plan.superseded' | 'plan.completed' | 'checkpoint.created'
   | 'dependency.artifact_replaced' | 'milestone.completed' | 'milestone.stale'
   | 'operation.prepared' | 'operation.state_changed' | 'operation.attempt_recorded'
+  | 'operation.attempt_state_changed'
   | 'compensation.prepared' | 'compensation.state_changed' | 'compensation.attempt_recorded'
   | 'budget.limit_configured' | 'budget.reservation_recorded' | 'budget.ledger_recorded'
   | 'usage.note';   // 人對結果的判讀 —— 機器不知道 evidence 判錯了，只有人知道
@@ -723,6 +724,17 @@ export class Store {
       JSON.stringify(attempt), attempt.dispatchedAt);
     const operation = this.getOperation(attempt.operationId);
     this.event('operation.attempt_recorded', {
+      operationId: attempt.operationId, operationAttemptId: attempt.id,
+      number: attempt.number, status: attempt.status,
+    }, operation?.workId);
+  }
+
+  updateOperationAttempt(attempt: OperationAttempt): void {
+    const changed = this.db.prepare('update operation_attempts set status = ?, json = ? where id = ? and operation_id = ?')
+      .run(attempt.status, JSON.stringify(attempt), attempt.id, attempt.operationId);
+    if (Number(changed.changes) !== 1) throw new Error(`OPERATION_ATTEMPT_NOT_FOUND: ${attempt.id}`);
+    const operation = this.getOperation(attempt.operationId);
+    this.event('operation.attempt_state_changed', {
       operationId: attempt.operationId, operationAttemptId: attempt.id,
       number: attempt.number, status: attempt.status,
     }, operation?.workId);
