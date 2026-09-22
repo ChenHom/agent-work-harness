@@ -190,3 +190,81 @@ test('fork rejects a checkpoint whose source plan is no longer active', () => {
     rmSync(h.base, { recursive: true, force: true });
   }
 });
+
+test('artifact replacement marks completed downstream milestones stale with dependency paths', () => {
+  const base = mkdtempSync(join(tmpdir(), 'harness-checkpoint-stale-'));
+  const store = new Store(join(base, 'state'));
+  try {
+    const work: Work = {
+      id: 'W-stale', title: 'dependency invalidation', repositoryId: 'repo', workspace: join(base, 'workspace'),
+      state: 'ACTIVE', currentContractVersion: 1, retryBudget: 2,
+      createdAt: '2026-09-22T00:00:00.000Z',
+    };
+    store.insertWork(work);
+    store.insertContract({
+      id: 'C-stale', workId: work.id, version: 1, request: 'three milestones', mode: 'write',
+      constraints: [], deniedPaths: [], successCriteria: ['build', 'package', 'release'],
+      sourceMessageIds: ['MSG-1'], createdAt: '2026-09-22T00:00:00.000Z',
+    });
+    const plans = new PlanService(store);
+    const proposed = plans.propose({
+      workId: work.id, contractVersion: 1, branchId: 'B-stale', reason: 'initial',
+      milestones: [
+        { id: 'M-1', objective: 'build', acceptanceCriterionIds: [acceptanceCriterionId('build')] },
+        {
+          id: 'M-2', objective: 'package', acceptanceCriterionIds: [acceptanceCriterionId('package')],
+          dependsOn: ['M-1'],
+        },
+        {
+          id: 'M-3', objective: 'release', acceptanceCriterionIds: [acceptanceCriterionId('release')],
+          dependsOn: ['M-2'],
+        },
+      ],
+    });
+    plans.activate(proposed.plan.id);
+    store.setMilestoneStatus(proposed.plan.id, 'M-2', 'COMPLETED', 'A-2');
+    store.setMilestoneStatus(proposed.plan.id, 'M-3', 'COMPLETED', 'A-3');
+    const checkpoints = new CheckpointService(store);
+    const firstArtifact = store.putArtifact('checkpoint_output', 'hash-a', 'txt');
+    const first = checkpoints.create({
+      workId: work.id, planId: proposed.plan.id, milestoneId: 'M-1',
+      artifacts: [{ artifactId: firstArtifact.id, logicalName: 'build', producerMilestoneId: 'M-1' }],
+      validationStatus: 'validated', validationEvidenceIds: [],
+    });
+    const firstSnapshot = store.getCheckpoint(first.id);
+
+    const secondArtifact = store.putArtifact('checkpoint_output', 'hash-b', 'txt');
+    checkpoints.create({
+      workId: work.id, planId: proposed.plan.id, parentCheckpointId: first.id, milestoneId: 'M-1',
+      artifacts: [{ artifactId: secondArtifact.id, logicalName: 'build', producerMilestoneId: 'M-1' }],
+      validationStatus: 'validated', validationEvidenceIds: [],
+    });
+
+    assert.equal(store.getMilestone(proposed.plan.id, 'M-1')!.status, 'PENDING');
+    assert.equal(store.getMilestone(proposed.plan.id, 'M-2')!.status, 'STALE');
+    assert.equal(store.getMilestone(proposed.plan.id, 'M-3')!.status, 'STALE');
+    assert.deepEqual(store.getCheckpoint(first.id), firstSnapshot);
+    const events = store.events(work.id).map((event) => ({
+      type: event.type, data: JSON.parse(event.data) as Record<string, unknown>,
+    }));
+    const replaced = events.find((event) => event.type === 'dependency.artifact_replaced');
+    assert.deepEqual(replaced?.data, {
+      planId: proposed.plan.id, producerMilestoneId: 'M-1', logicalName: 'build',
+      previousArtifactId: firstArtifact.id, replacementArtifactId: secondArtifact.id,
+      previousHash: firstArtifact.hash, replacementHash: secondArtifact.hash,
+    });
+    assert.deepEqual(events.filter((event) => event.type === 'milestone.stale').map((event) => event.data), [
+      {
+        planId: proposed.plan.id, milestoneId: 'M-2', sourceMilestoneId: 'M-1',
+        logicalName: 'build', dependencyPath: ['M-1', 'M-2'],
+      },
+      {
+        planId: proposed.plan.id, milestoneId: 'M-3', sourceMilestoneId: 'M-1',
+        logicalName: 'build', dependencyPath: ['M-1', 'M-2', 'M-3'],
+      },
+    ]);
+  } finally {
+    store.close();
+    rmSync(base, { recursive: true, force: true });
+  }
+});

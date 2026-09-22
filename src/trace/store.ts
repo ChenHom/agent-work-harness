@@ -26,6 +26,7 @@ export type EventType =
   | 'work.completed' | 'work.blocked' | 'work.state_changed'
   | 'recovery.required' | 'recovery.observed'
   | 'plan.proposed' | 'plan.activated' | 'plan.superseded' | 'checkpoint.created'
+  | 'dependency.artifact_replaced' | 'milestone.stale'
   | 'usage.note';   // 人對結果的判讀 —— 機器不知道 evidence 判錯了，只有人知道
 
 export type VerifiedArtifact =
@@ -580,6 +581,26 @@ export class Store {
     const rows = this.db.prepare('select json from milestones where plan_id = ? order by sequence, id')
       .all(planId) as Array<{ json: string }>;
     return rows.map((row) => JSON.parse(row.json) as PlanMilestone);
+  }
+
+  setMilestoneStatus(
+    planId: string,
+    milestoneId: string,
+    status: PlanMilestone['status'],
+    completedAttemptId?: string,
+    staleReason?: string,
+  ): PlanMilestone {
+    const current = this.getMilestone(planId, milestoneId);
+    if (!current) throw new Error(`MILESTONE_NOT_FOUND: ${planId}/${milestoneId}`);
+    const updated: PlanMilestone = {
+      ...current, status,
+      completedAttemptId: status === 'COMPLETED' ? completedAttemptId : undefined,
+      staleReason: status === 'STALE' ? staleReason : undefined,
+    };
+    const changed = this.db.prepare('update milestones set status = ?, json = ? where plan_id = ? and id = ?')
+      .run(status, JSON.stringify(updated), planId, milestoneId);
+    if (Number(changed.changes) !== 1) throw new Error(`MILESTONE_STALE: ${planId}/${milestoneId}`);
+    return updated;
   }
 
   // ---- logical checkpoints ----

@@ -128,20 +128,20 @@ Commit: `feat: add verified logical checkpoint resume and fork`.
 - Modify: `src/trace/store.ts`
 - Modify: `test/checkpoints.test.ts`
 
-- [ ] **Step 1: Write failing dependency tests**
+- [x] **Step 1: Write failing dependency tests**
 
 Use milestones `M-1 → M-2 → M-3`. Create a checkpoint whose `M-1/build` artifact has hash A, complete downstream milestones, then create a later checkpoint with hash B for the same producer/logical name. Assert `M-2` and `M-3` become `STALE`, the cause chain is recorded, and the old checkpoints remain unchanged.
 
-- [ ] **Step 2: Verify RED**
+- [x] **Step 2: Verify RED**
 
 Run `node --test test/checkpoints.test.ts`.
 Expected: downstream statuses remain completed.
 
-- [ ] **Step 3: Implement deterministic invalidation**
+- [x] **Step 3: Implement deterministic invalidation**
 
 Compare checkpoint manifest entries by `(producerMilestoneId, logicalName)`. When the verified hash changes, traverse milestone dependencies in the active plan, mark affected completed milestones `STALE`, and append `dependency.artifact_replaced` plus `milestone.stale` events containing the source artifact and dependency path.
 
-- [ ] **Step 4: Verify and commit**
+- [x] **Step 4: Verify and commit**
 
 Run `npm run typecheck` and `node --test test/checkpoints.test.ts test/store-transaction.test.ts`.
 Commit: `feat: invalidate milestones after artifact replacement`.

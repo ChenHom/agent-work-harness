@@ -32,6 +32,15 @@ interface ResumedCheckpoint {
   milestones: PlanMilestone[];
 }
 
+interface ArtifactReplacement {
+  producerMilestoneId: string;
+  logicalName: string;
+  previousArtifactId: string;
+  replacementArtifactId: string;
+  previousHash: string;
+  replacementHash: string;
+}
+
 function unavailable(id: string, reason: string): Error {
   return new Error(`CHECKPOINT_ARTIFACT_UNAVAILABLE: ${id} (${reason})`);
 }
@@ -96,7 +105,34 @@ export class CheckpointService {
       validationEvidenceIds: [...new Set(input.validationEvidenceIds)],
       createdEventSeq: this.store.latestEventSeq(), createdAt: nowIso(),
     };
-    this.store.insertCheckpoint(checkpoint);
+    const replacements = this.findArtifactReplacements(checkpoint);
+    const milestones = this.store.listMilestones(plan.id);
+    this.store.withTransaction(() => {
+      this.store.insertCheckpoint(checkpoint);
+      for (const replacement of replacements) {
+        this.store.event('dependency.artifact_replaced', {
+          planId: plan.id, ...replacement,
+        }, input.workId);
+        const paths = this.downstreamPaths(milestones, replacement.producerMilestoneId);
+        for (const milestone of milestones) {
+          const dependencyPath = paths.get(milestone.id);
+          if (milestone.status !== 'COMPLETED' || !dependencyPath) continue;
+          this.store.setMilestoneStatus(
+            plan.id,
+            milestone.id,
+            'STALE',
+            undefined,
+            `artifact ${replacement.logicalName} replaced via ${dependencyPath.join(' -> ')}`,
+          );
+          milestone.status = 'STALE';
+          this.store.event('milestone.stale', {
+            planId: plan.id, milestoneId: milestone.id,
+            sourceMilestoneId: replacement.producerMilestoneId,
+            logicalName: replacement.logicalName, dependencyPath,
+          }, input.workId);
+        }
+      }
+    });
     return checkpoint;
   }
 
@@ -150,5 +186,49 @@ export class CheckpointService {
       if (verified.hash !== entry.hash) throw corrupt(entry.artifactId, 'manifest_hash_mismatch');
     }
     return checkpoint;
+  }
+
+  private findArtifactReplacements(checkpoint: LogicalCheckpoint): ArtifactReplacement[] {
+    if (!checkpoint.parentCheckpointId) return [];
+    const ancestors: LogicalCheckpoint[] = [];
+    let currentId: string | undefined = checkpoint.parentCheckpointId;
+    while (currentId) {
+      const current = this.store.getCheckpoint(currentId);
+      if (!current || current.workId !== checkpoint.workId || current.branchId !== checkpoint.branchId) break;
+      ancestors.push(current);
+      currentId = current.parentCheckpointId;
+    }
+    return checkpoint.artifactManifest.flatMap((entry) => {
+      if (!entry.producerMilestoneId) return [];
+      const previous = ancestors
+        .flatMap((ancestor) => ancestor.artifactManifest)
+        .find((candidate) => candidate.producerMilestoneId === entry.producerMilestoneId
+          && candidate.logicalName === entry.logicalName);
+      if (!previous || previous.hash === entry.hash) return [];
+      return [{
+        producerMilestoneId: entry.producerMilestoneId,
+        logicalName: entry.logicalName,
+        previousArtifactId: previous.artifactId,
+        replacementArtifactId: entry.artifactId,
+        previousHash: previous.hash,
+        replacementHash: entry.hash,
+      }];
+    });
+  }
+
+  private downstreamPaths(milestones: readonly PlanMilestone[], sourceId: string): Map<string, string[]> {
+    const paths = new Map<string, string[]>();
+    const queue: Array<{ id: string; path: string[] }> = [{ id: sourceId, path: [sourceId] }];
+    while (queue.length > 0) {
+      const current = queue.shift();
+      if (!current) break;
+      for (const milestone of milestones) {
+        if (paths.has(milestone.id) || !milestone.dependsOn.includes(current.id)) continue;
+        const path = [...current.path, milestone.id];
+        paths.set(milestone.id, path);
+        queue.push({ id: milestone.id, path });
+      }
+    }
+    return paths;
   }
 }
