@@ -14,6 +14,7 @@ import { ensureRuntimeDirs } from './runtime/isolation.ts';
 import {
   acquireExecutionOwnership, inspectExecutionOwnership, type ExecutionOwnership,
 } from './runtime/ownership.ts';
+import { localDispatchAuthority } from './runtime/dispatch-authority.ts';
 import { runIsolated } from './evidence/exec.ts';
 import {
   formatContextDropped, formatPreExistingDirty, formatRecoverySession, formatWorkListRow,
@@ -381,6 +382,7 @@ export async function main(argv: string[], policy: GlobalPolicy = loadPolicy()):
       const provider = new FakeProvider(join(providerDir, 'ledger.json'));
       const gateway = new OperationGateway(store!, budget, provider);
       const compensations = new CompensationWorkflow(store!, budget, provider);
+      const dispatchAuthority = localDispatchAuthority(ownership!);
       if (area === 'operation' && action === 'prepare' && id && extra) {
         const input = readJson(extra) as Omit<Parameters<OperationGateway['prepare']>[0], 'workId'>;
         const operation = gateway.prepare({ ...input, workId: id });
@@ -389,7 +391,7 @@ export async function main(argv: string[], policy: GlobalPolicy = loadPolicy()):
       }
       if (area === 'operation' && (action === 'dispatch' || action === 'reconcile') && id) {
         const operation = action === 'dispatch'
-          ? await gateway.dispatch(id, ownership!) : await gateway.reconcile(id, ownership!);
+          ? await gateway.dispatch(id, dispatchAuthority) : await gateway.reconcile(id, dispatchAuthority);
         console.log(formatOperation(operation));
         return 0;
       }
@@ -401,7 +403,7 @@ export async function main(argv: string[], policy: GlobalPolicy = loadPolicy()):
       }
       if (area === 'compensation' && (action === 'dispatch' || action === 'reconcile') && id) {
         const compensation = action === 'dispatch'
-          ? await compensations.dispatch(id, ownership!) : await compensations.reconcile(id, ownership!);
+          ? await compensations.dispatch(id, dispatchAuthority) : await compensations.reconcile(id, dispatchAuthority);
         console.log(formatCompensation(compensation));
         return 0;
       }

@@ -40,12 +40,12 @@ Failure to run the server or any required scenario blocks the selection. Do not 
 
 **Files:** `src/types.ts`, `src/runtime/dispatch-authority.ts`, `src/runtime/ownership.ts`, `src/tools/gateway.ts`, `src/tools/compensation.ts`, `src/durable/runtime-state.ts`, `test/dispatch-authority.test.ts`, `test/temporal-epoch.test.ts`
 
-- [ ] Introduce a narrow `DispatchAuthority` contract checked immediately before Gateway/compensation dispatch and before publishing a result.
-- [ ] Keep a P1 adapter backed by `ExecutionOwnership`; remove direct file-lock coupling from Gateway and compensation without weakening existing callers.
-- [ ] Add a P4 Temporal adapter whose authority is the Workflow execution identity plus monotonically increasing epoch. A stale epoch must fail closed before dispatch or publish.
-- [ ] Treat Temporal Workflow history as the authoritative runtime state. Any SQLite runtime row is an explicitly rebuildable projection, not a competing queue, timer, retry controller, or lease owner.
-- [ ] Preserve operation identity and budget across epoch changes; takeover never creates a new logical intent or resets Work limits.
-- [ ] Run targeted authority/Gateway tests, one full `npm run check`, review against this task, and commit.
+- [x] Introduce a narrow `DispatchAuthority` contract checked immediately before Gateway/compensation dispatch; expose a fenced publish action for Task 5's managed publisher.
+- [x] Keep a P1 adapter backed by `ExecutionOwnership`; remove direct file-lock coupling from Gateway and compensation without weakening existing callers.
+- [x] Add a P4 Temporal adapter whose authority is the Workflow execution identity plus monotonically increasing epoch. A stale epoch must fail closed before dispatch or publish.
+- [x] Treat Temporal Workflow history as the authoritative runtime state. Any SQLite runtime row is an explicitly rebuildable projection, not a competing queue, timer, retry controller, or lease owner.
+- [x] Preserve operation identity and budget across epoch changes; takeover never creates a new logical intent or resets Work limits.
+- [x] Run targeted authority/Gateway tests, one full `npm run check`, review against this task, and commit.
 
 ## Task 3: Durable fake workflow and Activity boundary
 

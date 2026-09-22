@@ -1,5 +1,5 @@
 import { newId } from '../ids.ts';
-import type { ExecutionOwnership } from '../runtime/ownership.ts';
+import { assertDispatchAuthority, type DispatchAuthority } from '../runtime/dispatch-authority.ts';
 import { BudgetLedger } from '../budget/ledger.ts';
 import { Store } from '../trace/store.ts';
 import type { Operation, OperationAttempt } from '../types.ts';
@@ -71,9 +71,9 @@ export class OperationGateway {
     });
   }
 
-  async dispatch(operationId: string, ownership: ExecutionOwnership): Promise<Operation> {
-    if (!ownership.validate()) throw new Error('OWNER_UNKNOWN: execution ownership is invalid');
-    if (!ownership.beginOperation()) throw new Error('OWNER_ACTIVE: another operation is running');
+  async dispatch(operationId: string, authority: DispatchAuthority): Promise<Operation> {
+    await assertDispatchAuthority(authority, 'dispatch', 'operation dispatch admission');
+    if (!authority.beginOperation()) throw new Error('OWNER_ACTIVE: another operation is running');
     try {
       const current = this.requireOperation(operationId);
       if (current.status === 'SUCCEEDED' || current.status === 'FAILED') return current;
@@ -83,7 +83,7 @@ export class OperationGateway {
       if (current.status !== 'PREPARED') {
         throw new Error(`OPERATION_INVALID_STATE: ${operationId} is ${current.status}`);
       }
-      if (!ownership.validate()) throw new Error('OWNER_UNKNOWN: execution ownership was lost');
+      await assertDispatchAuthority(authority, 'dispatch', 'operation dispatch intent');
       const request = this.requestFor(current);
       const attempt: OperationAttempt = {
         id: newId('OPA'), operationId, number: this.store.listOperationAttempts(operationId).length + 1,
@@ -95,8 +95,11 @@ export class OperationGateway {
         this.store.insertOperationAttempt(attempt);
       });
       try {
+        await assertDispatchAuthority(authority, 'dispatch', 'provider dispatch');
         const receipt = await this.adapter.execute(request);
-        if (!ownership.validate()) throw new AdapterDispatchError('ambiguous', 'OWNER_UNKNOWN: lost after provider call');
+        if (!await authority.validate('dispatch')) {
+          throw new AdapterDispatchError('ambiguous', 'OWNER_UNKNOWN: lost after provider call');
+        }
         if (!await this.adapter.verifyPostcondition(request, receipt)) {
           throw new AdapterDispatchError('ambiguous', 'OPERATION_POSTCONDITION_FAILED');
         }
@@ -105,13 +108,13 @@ export class OperationGateway {
         return this.recordFailure(dispatched, attempt, error);
       }
     } finally {
-      ownership.endOperation();
+      authority.endOperation();
     }
   }
 
-  async reconcile(operationId: string, ownership: ExecutionOwnership): Promise<Operation> {
-    if (!ownership.validate()) throw new Error('OWNER_UNKNOWN: execution ownership is invalid');
-    if (!ownership.beginOperation()) throw new Error('OWNER_ACTIVE: another operation is running');
+  async reconcile(operationId: string, authority: DispatchAuthority): Promise<Operation> {
+    await assertDispatchAuthority(authority, 'reconcile', 'operation reconciliation admission');
+    if (!authority.beginOperation()) throw new Error('OWNER_ACTIVE: another operation is running');
     try {
       const current = this.requireOperation(operationId);
       if (current.status === 'SUCCEEDED' || current.status === 'FAILED' || current.status === 'WAITING_USER') {
@@ -139,7 +142,7 @@ export class OperationGateway {
           outcome = { kind: 'pending' } as const;
         }
       }
-      if (!ownership.validate()) throw new Error('OWNER_UNKNOWN: lost during reconciliation lookup');
+      await assertDispatchAuthority(authority, 'reconcile', 'operation reconciliation lookup');
       const artifact = this.store.putArtifact('operation-reconciliation', canonicalJson(outcome), 'json');
       if (outcome.kind === 'confirmed-success') {
         if (!await this.adapter.verifyPostcondition(request, outcome.receipt)) {
@@ -175,7 +178,7 @@ export class OperationGateway {
       }
       return this.finishReconciliation(reconciling, artifact.id, 'UNKNOWN', 'provider result is not yet visible');
     } finally {
-      ownership.endOperation();
+      authority.endOperation();
     }
   }
 

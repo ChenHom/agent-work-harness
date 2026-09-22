@@ -1,5 +1,5 @@
 import { newId } from '../ids.ts';
-import type { ExecutionOwnership } from '../runtime/ownership.ts';
+import { assertDispatchAuthority, type DispatchAuthority } from '../runtime/dispatch-authority.ts';
 import { BudgetLedger } from '../budget/ledger.ts';
 import { Store } from '../trace/store.ts';
 import type { Compensation, CompensationAttempt, Operation } from '../types.ts';
@@ -69,9 +69,9 @@ export class CompensationWorkflow {
     });
   }
 
-  async dispatch(compensationId: string, ownership: ExecutionOwnership): Promise<Compensation> {
-    if (!ownership.validate()) throw new Error('OWNER_UNKNOWN: execution ownership is invalid');
-    if (!ownership.beginOperation()) throw new Error('OWNER_ACTIVE: another operation is running');
+  async dispatch(compensationId: string, authority: DispatchAuthority): Promise<Compensation> {
+    await assertDispatchAuthority(authority, 'dispatch', 'compensation dispatch admission');
+    if (!authority.beginOperation()) throw new Error('OWNER_ACTIVE: another operation is running');
     try {
       const current = this.requireCompensation(compensationId);
       if (current.status === 'SUCCEEDED' || current.status === 'WAITING_USER') return current;
@@ -92,20 +92,23 @@ export class CompensationWorkflow {
         this.store.insertCompensationAttempt(attempt);
       });
       try {
+        await assertDispatchAuthority(authority, 'dispatch', 'compensation provider dispatch');
         const receipt = await this.adapter.compensate(request);
-        if (!ownership.validate()) throw new AdapterDispatchError('ambiguous', 'OWNER_UNKNOWN: lost after compensation call');
+        if (!await authority.validate('dispatch')) {
+          throw new AdapterDispatchError('ambiguous', 'OWNER_UNKNOWN: lost after compensation call');
+        }
         return this.recordSuccess(dispatched, attempt, receipt);
       } catch (error) {
         return this.recordFailure(dispatched, attempt, error);
       }
     } finally {
-      ownership.endOperation();
+      authority.endOperation();
     }
   }
 
-  async reconcile(compensationId: string, ownership: ExecutionOwnership): Promise<Compensation> {
-    if (!ownership.validate()) throw new Error('OWNER_UNKNOWN: execution ownership is invalid');
-    if (!ownership.beginOperation()) throw new Error('OWNER_ACTIVE: another operation is running');
+  async reconcile(compensationId: string, authority: DispatchAuthority): Promise<Compensation> {
+    await assertDispatchAuthority(authority, 'reconcile', 'compensation reconciliation admission');
+    if (!authority.beginOperation()) throw new Error('OWNER_ACTIVE: another operation is running');
     try {
       const current = this.requireCompensation(compensationId);
       if (current.status === 'SUCCEEDED' || current.status === 'WAITING_USER') return current;
@@ -136,7 +139,7 @@ export class CompensationWorkflow {
       } catch {
         outcome = { kind: 'pending' };
       }
-      if (!ownership.validate()) throw new Error('OWNER_UNKNOWN: lost during compensation lookup');
+      await assertDispatchAuthority(authority, 'reconcile', 'compensation reconciliation lookup');
       const artifact = this.store.putArtifact('compensation-reconciliation', canonicalJson(outcome), 'json');
       if (outcome.kind === 'confirmed-success') {
         const succeeded: Compensation = {
@@ -159,7 +162,7 @@ export class CompensationWorkflow {
         reconciling, artifact.id, 'WAITING_USER', `compensation lookup ${outcome.kind}`, confirmedUnused,
       );
     } finally {
-      ownership.endOperation();
+      authority.endOperation();
     }
   }
 
