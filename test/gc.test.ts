@@ -201,3 +201,23 @@ test('interrupted deletion remnants are collected, and rows pointing outside the
     cleanup();
   }
 });
+
+test('apply unlinks payloads before commit, while still holding the write lock', () => {
+  const { state, store, ids, path, cleanup } = fixture();
+  const ownership = acquireExecutionOwnership(state);
+  try {
+    const manifest = previewGc(store, NOW);
+    const exec = store.db.exec.bind(store.db);
+    const atCommit: boolean[] = [];
+    store.db.exec = ((sql: string) => {
+      if (sql === 'COMMIT') atCommit.push(existsSync(path(ids.doneLog)), existsSync(path(ids.active)));
+      return exec(sql);
+    });
+    applyGc(store, manifest, ownership, NOW);
+    store.db.exec = exec;
+    assert.deepEqual(atCommit, [false, true], 'candidate already gone, live payload untouched when the lock is released');
+  } finally {
+    ownership.release();
+    cleanup();
+  }
+});

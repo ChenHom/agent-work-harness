@@ -47,7 +47,7 @@ Active (`ACTIVE`/`RUNNING`/`VERIFYING`) and resumable (`WAITING_USER`/`BLOCKED`,
 2. Approve by applying the unchanged file: `harness gc apply gc-manifest.json`. Apply needs the execution lock, so it cannot run concurrently with a Work.
 3. Apply fails closed and deletes nothing when the manifest was edited (`GC_MANIFEST_TAMPERED`), already applied (`GC_MANIFEST_ALREADY_APPLIED`), any candidate became reachable or changed (`GC_MANIFEST_STALE`), or bytes on disk changed (`GC_PAYLOAD_CHANGED`). Preview again and re-review; never force.
 4. Evidence: `gc_runs` stores the full manifest and deleted paths; each deleted artifact gets a tombstone (hash, kind, size, times, deletion id, authority `retention-policy:1`, replay limitation). Reads return `missing` / `deleted_by_retention`.
-5. Recovery after a crash during apply: tombstones are committed before files are unlinked. The next preview lists leftover files as candidates with an empty artifact list; apply them normally. Restoring deleted payloads is only possible from a backup taken before the GC.
+5. Concurrency and crashes: files are unlinked inside the same SQLite write transaction that records tombstones, so a durable worker (which does not hold the execution lock) that reuses the same bytes can only insert its row after the unlink, and `putArtifact` then rewrites the file. If the process dies after unlinking but before commit, those payloads read as missing without a tombstone and the Work is classified `unreplayable`; that is the only cost, since every deleted payload was already unreachable. Files left behind with only tombstoned ids (from older runs) show up in the next preview with an empty artifact list; apply them normally. Restoring deleted payloads is only possible from a backup taken before the GC.
 
 ## Backup schedule and access
 
@@ -69,7 +69,7 @@ Restore verifies hashes, runs `integrity_check`, applies supported schema migrat
 
 ## Redaction
 
-Use when a payload contains a secret or personal data: `harness redact <artifactId> --authority <who approved> --reason <why>`. It needs the execution lock. Every artifact id sharing the same bytes is tombstoned (content addressing would otherwise keep the data readable), the file is deleted, and an `artifact.redacted` event records ids, hash, kind, access class, authority, and reason, never the content. Rows, hashes, timestamps, and causal links remain, so traces and audits still show that the payload existed. Redact the same content in backups separately, or let those backups expire.
+Use when a payload contains a secret or personal data: `harness redact <artifactId> --authority <who approved> --reason <why>`. It needs the execution lock. Every artifact with the same content hash is tombstoned, whatever its kind, extension, or file name (pre-v7 payloads use a 16-hex name), every such file is deleted under the write lock, and an `artifact.redacted` event records ids, hash, kind, access class, authority, and reason, never the content. Rows, hashes, timestamps, and causal links remain, so traces and audits still show that the payload existed. Redact the same content in backups separately, or let those backups expire.
 
 ## Unreplayable state
 

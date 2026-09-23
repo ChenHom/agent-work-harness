@@ -201,6 +201,17 @@ export class Store {
     const hash = createHash('sha256').update(buf).digest('hex');
     const id = newId('AR');
     const path = join(this.artifactDir, `${hash}.${ext}`);
+    this.publishPayload(path, buf, hash);
+    this.db.prepare('insert into artifacts(id, kind, hash, path, bytes, created_at) values (?,?,?,?,?,?)')
+      .run(id, kind, hash, path, buf.length, nowIso());
+    // GC and redaction unlink under the write lock, so a reused file they removed after the publish
+    // above is already gone once this insert succeeds: republish rather than keep a row without bytes.
+    if (!existsSync(path)) this.publishPayload(path, buf, hash);
+    return { id, hash, path };
+  }
+
+  /** Writes (or verifies an existing) content-addressed payload and fsyncs it and its directory. */
+  private publishPayload(path: string, buf: Buffer, hash: string): void {
     let valid = false;
     try {
       const descriptor = openSync(path, ARTIFACT_READ_FLAGS);
@@ -247,9 +258,6 @@ export class Store {
     }
     const directoryDescriptor = openSync(this.artifactDir, 'r');
     try { fsyncSync(directoryDescriptor); } finally { closeSync(directoryDescriptor); }
-    this.db.prepare('insert into artifacts(id, kind, hash, path, bytes, created_at) values (?,?,?,?,?,?)')
-      .run(id, kind, hash, path, buf.length, nowIso());
-    return { id, hash, path };
   }
 
   readArtifact(id: string): string | null {

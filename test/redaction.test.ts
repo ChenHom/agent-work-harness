@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, renameSync, writeFileSync } from 'node:fs';
 import { basename, join } from 'node:path';
 import { acquireExecutionOwnership } from '../src/runtime/ownership.ts';
 import { traceWork } from '../src/trace/links.ts';
@@ -75,6 +75,37 @@ test('redaction requires ownership and authority, and refuses unknown, repeated,
     assert.throws(() => redactArtifact(h.store, h.ids.rawLog, decision, ownership), /REDACTION_INVALID_PATH/);
     assert.ok(existsSync(outside) && existsSync(path));
     assert.equal((h.store.db.prepare('select count(*) as n from artifact_tombstones where cause = ?').get('redaction') as { n: number }).n, 0);
+  } finally {
+    ownership.release();
+    h.cleanup();
+  }
+});
+
+test('redaction finds copies by content hash across extensions and legacy names, and unlinks before commit', async () => {
+  const h = await richHistory();
+  const ownership = acquireExecutionOwnership(h.state);
+  try {
+    const secret = 'password=hunter2';
+    const stdout = h.store.putArtifact('runtime_stdout', secret, 'log');
+    const raw = h.store.putArtifact('runtime_raw_result', secret, 'txt');
+    const legacy = h.store.putArtifact('prompt', secret, 'md');
+    const legacyPath = join(h.store.artifactDir, `${legacy.hash.slice(0, 16)}.md`);
+    renameSync(legacy.path, legacyPath);
+    h.store.db.prepare('update artifacts set path = ? where id = ?').run(legacyPath, legacy.id);
+    const files = [stdout.path, raw.path, legacyPath];
+    assert.equal(new Set(files).size, 3);
+
+    const exec = h.store.db.exec.bind(h.store.db);
+    const atCommit: boolean[] = [];
+    h.store.db.exec = ((sql: string) => {
+      if (sql === 'COMMIT') atCommit.push(...files.map((file) => existsSync(file)));
+      return exec(sql);
+    });
+    const result = redactArtifact(h.store, stdout.id, { authority: 'user:security', reason: 'leaked password' }, ownership);
+    h.store.db.exec = exec;
+    assert.deepEqual(result.tombstonedArtifactIds, [stdout.id, raw.id, legacy.id].sort());
+    assert.deepEqual(atCommit, [false, false, false]);
+    for (const id of [stdout.id, raw.id, legacy.id]) assert.equal(h.store.readArtifact(id), null);
   } finally {
     ownership.release();
     h.cleanup();

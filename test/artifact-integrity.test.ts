@@ -365,3 +365,24 @@ test('putArtifact leaves a complete orphan and no temporary file when DB insert 
     rmSync(state, { recursive: true, force: true });
   }
 });
+
+test('putArtifact republishes a reused payload that a concurrent GC unlinked before its row was inserted', () => {
+  const state = mkdtempSync(join(tmpdir(), 'harness-artifact-'));
+  const store = new Store(state);
+  try {
+    const first = store.putArtifact('attempt_input', 'shared bytes');
+    const prepare = store.db.prepare.bind(store.db);
+    // Interleave: the file is verified as reusable, then deleted, then this writer's row is inserted.
+    store.db.prepare = ((sql: string) => {
+      if (sql.startsWith('insert into artifacts')) rmSync(first.path, { force: true });
+      return prepare(sql);
+    });
+    const second = store.putArtifact('attempt_input', 'shared bytes');
+    store.db.prepare = prepare;
+    assert.equal(second.path, first.path);
+    assert.equal(store.readVerifiedArtifact(second.id).status, 'verified');
+  } finally {
+    store.close();
+    rmSync(state, { recursive: true, force: true });
+  }
+});

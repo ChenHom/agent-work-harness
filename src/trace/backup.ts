@@ -125,9 +125,11 @@ export function verifyBackup(backupDir: string): BackupManifest {
   if (bodyHash(body) !== hash) throw new Error('BACKUP_INVALID: manifest hash mismatch');
   // The self-hash is not a signature: names from the manifest must not be able to leave the backup.
   if (manifest.db.file !== DB_FILE) throw new Error(`BACKUP_INVALID: unexpected database file ${manifest.db.file}`);
-  const badName = manifest.artifacts.find((artifact) => !/^[0-9a-f]{64}\.[A-Za-z0-9_-]+$/.test(artifact.path)
-    || !artifact.path.startsWith(`${artifact.sha256}.`));
-  if (badName) throw new Error(`BACKUP_INVALID: artifact name ${badName.path} is not <sha256>.<ext>`);
+  // Current payloads are <sha256>.<ext>; payloads written before v7 are <first 16 hex of sha256>.<ext>.
+  const badName = manifest.artifacts.find((artifact) => !/^[0-9a-f]{64}$/.test(artifact.sha256)
+    || !/^[0-9a-f]{16,64}\.[A-Za-z0-9_-]+$/.test(artifact.path)
+    || !artifact.sha256.startsWith(artifact.path.slice(0, artifact.path.indexOf('.'))));
+  if (badName) throw new Error(`BACKUP_INVALID: artifact name ${badName.path} is not a sha256 prefix plus extension`);
   const check = (relative: string, bytes: number, expected: string): void => {
     let content: Buffer;
     try {

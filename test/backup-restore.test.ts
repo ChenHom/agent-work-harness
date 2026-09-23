@@ -1,9 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, unlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, unlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 import { finalizeEvaluation } from '../src/evaluation/finalization.ts';
 import { auditReplay, createBackup, restoreBackup, verifyBackup, type BackupManifest } from '../src/trace/backup.ts';
 import { CURRENT_SCHEMA_VERSION } from '../src/trace/migrations.ts';
@@ -163,6 +163,35 @@ test('audit replay rejects completions and budgets that saved evidence does not 
     assert.equal(existsSync(join(dir, 'restored')), false);
   } finally {
     h.cleanup();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('payloads written before v7 with 16-hex names back up, verify, and restore', () => {
+  const dir = scratch();
+  const store = new Store(join(dir, 'source'));
+  try {
+    const artifact = store.putArtifact('attempt_input', 'written by master');
+    const legacyPath = join(store.artifactDir, `${artifact.hash.slice(0, 16)}.txt`);
+    renameSync(artifact.path, legacyPath);
+    store.db.prepare('update artifacts set path = ? where id = ?').run(legacyPath, artifact.id);
+    const manifest = createBackup(store, join(dir, 'backup'));
+    assert.deepEqual(manifest.artifacts.map((entry) => entry.path), [basename(legacyPath)]);
+    assert.equal(verifyBackup(join(dir, 'backup')).hash, manifest.hash);
+    const report = restoreBackup(join(dir, 'backup'), join(dir, 'restored'));
+    assert.equal(report.artifacts.verified, 1);
+    const restored = new Store(join(dir, 'restored'));
+    try {
+      assert.equal(restored.readArtifact(artifact.id), 'written by master');
+    } finally {
+      restored.close();
+    }
+    // A name that is not a prefix of the recorded hash is still refused.
+    const manifestPath = join(dir, 'backup', 'backup-manifest.json');
+    writeFileSync(manifestPath, JSON.stringify(rehash({ ...manifest, artifacts: [{ ...manifest.artifacts[0]!, path: `${'0'.repeat(16)}.txt` }] })));
+    assert.throws(() => verifyBackup(join(dir, 'backup')), /BACKUP_INVALID: artifact name/);
+  } finally {
+    store.close();
     rmSync(dir, { recursive: true, force: true });
   }
 });

@@ -227,7 +227,7 @@ export function previewGc(store: Store, now = Date.now()): GcManifest {
 
 /**
  * Deletes exactly the manifest's payloads, and only if the manifest is intact and every candidate is
- * still unreachable with unchanged bytes. Deletion evidence and tombstones are committed before unlink.
+ * still unreachable with unchanged bytes. Evidence, tombstones, and unlinks share one write transaction.
  */
 export function applyGc(store: Store, manifest: GcManifest, ownership: ExecutionOwnership, now = Date.now()): GcRunResult {
   if (!ownership.validate()) throw new Error('GC_OWNERSHIP_REQUIRED: apply needs the state execution lock');
@@ -280,9 +280,12 @@ export function applyGc(store: Store, manifest: GcManifest, ownership: Execution
       gcRunId, manifestHash: hash, policyVersion: manifest.policyVersion,
       deletedPaths: manifest.candidates.length, tombstones: tombstonedArtifactIds.length,
     });
+    // Deliberate filesystem step inside the transaction: unlinking while holding the write lock means a
+    // writer outside the execution lock (durable worker) that reuses this file can only insert its row
+    // after the unlink, and putArtifact then republishes the bytes. ponytail: a crash between unlink and
+    // commit leaves these payloads missing without a tombstone (they read as unreplayable, never as live).
+    for (const candidate of manifest.candidates) rmSync(join(store.artifactDir, candidate.path), { force: true });
   });
-  // ponytail: a crash here leaves tombstoned bytes on disk; the next preview lists them as remnants.
-  for (const candidate of manifest.candidates) rmSync(join(store.artifactDir, candidate.path), { force: true });
   return { gcRunId, deletedPaths: manifest.candidates.map((candidate) => candidate.path), tombstonedArtifactIds };
 }
 

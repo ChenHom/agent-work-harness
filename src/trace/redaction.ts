@@ -13,8 +13,8 @@ export function accessClassOf(kind: string): 'restricted' | 'internal' {
 }
 
 /**
- * Deletes a sensitive payload and every artifact id sharing its bytes (content addressing would
- * otherwise keep it readable). Rows, hashes, kinds, times, and causal references stay; the tombstone
+ * Deletes a sensitive payload and every artifact holding the same bytes, whatever its extension or
+ * file name (legacy or current). Rows, hashes, kinds, times, and causal references stay; the tombstone
  * names the deletion authority and that replay of the payload is no longer possible.
  */
 export function redactArtifact(
@@ -30,16 +30,15 @@ export function redactArtifact(
   const target = store.db.prepare('select path, hash, kind from artifacts where id = ?').get(artifactId) as
     { path: string; hash: string; kind: string } | undefined;
   if (!target) throw new Error(`REDACTION_ARTIFACT_NOT_FOUND: ${artifactId}`);
-  if (dirname(resolve(target.path)) !== resolve(store.artifactDir)) {
-    throw new Error(`REDACTION_INVALID_PATH: ${artifactId} does not point into the artifact store`);
-  }
   const redactionId = newId('RED');
   const deletedAt = nowIso();
   const tombstonedArtifactIds = store.withTransaction(() => {
-    const ids = (store.db.prepare(`select id from artifacts where path = ?
-      and id not in (select artifact_id from artifact_tombstones) order by id`).all(target.path) as Array<{ id: string }>)
-      .map((row) => row.id);
-    if (ids.length === 0) throw new Error(`REDACTION_ALREADY_DELETED: ${artifactId}`);
+    const rows = store.db.prepare(`select id, path from artifacts where hash = ?
+      and id not in (select artifact_id from artifact_tombstones) order by id`).all(target.hash) as Array<{ id: string; path: string }>;
+    if (rows.length === 0) throw new Error(`REDACTION_ALREADY_DELETED: ${artifactId}`);
+    const escaping = rows.find((row) => dirname(resolve(row.path)) !== resolve(store.artifactDir));
+    if (escaping) throw new Error(`REDACTION_INVALID_PATH: ${escaping.id} does not point into the artifact store`);
+    const ids = rows.map((row) => row.id);
     for (const id of ids) {
       insertTombstone(store, id, { deletedAt, deletionId: redactionId, cause: 'redaction', ...decision });
     }
@@ -48,8 +47,9 @@ export function redactArtifact(
       redactionId, artifactIds: ids, hash: target.hash, kind: target.kind,
       accessClass: accessClassOf(target.kind), authority: decision.authority, reason: decision.reason,
     });
+    // Unlink under the write lock (see applyGc): a concurrent writer reusing these bytes republishes them.
+    for (const path of new Set(rows.map((row) => row.path))) rmSync(path, { force: true });
     return ids;
   });
-  rmSync(target.path, { force: true });
   return { redactionId, tombstonedArtifactIds };
 }
