@@ -16,11 +16,11 @@
 - Read: `test/fixtures/evaluation/labels.jsonl`
 - Create: `docs/calibration-review-2026-09-23.1.md`
 
-- [ ] **Step 1: Add the review instructions and authority warning**
+- [x] **Step 1: Add the review instructions and authority warning**
 
 Create the document with corpus version `2026-09-23.1`, explain that the reviewer may answer `核准`, `修改`, or `無法確認`, and state explicitly that generating the sheet does not change provenance.
 
-- [ ] **Step 2: Add every source case in JSONL order**
+- [x] **Step 2: Add every source case in JSONL order**
 
 Add exactly these case IDs in this order:
 
@@ -48,7 +48,7 @@ End every case with:
 **人工備註：** —
 ```
 
-- [ ] **Step 3: Explain how the reviewer responds**
+- [x] **Step 3: Explain how the reviewer responds**
 
 End the document with these accepted response forms:
 
@@ -66,7 +66,7 @@ State that `無法確認` keeps the case unapproved and does not promote its pro
 - Verify: `test/fixtures/evaluation/labels.jsonl`
 - Verify: `docs/calibration-review-2026-09-23.1.md`
 
-- [ ] **Step 1: Verify all case IDs appear exactly once**
+- [x] **Step 1: Verify all case IDs appear exactly once**
 
 Run:
 
@@ -78,7 +78,7 @@ done
 
 Expected: exit 0 with no output.
 
-- [ ] **Step 2: Verify the sheet has 12 undecided human decisions**
+- [x] **Step 2: Verify the sheet has 12 undecided human decisions**
 
 Run:
 
@@ -88,7 +88,7 @@ test "$(rg -c '^\*\*人工決定：\*\* 尚未審閱$' docs/calibration-review-2
 
 Expected: exit 0 with no output.
 
-- [ ] **Step 3: Compare the criterion, artifact, verdict, and rationale against every JSONL row**
+- [x] **Step 3: Compare the criterion, artifact, verdict, and rationale against every JSONL row**
 
 Run:
 
@@ -112,7 +112,7 @@ node --input-type=module --eval '
 
 Expected: exit 0 with no output. Any mismatch is a documentation defect: correct the Markdown; never change the fixture to make the comparison pass.
 
-- [ ] **Step 4: Run repository document checks**
+- [x] **Step 4: Run repository document checks**
 
 Run:
 
@@ -122,7 +122,7 @@ git diff --check
 
 Expected: exit 0 with no output. Confirm that every relative Markdown link introduced by the sheet resolves; the planned sheet introduces none.
 
-- [ ] **Step 5: Commit the review sheet**
+- [x] **Step 5: Commit the review sheet (`d9dba61`)**
 
 Run:
 
