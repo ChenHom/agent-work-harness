@@ -63,7 +63,7 @@
 
 ## 整理（不影響行為）
 
-- [ ] `canonicalJson` 重複於 `src/trace/store.ts:61` 與 `src/tools/operations.ts:65`。
+- [x] `canonicalJson` 已收斂到 `src/canonical-json.ts`，store 與 operation hash 共用同一實作。
 - [ ] `processStart` 重複於 `src/runtime/ownership.ts:50` 與 `src/runtime/codex-driver.ts:189`。
 
 ## P5 留下的限制（非 bug，列入考量）

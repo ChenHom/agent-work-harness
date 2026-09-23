@@ -7,6 +7,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { createHash, randomUUID } from 'node:crypto';
+import { canonicalJson } from '../canonical-json.ts';
 import { newId, nowIso } from '../ids.ts';
 import { acceptCriterionVerdict } from '../evaluation/criteria.ts';
 import { CURRENT_SCHEMA_VERSION, migrate, rethrowAfterRollback, validateSchema } from './migrations.ts';
@@ -57,18 +58,6 @@ export class StoreOpenError extends Error {
     super(`${code}: ${message}`);
     this.code = code;
   }
-}
-
-function canonicalJson(value: unknown): string {
-  const sort = (item: unknown): unknown => {
-    if (Array.isArray(item)) return item.map(sort);
-    if (!item || typeof item !== 'object') return item;
-    const object = item as Record<string, unknown>;
-    return Object.fromEntries(Object.keys(object).sort()
-      .filter((key) => object[key] !== undefined)
-      .map((key) => [key, sort(object[key])]));
-  };
-  return JSON.stringify(sort(JSON.parse(JSON.stringify(value)) as unknown));
 }
 
 const SQLITE_BUSY_TIMEOUT_MS = 5_000;
