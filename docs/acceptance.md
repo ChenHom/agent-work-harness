@@ -173,4 +173,5 @@ unknown age p50 5,000 ms／p95 86,401,001 ms（離線超過 dedupe 窗口）、S
 驗證 41 ms、還原 989 ms（修正前每個 Work 重掃全表為 42.2 s）。
 
 2026-09-23 驗收環境：Node v24.19.0、Linux 6.8.0-124-generic x86_64。主機環境執行 `npm run check`：
-exit 0，380 pass、0 fail、0 skip、0 cancelled，lint/typecheck/Knip 全部通過。
+exit 0，407 pass、0 fail、0 skip、0 cancelled，lint/typecheck/Knip 全部通過；
+`npm audit --audit-level=moderate` 為 0 vulnerabilities。
