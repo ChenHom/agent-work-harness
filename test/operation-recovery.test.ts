@@ -135,6 +135,39 @@ test('UNKNOWN prohibits redispatch and reconciliation settles one provider effec
   }
 });
 
+test('crash-left DISPATCHED operation reconciles the existing effect without redispatch', async () => {
+  const h = fixture();
+  try {
+    const input = prepareInput();
+    const operation = h.gateway.prepare(input);
+    const dispatchedAt = new Date().toISOString();
+    h.store.withTransaction(() => {
+      h.store.updateOperation({ ...operation, status: 'DISPATCHED', updatedAt: dispatchedAt });
+      h.store.insertOperationAttempt({
+        id: 'OPA-crash', operationId: operation.id, number: 1,
+        status: 'DISPATCHED', dispatchedAt,
+      });
+    });
+    await h.provider.execute({
+      idempotencyKey: operation.idempotencyKey,
+      targetScope: operation.targetScope,
+      canonicalInputHash: operation.canonicalInputHash,
+      payload: input.payload,
+    });
+
+    const recovered = await h.gateway.reconcile(operation.id, owner());
+    assert.equal(recovered.status, 'SUCCEEDED');
+    assert.equal(h.provider.effectCount(), 1);
+    const attempt = h.store.listOperationAttempts(operation.id)[0];
+    assert.equal(attempt?.status, 'UNKNOWN');
+    assert.match(attempt?.error ?? '', /completion unacknowledged/);
+    assert.equal(h.store.getBudgetReservation(operation.reservationId!)?.status, 'SETTLED');
+  } finally {
+    h.store.close();
+    rmSync(h.state, { recursive: true, force: true });
+  }
+});
+
 test('delayed lookup visibility survives restart and duplicate reconciliation is harmless', async () => {
   const state = mkdtempSync(join(tmpdir(), 'harness-reconcile-restart-'));
   const harnessState = join(state, 'harness');

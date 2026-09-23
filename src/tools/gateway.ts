@@ -120,13 +120,26 @@ export class OperationGateway {
       if (current.status === 'SUCCEEDED' || current.status === 'FAILED' || current.status === 'WAITING_USER') {
         return current;
       }
-      if (current.status !== 'UNKNOWN' && current.status !== 'RECONCILING') {
+      if (current.status !== 'DISPATCHED' && current.status !== 'UNKNOWN' && current.status !== 'RECONCILING') {
         throw new Error(`OPERATION_NOT_RECONCILABLE: ${operationId} is ${current.status}`);
       }
       const reconciling: Operation = current.status === 'RECONCILING' ? current
         : { ...current, status: 'RECONCILING', updatedAt: this.nowIso() };
       if (current.status !== 'RECONCILING') {
-        this.store.withTransaction(() => this.store.updateOperation(reconciling));
+        this.store.withTransaction(() => {
+          this.store.updateOperation(reconciling);
+          if (current.status === 'DISPATCHED') {
+            const attempt = this.store.listOperationAttempts(operationId).at(-1);
+            if (!attempt || attempt.status !== 'DISPATCHED') {
+              throw new Error(`OPERATION_ATTEMPT_NOT_DISPATCHED: ${operationId}`);
+            }
+            this.store.updateOperationAttempt({
+              ...attempt, status: 'UNKNOWN', completedAt: this.nowIso(),
+              error: 'worker completion unacknowledged; recovered by reconciliation',
+            });
+            this.budget.markUnknownInTransaction(this.requireReservation(current));
+          }
+        });
       }
       const request = this.requestFor(reconciling);
       const firstDispatch = this.store.listOperationAttempts(operationId)[0];

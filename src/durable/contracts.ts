@@ -28,6 +28,7 @@ export interface DurableWorkflowInput {
   maxReconcileAttempts?: number;
   historyEventLimit?: number;
   dispatchDelayMs?: number;
+  providerResponseDelayMs?: number;
   lookupDelayMs?: number;
   compensationDelayMs?: number;
   compensationBehavior?: 'success' | 'fail-before-effect' | 'lose-response-after-effect' | 'unsupported';
@@ -103,6 +104,7 @@ interface DispatchOperationInput {
   value: string;
   lookupDelayCount?: number;
   dispatchDelayMs?: number;
+  providerResponseDelayMs?: number;
   lookupDelayMs?: number;
   compensationDelayMs?: number;
   compensationBehavior?: 'success' | 'fail-before-effect' | 'lose-response-after-effect' | 'unsupported';

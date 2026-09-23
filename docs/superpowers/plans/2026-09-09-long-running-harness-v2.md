@@ -14,7 +14,7 @@ P1–P2 不增加線上 LLM 或 workflow engine；P3–P5 是有前置條件的�
 
 **基線:** `9f04360`；2026-09-09 主機 `npm run check`：173 pass／0 fail／0 skip。
 
-**本文件狀態:** **P1/G1、P2/G2 與 P3/G3 已完成；P4–P5 尚未開始。**
+**本文件狀態:** **P1/G1、P2/G2、P3/G3 與 P4/G4 已完成；P5 尚未開始。**
 
 ## 1. 可交付範圍
 
@@ -411,12 +411,12 @@ eventual consistency、補償再次 crash、並行預算競爭都有測試；
 | Temporal lifecycle owner | Activity 重新執行安全、workflow code versioning、history 分段 | 既有程式與平台各自派發／雙重 retry；無可用維運方式 |
 | LangGraph + 明確執行服務 | persistent checkpointer、worker ownership、time-travel 副作用政策 | 只因有 checkpoint 就宣稱有完整 scheduler／對帳／補償 |
 
-- [ ] 寫 ADR 記錄實測，而不是只列功能表；指定唯一 schedule/retry/cancel owner。
-- [ ] 模型與外部操作結果走已保存 receipt；audit replay 不執行 external writes。
-- [ ] 加入 epoch/fencing、durable inbox、callback 去重、timer 與版本相容策略。
-- [ ] 以受管程序環境與發布 gate 解決本地檔案寫入的 stale worker 問題，
+- [x] 寫 ADR 記錄實測，而不是只列功能表；指定唯一 schedule/retry/cancel owner。
+- [x] 模型與外部操作結果走已保存 receipt；audit replay 不執行 external writes。
+- [x] 加入 epoch/fencing、durable inbox、callback 去重、timer 與版本相容策略。
+- [x] 以受管程序環境與發布 gate 解決本地檔案寫入的 stale worker 問題，
   不只在 SQLite 加一欄 epoch。
-- [ ] 取消停止新派發、追蹤 in-flight；未知結果／未完成清理不直接 CANCELLED。
+- [x] 取消停止新派發、追蹤 in-flight；未知結果／未完成清理不直接 CANCELLED。
 
 **G4：** 舊 worker 復活不發布結果；跨 host 接手不重複效果；
 callback 重複亂序只處理一次有效狀態轉移；deadline 經重啟仍有效；
@@ -451,8 +451,8 @@ callback 重複亂序只處理一次有效狀態轉移；deadline 經重啟仍�
 ## 16. 執行順序與交接
 
 先執行 P1 Task 1–7，每個提交都能獨立驗證。
-P1／P2／P3 已各自完成實作與 gate；P4 選型取決於實測 gate，
-P5 語意驗收取決於獨立 oracle。這些是明確延後的工作，不代表整個 v2 已完成。
+P1／P2／P3／P4 已各自完成實作與 gate；P5 語意驗收取決於獨立 oracle。
+P5 是明確延後的工作，不代表整個 v2 已完成。
 
 本輪文件驗證只包含來源對照、章節與 review 覆蓋、相對連結與 diff 檢查。
-本文的測試程式碼是將來實作的驗收範例；沒有聲稱目前 repo 已經具備這些新 API。
+P4 的實作與 G4 證據見獨立 P4 plan、`test/g4-acceptance.test.ts` 與 operations runbook。

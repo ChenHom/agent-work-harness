@@ -2,6 +2,7 @@ import type {
   Attempt, BudgetLimit, BudgetReservation, Compensation, LogicalCheckpoint, Operation,
   Outcome, PlanMilestone, RecoverySession, Work, WorkPlan,
 } from './types.ts';
+import type { DurableWorkflowSnapshot } from './durable/contracts.ts';
 
 export function formatWorkListRow(work: Work, outcome: Outcome | null): string {
   return `${work.id}  ${work.state.padEnd(12)} ${work.repositoryId.padEnd(16)} ${work.title}  outcome=${outcome ?? '-'}`;
@@ -58,4 +59,11 @@ export function formatBudget(
     + ` spent=${spentUnits} reserved=${reservedUnits}`
     + ` available=${limit.limitUnits - spentUnits - reservedUnits}`
     + ` reservations=${reservations.length} pricing=${limit.pricingVersion}`;
+}
+
+export function formatDurableSnapshot(snapshot: DurableWorkflowSnapshot): string {
+  return `${snapshot.status} run=${snapshot.runId ?? '-'} epoch=${snapshot.epoch ?? '-'}`
+    + ` operation=${snapshot.operationId ?? '-'}`
+    + ` callbacks=${snapshot.acceptedCallbackCount ?? 0}/${snapshot.ignoredCallbackCount ?? 0}`
+    + (snapshot.compatibilityReason ? ` reason=${snapshot.compatibilityReason}` : '');
 }

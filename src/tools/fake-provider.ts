@@ -15,6 +15,7 @@ interface FakePayload {
   behavior?: 'success' | 'fail-before-effect' | 'lose-response-before-effect' | 'lose-response-after-effect';
   lookupDelayCount?: number;
   dispatchDelayMs?: number;
+  responseDelayMs?: number;
   lookupDelayMs?: number;
   compensationDelayMs?: number;
   lookupMode?: 'normal' | 'partial' | 'unsupported';
@@ -100,6 +101,7 @@ export class FakeProvider implements OperationAdapter {
       compensationBehavior: payload.compensationBehavior ?? 'success', removed: false,
     });
     this.writeLedger(ledger);
+    if (payload.responseDelayMs) await delay(payload.responseDelayMs);
     if (payload.behavior === 'lose-response-after-effect') {
       throw new AdapterDispatchError('ambiguous', 'FAKE_PROVIDER_RESPONSE_LOST: effect may have completed');
     }

@@ -15,7 +15,8 @@ Core abstraction       ✅ 跨兩種語言 / domain / runner，Core 0 修改
 P1 Recovery correctness ✅ G1 通過：durable inputs/outputs、ownership、transaction、recovery session
 P2 Plans/checkpoints    ✅ G2 通過：versioned plans、logical checkpoints、verified resume/fork
 P3 Operation/Budget    ✅ G3 通過：fake adapter、UNKNOWN reconciliation、compensation、integer hard cap
-P4–P5                  ◻ 設計中，尚未實作
+P4 durable runtime     ✓ Temporal workflow、跨 worker 接手、timer/signal/cancel、version/replay
+P5                     ◻ 尚未實作
 需要修改 Core 的證據      無
 ```
 
@@ -64,6 +65,13 @@ operation 在 dispatch 前保存 intent、authorization、capability snapshot �
 UNKNOWN 只能 lookup reconcile，不能盲目重送。這一階段只有本機 fake provider，尚未接上任何
 真實外部 API；Codex 與 repository shell 的 network deny 也未放寬。詳見
 [使用手冊](docs/usage.md#fake-operation-gatewayp3)。
+
+P4 提供明確分離的 `harness durable ...` 命令。Temporal 是 P4 workflow 的唯一 timer、retry、signal、
+cancel 與 worker takeover owner；Gateway 仍負責 operation identity、receipt、reconciliation、budget
+與 compensation。G4 使用兩個獨立 worker process 與持久化 Temporal dev server 驗證 crash 接手、
+server restart deadline、callback 去重、版本暫停及 stale publication fencing。詳見
+[使用手冊](docs/usage.md#temporal-durable-runtimep4)與
+[operations runbook](docs/runbooks/temporal-operations.md)。
 
 需要你決定時（`NEEDS_USER_DECISION`）：
 
@@ -173,7 +181,7 @@ run  ┌ prepare  contract 快照 → admitSkills → manifest → budget → co
 
 ## 文件
 
-- [長任務架構 v2（P1–P3 已實作；P4–P5 為設計）](docs/superpowers/specs/2026-09-09-long-running-harness-v2-design.md)
+- [長任務架構 v2（P1–P4 已實作；P5 為設計）](docs/superpowers/specs/2026-09-09-long-running-harness-v2-design.md)
 - [v2 分階段實作計畫（P1 本機恢復優先）](docs/superpowers/plans/2026-09-09-long-running-harness-v2.md)
 
 - 決策記錄：`DECISIONS.md`
@@ -189,7 +197,7 @@ run  ┌ prepare  contract 快照 → admitSkills → manifest → budget → co
 ```bash
 npm run check     # lint + typecheck + test + deadcode，提交前跑這個
 
-npm test          # 300 個測試，不需要 codex 或網路
+npm test          # 不需要 codex 或外部網路；Temporal 測試會啟動本機 dev server
 npm run typecheck # tsc --noEmit
 npm run lint      # eslint：no-floating-promises + 兩條架構界線（D-29 / D-31）
 npm run deadcode  # knip：沒人用的 export / file / dependency

@@ -5,9 +5,12 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
   formatContextDropped, formatPreExistingDirty, formatRecoverySession, formatWorkListRow,
-  formatBudget, formatCompensation, formatOperation,
+  formatBudget, formatCompensation, formatDurableSnapshot, formatOperation,
 } from '../src/cli-format.ts';
 import { main } from '../src/cli.ts';
+import {
+  loadDurableConnectionSettings, TemporalDurableCommandService, type DurableCommandService,
+} from '../src/durable/client.ts';
 import { DEFAULT_POLICY } from '../src/policy.ts';
 import { Store } from '../src/trace/store.ts';
 import { acceptanceCriterionId } from '../src/work/plans.ts';
@@ -15,7 +18,11 @@ import type {
   Attempt, BudgetLimit, BudgetReservation, Compensation, GlobalPolicy, Operation, Work, WorkContract,
 } from '../src/types.ts';
 
-async function runCli(stateDir: string, args: string[]): Promise<string> {
+async function runCli(
+  stateDir: string,
+  args: string[],
+  durable?: DurableCommandService,
+): Promise<string> {
   const policy: GlobalPolicy = {
     ...DEFAULT_POLICY,
     stateDir,
@@ -28,12 +35,88 @@ async function runCli(stateDir: string, args: string[]): Promise<string> {
   const original = console.log;
   console.log = (...values: unknown[]) => { lines.push(values.join(' ')); };
   try {
-    assert.equal(await main(args, policy), 0);
+    assert.equal(await main(args, policy, durable), 0);
   } finally {
     console.log = original;
   }
   return `${lines.join('\n')}\n`;
 }
+
+test('P4 durable CLI keeps Temporal commands explicit and separate from local fake commands', async () => {
+  const base = mkdtempSync(join(tmpdir(), 'harness-cli-p4-'));
+  const stateDir = join(base, 'state');
+  const inputPath = join(base, 'workflow.json');
+  const callbackPath = join(base, 'callback.json');
+  writeFileSync(inputPath, JSON.stringify({
+    workId: 'W-P4', epoch: 1, businessId: 'customer-p4', value: 'enabled',
+    generatedText: 'durable output', callbackTimeoutMs: 5_000,
+  }));
+  writeFileSync(callbackPath, JSON.stringify({
+    eventId: 'event-1', sourceVersion: 1, sequence: 1,
+    operationId: 'OP-P4', receiptRef: 'provider:p4',
+  }));
+  const calls: string[] = [];
+  const durable: DurableCommandService = {
+    start: async (workflowId, input) => {
+      calls.push(`start:${workflowId}:${input.workId}`);
+      return { workflowId, runId: 'RUN-P4' };
+    },
+    inspect: async (workflowId) => {
+      calls.push(`inspect:${workflowId}`);
+      return { status: 'WAITING_EXTERNAL', runId: 'RUN-P4', epoch: 1, operationId: 'OP-P4' };
+    },
+    cancel: async (workflowId) => { calls.push(`cancel:${workflowId}`); },
+    callback: async (workflowId, callback) => { calls.push(`callback:${workflowId}:${callback.eventId}`); },
+    rollover: async (workflowId) => { calls.push(`rollover:${workflowId}`); },
+    runWorker: async (ready) => { ready({ taskQueue: 'p4-test', buildId: 'build-test' }); },
+  };
+  try {
+    assert.match(await runCli(stateDir, ['durable', 'start', 'WF-P4', inputPath], durable), /workflow: WF-P4 run=RUN-P4/);
+    assert.match(await runCli(stateDir, ['durable', 'inspect', 'WF-P4'], durable), /WAITING_EXTERNAL.*epoch=1.*operation=OP-P4/);
+    assert.match(await runCli(stateDir, ['durable', 'callback', 'WF-P4', callbackPath], durable), /callback sent/);
+    assert.match(await runCli(stateDir, ['durable', 'cancel', 'WF-P4'], durable), /cancel requested/);
+    assert.match(await runCli(stateDir, ['durable', 'rollover', 'WF-P4'], durable), /rollover requested/);
+    assert.match(await runCli(stateDir, ['durable', 'worker'], durable), /durable worker ready.*p4-test.*build-test/);
+    assert.deepEqual(calls, [
+      'start:WF-P4:W-P4', 'inspect:WF-P4', 'callback:WF-P4:event-1',
+      'cancel:WF-P4', 'rollover:WF-P4',
+    ]);
+    assert.equal(formatDurableSnapshot({
+      status: 'WAITING_USER', epoch: 2, runId: 'RUN-2', compatibilityReason: 'future schema',
+    }), 'WAITING_USER run=RUN-2 epoch=2 operation=- callbacks=0/0 reason=future schema');
+    assert.equal(existsSync(join(stateDir, 'execution.lock')), false);
+  } finally {
+    rmSync(base, { recursive: true, force: true });
+  }
+});
+
+test('P4 Temporal connection settings require paired deployment identity and protect API keys with TLS', () => {
+  assert.deepEqual(loadDurableConnectionSettings('/state', {
+    TEMPORAL_ADDRESS: 'temporal.internal:7233', TEMPORAL_NAMESPACE: 'production',
+    TEMPORAL_API_KEY: 'secret', HARNESS_TEMPORAL_TASK_QUEUE: 'p4-production',
+    HARNESS_TEMPORAL_DEPLOYMENT: 'harness', HARNESS_TEMPORAL_BUILD_ID: 'build-42',
+    HARNESS_DURABLE_PROVIDER_LEDGER: '/provider/ledger.json',
+  }), {
+    address: 'temporal.internal:7233', namespace: 'production', taskQueue: 'p4-production',
+    tls: true, apiKey: 'secret',
+    deploymentVersion: { deploymentName: 'harness', buildId: 'build-42' },
+    providerLedgerPath: '/provider/ledger.json',
+  });
+  assert.throws(() => loadDurableConnectionSettings('/state', {
+    HARNESS_TEMPORAL_DEPLOYMENT: 'harness-without-build',
+  }), /must be set together/);
+  assert.throws(() => loadDurableConnectionSettings('/state', {
+    TEMPORAL_TLS: 'sometimes',
+  }), /must be true or false/);
+  const service = new TemporalDurableCommandService('/state', {});
+  assert.throws(() => service.start('WF-forged-resume', {
+    workId: 'W-forged', epoch: 2, businessId: 'customer', value: 'enabled',
+    generatedText: 'output', callbackTimeoutMs: 1_000,
+  }), /must start at epoch 1/);
+  assert.throws(() => service.callback('WF-invalid-callback', {
+    eventId: '', sourceVersion: 0, sequence: -1, operationId: '', receiptRef: '',
+  }), /callback requires/);
+});
 
 const work: Work = {
   id: 'W-123',

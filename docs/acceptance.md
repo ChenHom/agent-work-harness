@@ -110,3 +110,31 @@ namespace 阻斷網路，產品明示外部副作用治理尚未接入真實服�
 
 2026-09-22 驗收環境：Node v24.19.0、Linux 6.8.0-124-generic x86_64。
 主機環境執行 `npm run check`：exit 0，300 pass、0 fail、0 skip，lint/typecheck/Knip 全部通過。
+
+## Long-running v2 G4：P4 Temporal durable runtime
+
+| # | G4 條件 | 驗證來源 |
+|---|---|---|
+| 1 | Temporal 是 P4 schedule/retry/timer/signal/cancel 的唯一 owner | `docs/adr/0001-temporal-lifecycle-owner.md`、`test/temporal-selection.test.ts` |
+| 2 | Workflow history replay 不執行 Activity、Gateway、provider、artifact 或 publication write | `test/workflow-replay.test.ts`、版本化 history fixture |
+| 3 | Activity 重跑沿用 Work、operation、intent、idempotency key 與 budget | `test/g4-acceptance.test.ts` crash-after-effect fixture |
+| 4 | 舊 run/epoch 在 dispatch 與 publication gate fail closed | `test/temporal-epoch.test.ts`、`test/publication-fence.test.ts`、`test/g4-acceptance.test.ts` |
+| 5 | 兩個獨立 worker process 經同一 Temporal service 接手，provider 只有一個 effect | `test/g4-acceptance.test.ts` |
+| 6 | duplicate／delayed／out-of-order callback 只有一次有效 transition 並保留 conflict/ignored evidence | `test/durable-signals.test.ts`、`test/durable-workflow.test.ts`、`test/g4-acceptance.test.ts` |
+| 7 | retry timer 經 worker handoff、deadline 經 Temporal server persistence restart 仍有效 | `test/durable-timers.test.ts`、`test/g4-acceptance.test.ts` |
+| 8 | cancellation 先 quiesce；未決 effect 不會直接 `CANCELLED` | `test/durable-cancellation.test.ts`、`test/g4-acceptance.test.ts` |
+| 9 | pinned worker/version policy、舊 history replay、未來 schema 明確暫停 | `test/workflow-versioning.test.ts`、`test/workflow-replay.test.ts` |
+| 10 | Continue-As-New 保留 identity、budget、pending operation、dedupe、deadline 與 artifact refs | `test/durable-signals.test.ts`、`test/workflow-versioning.test.ts` |
+| 11 | Temporal/provider outage、stuck execution、upgrade/rollback 有操作 runbook | `docs/runbooks/temporal-operations.md`、`docs/runbooks/temporal-upgrade.md` |
+| 12 | SQLite 只作本機 operation/artifact projection，不宣稱跨 host queue/ledger | ADR、operations runbook、P4 implementation plan |
+
+G4 fixture 使用同一台主機的兩個 OS worker process、共享 Temporal dev server 與 process-external
+持久 fake provider ledger。第一個 worker 在 provider effect 已寫入但 Activity completion 未確認時被
+`SIGKILL`；第二個 worker 對 crash-left `DISPATCHED` operation 做 lookup reconciliation，沿用同一
+operation/idempotency identity，provider effect count 維持 1。fixture 另以 persistent Temporal
+SQLite restart 驗證 deadline。這證明本機 protocol boundary；production cross-host 宣稱仍要求
+shared Temporal/provider/ledger topology、TLS/auth、監控與實際故障演練，不能由本測試替代。
+
+2026-09-23 驗收環境：Node v24.19.0、Linux 6.8.0-124-generic x86_64、Temporal CLI 1.9.1／
+Server 1.32.0、Temporal TypeScript SDK 1.24.0。主機環境執行 `npm run check`：exit 0，
+325 pass、0 fail、0 skip，lint/typecheck/Knip 全部通過。

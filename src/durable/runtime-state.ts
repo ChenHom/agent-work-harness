@@ -24,6 +24,7 @@ export interface RuntimeExecutionIdentity {
 
 export type RuntimeExecutionReader = (
   workflowId: string,
+  expected?: RuntimeExecutionIdentity,
 ) => RuntimeExecutionState | null | Promise<RuntimeExecutionState | null>;
 
 export function nextRuntimeEpoch(
@@ -56,7 +57,7 @@ export class TemporalDispatchAuthority implements DispatchAuthority {
   endOperation(): void { this.operationInUse = false; }
 
   async validate(action: DispatchAction): Promise<boolean> {
-    const active = await this.read(this.identity.workflowId);
+    const active = await this.read(this.identity.workflowId, this.identity);
     if (!active || active.workflowId !== this.identity.workflowId
       || active.runId !== this.identity.runId || active.epoch !== this.identity.epoch) return false;
     if (action === 'dispatch' || action === 'publish') return active.status === 'ACTIVE';

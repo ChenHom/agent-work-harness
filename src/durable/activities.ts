@@ -85,6 +85,7 @@ export function createDurableActivities(options: DurableActivityOptions): Durabl
           behavior: 'lose-response-after-effect' as const,
           lookupDelayCount: input.lookupDelayCount,
           dispatchDelayMs: input.dispatchDelayMs,
+          responseDelayMs: input.providerResponseDelayMs,
           lookupDelayMs: input.lookupDelayMs,
           compensationDelayMs: input.compensationDelayMs,
           compensationBehavior: input.compensationBehavior,
@@ -92,9 +93,13 @@ export function createDurableActivities(options: DurableActivityOptions): Durabl
         precondition: 'resource absent', reconciliationStrategy: 'lookup stable idempotency key',
         compensationPolicy: 'remove exact owned version', authorizationRef: `work:${input.workId}`,
       });
+      const authority = new TemporalDispatchAuthority(input.authority, options.readRuntime);
       const current = operation.status === 'PREPARED'
-        ? await gateway.dispatch(operation.id, new TemporalDispatchAuthority(input.authority, options.readRuntime))
-        : operation;
+        ? await gateway.dispatch(operation.id, authority)
+        : operation.status === 'DISPATCHED' || operation.status === 'UNKNOWN'
+          || operation.status === 'RECONCILING'
+          ? await gateway.reconcile(operation.id, authority)
+          : operation;
       return {
         operationId: current.id, operationStatus: current.status,
         inputArtifactId: current.inputArtifactId, idempotencyKey: current.idempotencyKey,

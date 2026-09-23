@@ -201,6 +201,73 @@ harness fake compensation reconcile COMP-xxx
 目前「外部副作用治理未接入」任何真實 provider。若未來加入 real adapter，必須另外證明 model／
 shell 沒有繞過 Gateway 的寫入路徑，並保留現在的 network deny，才能擴大承諾。
 
+### Temporal Durable Runtime（P4）
+
+P4 是獨立的 Temporal 執行路徑；`harness run/retry` 與 `harness fake ...` 仍是 P1–P3 本機流程，
+不會暗中改走 Temporal。先設定連線與 task queue：
+
+```bash
+export TEMPORAL_ADDRESS=localhost:7233
+export TEMPORAL_NAMESPACE=default
+export TEMPORAL_TLS=false
+export HARNESS_TEMPORAL_TASK_QUEUE=harness-p4
+
+# production worker 需成對設定
+export HARNESS_TEMPORAL_DEPLOYMENT=harness-p4
+export HARNESS_TEMPORAL_BUILD_ID=2026.09.23.1
+```
+
+啟動 worker：
+
+```bash
+harness durable worker
+```
+
+`workflow.json`：
+
+```json
+{
+  "workId": "W-durable-1",
+  "epoch": 1,
+  "businessId": "customer-7",
+  "value": "enabled",
+  "generatedText": "saved durable output",
+  "callbackTimeoutMs": 30000,
+  "requiredWorkflowVersion": 1
+}
+```
+
+啟動、查詢及送 callback：
+
+```bash
+harness durable start WF-durable-1 workflow.json
+harness durable inspect WF-durable-1
+harness durable callback WF-durable-1 callback.json
+harness durable rollover WF-durable-1
+harness durable cancel WF-durable-1
+```
+
+`callback.json` 必須含穩定 event ID、來源版本／序號、operation ID 與 receipt reference：
+
+```json
+{
+  "eventId": "provider-event-42",
+  "sourceVersion": 1,
+  "sequence": 42,
+  "operationId": "OP-...",
+  "receiptRef": "provider:receipt-42"
+}
+```
+
+取消指令送的是 durable signal；它會先停止新工作並進入 quiescence。UNKNOWN effect 未對帳完成時
+不會假裝成 `CANCELLED`。`rollover` 只要求在安全等待點 Continue-As-New，Work、budget、operation、
+callback dedupe、deadline 與 artifact refs 會帶到新 run，epoch 會增加。
+
+本機 fake provider ledger 可用 `HARNESS_DURABLE_PROVIDER_LEDGER` 指定。這只適合測試；跨 host
+部署必須改用每個 worker 都能存取且具備一致性／冪等保證的 provider 與 ledger。完整值班流程見
+[Temporal operations runbook](runbooks/temporal-operations.md)，版本升級見
+[Temporal upgrade runbook](runbooks/temporal-upgrade.md)。
+
 ### 讀懂結果
 
 回應分成三塊，來源不同，不要混著看：

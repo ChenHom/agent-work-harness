@@ -95,28 +95,28 @@ Failure to run the server or any required scenario blocks the selection. Do not 
 
 **Files:** `src/cli.ts`, `src/cli-format.ts`, `src/durable/client.ts`, `test/g4-acceptance.test.ts`, `test/cli.test.ts`, `docs/usage.md`, `docs/acceptance.md`, `docs/runbooks/temporal-operations.md`, `README.md`, `docs/superpowers/plans/2026-09-09-long-running-harness-v2.md`
 
-- [ ] Add explicit commands for starting/inspecting/cancelling/signalling the P4 fake workflow and starting a worker. Keep legacy local commands clearly separate.
-- [ ] Run two worker processes against one Temporal service and the same externally reachable fake provider boundary. Terminate the first during Activity execution and let the second take over.
-- [ ] In one G4 fixture prove: stale worker cannot publish; takeover reuses identity and creates one provider effect; duplicate/out-of-order callbacks cause one valid transition; a deadline fires after worker/server restart; cancellation waits for unresolved effects; compatible old history completes or pauses explicitly.
-- [ ] Document required Temporal service, namespace/task queue, TLS/auth/environment, worker health, alerting, queue backlog, stuck execution, reconciliation, provider outage, and recovery commands.
-- [ ] State the deployment limitation precisely: passing a local multi-worker fixture proves the protocol boundary, while a production cross-host claim additionally requires the shared service/provider topology and operational drill described in the runbook.
-- [ ] Mark P4/G4 complete only when every Gate 0 and G4 assertion has executable evidence. Otherwise list the exact unmet assertion and leave the checkbox open.
-- [ ] Run one final `npm run check`, validate Markdown relative links and `git diff --check`, record pass/fail/skip counts, review all G4 items, and commit.
+- [x] Add explicit commands for starting/inspecting/cancelling/signalling the P4 fake workflow and starting a worker. Keep legacy local commands clearly separate.
+- [x] Run two worker processes against one Temporal service and the same externally reachable fake provider boundary. Terminate the first during Activity execution and let the second take over.
+- [x] In one G4 fixture prove: stale worker cannot publish; takeover reuses identity and creates one provider effect; duplicate/out-of-order callbacks cause one valid transition; a deadline fires after worker/server restart; cancellation waits for unresolved effects; compatible old history completes or pauses explicitly.
+- [x] Document required Temporal service, namespace/task queue, TLS/auth/environment, worker health, alerting, queue backlog, stuck execution, reconciliation, provider outage, and recovery commands.
+- [x] State the deployment limitation precisely: passing a local multi-worker fixture proves the protocol boundary, while a production cross-host claim additionally requires the shared service/provider topology and operational drill described in the runbook.
+- [x] Mark P4/G4 complete only when every Gate 0 and G4 assertion has executable evidence. Otherwise list the exact unmet assertion and leave the checkbox open.
+- [x] Run one final `npm run check`, validate Markdown relative links and `git diff --check`, record pass/fail/skip counts, review all G4 items, and commit.
 
 ## G4 acceptance checklist
 
-- [ ] Temporal is the only schedule/retry/timer/signal/cancel owner for the P4 path.
-- [ ] Workflow replay and audit replay perform no external write.
-- [ ] Activity re-execution reuses one operation identity and provider idempotency key.
-- [ ] A stale epoch cannot dispatch or publish, including after the stale worker resumes.
-- [ ] Multiple workers can take over through the shared Temporal service without duplicate provider effect.
-- [ ] Duplicate, delayed, and out-of-order callbacks produce one valid state transition and retain conflict evidence.
-- [ ] Workflow timers and deadlines survive worker/server restart.
-- [ ] Cancellation reaches `CANCELLED` only after in-flight and cleanup responsibility is resolved.
-- [ ] Compatible old executions complete under an allowed build; incompatible ones pause explicitly.
-- [ ] Continue-As-New preserves identity, budgets, pending effects, deadline, dedupe horizon, and artifact references.
-- [ ] Platform and provider outages have tested, actionable runbooks.
-- [ ] SQLite is not represented as a shared cross-host coordination or ledger service.
+- [x] Temporal is the only schedule/retry/timer/signal/cancel owner for the P4 path.
+- [x] Workflow replay and audit replay perform no external write.
+- [x] Activity re-execution reuses one operation identity and provider idempotency key.
+- [x] A stale epoch cannot dispatch or publish, including after the stale worker resumes.
+- [x] Multiple workers can take over through the shared Temporal service without duplicate provider effect.
+- [x] Duplicate, delayed, and out-of-order callbacks produce one valid state transition and retain conflict evidence.
+- [x] Workflow timers and deadlines survive worker/server restart.
+- [x] Cancellation reaches `CANCELLED` only after in-flight and cleanup responsibility is resolved.
+- [x] Compatible old executions complete under an allowed build; incompatible ones pause explicitly.
+- [x] Continue-As-New preserves identity, budgets, pending effects, deadline, dedupe horizon, and artifact references.
+- [x] Platform and provider outages have tested, actionable runbooks.
+- [x] SQLite is not represented as a shared cross-host coordination or ledger service.
 
 ## Selection evidence sources
 

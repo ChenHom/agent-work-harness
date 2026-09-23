@@ -99,6 +99,7 @@ export async function durableFakeWorkflow(input: DurableWorkflowInput): Promise<
     const dispatched = await activities.dispatchOperation({
       workId: input.workId, businessId: input.businessId, value: input.value,
       lookupDelayCount: input.lookupDelayCount, dispatchDelayMs: input.dispatchDelayMs,
+      providerResponseDelayMs: input.providerResponseDelayMs,
       lookupDelayMs: input.lookupDelayMs, compensationDelayMs: input.compensationDelayMs,
       compensationBehavior: input.compensationBehavior, authority,
     });

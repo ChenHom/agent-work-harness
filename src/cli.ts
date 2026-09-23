@@ -19,6 +19,7 @@ import { runIsolated } from './evidence/exec.ts';
 import {
   formatContextDropped, formatPreExistingDirty, formatRecoverySession, formatWorkListRow,
   formatBudget, formatCheckpoint, formatCompensation, formatMilestone, formatOperation, formatPlan,
+  formatDurableSnapshot,
 } from './cli-format.ts';
 import { formatPromptChars } from './response.ts';
 import type { GlobalPolicy } from './types.ts';
@@ -26,9 +27,14 @@ import { BudgetLedger } from './budget/ledger.ts';
 import { FakeProvider } from './tools/fake-provider.ts';
 import { OperationGateway } from './tools/gateway.ts';
 import { CompensationWorkflow } from './tools/compensation.ts';
+import type { DurableCallback, DurableWorkflowInput } from './durable/contracts.ts';
+import {
+  TemporalDurableCommandService, type DurableCommandService,
+} from './durable/client.ts';
 
 const USAGE = `harness — Agent Work Harness (MVP)
 
+P1–P3 local runtime:
   harness init [dir]                    產生候選 .harness/config.json（需人工確認後才生效）
   harness new "<需求>" [--dir .] [--title T] [--retry N]
   harness run <workId> [--milestone M] [--no-baseline]  執行下一個 attempt
@@ -56,6 +62,16 @@ const USAGE = `harness — Agent Work Harness (MVP)
   harness fake operation show <workId>   顯示 operation／compensation（唯讀）
   harness fake compensation prepare <operationId> <json-file>
   harness fake compensation dispatch|reconcile <compensationId>
+
+P4 Temporal durable runtime:
+  harness durable start <workflowId> <json-file>
+  harness durable inspect <workflowId>
+  harness durable callback <workflowId> <json-file>
+  harness durable cancel <workflowId>
+  harness durable rollover <workflowId>
+  harness durable worker
+
+Shared administration:
   harness skills list|approve <id> <dir>
   harness doctor [dir]                  檢查 runtime 與隔離是否真的生效
 
@@ -84,7 +100,11 @@ function isReadOnlyCommand(cmd: string | undefined, rest: string[]): boolean {
     || (cmd === 'fake' && rest[1] === 'show')));
 }
 
-export async function main(argv: string[], policy: GlobalPolicy = loadPolicy()): Promise<number> {
+export async function main(
+  argv: string[],
+  policy: GlobalPolicy = loadPolicy(),
+  durableCommands?: DurableCommandService,
+): Promise<number> {
   const [cmd, ...rest] = argv;
   let store: Store | undefined;
   let ownership: ExecutionOwnership | undefined;
@@ -342,6 +362,45 @@ export async function main(argv: string[], policy: GlobalPolicy = loadPolicy()):
       console.log(`known child: ${metadata?.child ? `pid=${metadata.child.pid} start=${metadata.child.processStart}` : 'unknown'}`);
       console.log(`blocked reason: ${inspection.blockedReason ?? 'occupied'}`);
       return 0;
+    }
+
+    case 'durable': {
+      const [action, workflowId, jsonPath] = rest;
+      const durable = durableCommands ?? new TemporalDurableCommandService(policy.stateDir);
+      if (action === 'start' && workflowId && jsonPath) {
+        const input = readJson(jsonPath) as DurableWorkflowInput;
+        const started = await durable.start(workflowId, input);
+        console.log(`workflow: ${started.workflowId} run=${started.runId}`);
+        return 0;
+      }
+      if (action === 'inspect' && workflowId) {
+        console.log(formatDurableSnapshot(await durable.inspect(workflowId)));
+        return 0;
+      }
+      if (action === 'callback' && workflowId && jsonPath) {
+        const callback = readJson(jsonPath) as DurableCallback;
+        await durable.callback(workflowId, callback);
+        console.log(`callback sent: ${workflowId} event=${callback.eventId}`);
+        return 0;
+      }
+      if (action === 'cancel' && workflowId) {
+        await durable.cancel(workflowId);
+        console.log(`cancel requested: ${workflowId}`);
+        return 0;
+      }
+      if (action === 'rollover' && workflowId) {
+        await durable.rollover(workflowId);
+        console.log(`rollover requested: ${workflowId}`);
+        return 0;
+      }
+      if (action === 'worker') {
+        await durable.runWorker(({ taskQueue, buildId }) => {
+          console.log(`durable worker ready: taskQueue=${taskQueue} build=${buildId}`);
+        });
+        return 0;
+      }
+      console.error('用法：harness durable start|inspect|callback|cancel|rollover|worker');
+      return 1;
     }
 
     case 'fake': {
