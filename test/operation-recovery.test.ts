@@ -23,6 +23,19 @@ function owner(): ExecutionOwnership {
   };
 }
 
+function expiringOwner(validations: number): ExecutionOwnership {
+  let active = false;
+  let calls = 0;
+  return {
+    token: 'owner-expiring',
+    validate: () => ++calls <= validations,
+    beginOperation: () => active ? false : (active = true),
+    endOperation: () => { active = false; },
+    update: () => true,
+    release: () => !active,
+  };
+}
+
 function fixture(): {
   state: string; store: Store; budget: BudgetLedger; provider: FakeProvider; gateway: OperationGateway;
 } {
@@ -112,6 +125,23 @@ test('definitive no-effect failure releases reservation', async () => {
   }
 });
 
+test('worker that loses authority after a provider call leaves dispatch state for reconciliation', async () => {
+  const h = fixture();
+  try {
+    const operation = h.gateway.prepare(prepareInput());
+
+    await assert.rejects(h.gateway.dispatch(operation.id, expiringOwner(3)), /OWNER_UNKNOWN/);
+
+    assert.equal(h.provider.effectCount(), 1);
+    assert.equal(h.store.getOperation(operation.id)!.status, 'DISPATCHED');
+    assert.equal(h.store.listOperationAttempts(operation.id)[0]!.status, 'DISPATCHED');
+    assert.equal(h.store.getBudgetReservation(operation.reservationId!)!.status, 'HELD');
+  } finally {
+    h.store.close();
+    rmSync(h.state, { recursive: true, force: true });
+  }
+});
+
 test('UNKNOWN prohibits redispatch and reconciliation settles one provider effect and charge', async () => {
   const h = fixture();
   try {
@@ -129,6 +159,30 @@ test('UNKNOWN prohibits redispatch and reconciliation settles one provider effec
     assert.equal(reservation.status, 'SETTLED');
     assert.equal(h.store.listBudgetLedger(reservation.limitId).filter((entry) => entry.kind === 'SETTLE').length, 1);
     assert.deepEqual(h.store.listOperationAttempts(operation.id).map((attempt) => attempt.status), ['UNKNOWN']);
+  } finally {
+    h.store.close();
+    rmSync(h.state, { recursive: true, force: true });
+  }
+});
+
+test('stale reconciliation cannot overwrite a concurrently settled operation', async () => {
+  const h = fixture();
+  try {
+    const operation = h.gateway.prepare(prepareInput('lose-response-after-effect'));
+    assert.equal((await h.gateway.dispatch(operation.id, owner())).status, 'UNKNOWN');
+    h.provider.lookup = async () => {
+      const reconciling = h.store.getOperation(operation.id)!;
+      assert.equal(reconciling.status, 'RECONCILING');
+      h.store.withTransaction(() => {
+        h.store.updateOperation({ ...reconciling, status: 'SUCCEEDED', updatedAt: new Date().toISOString() });
+        h.budget.settleInTransaction(operation.reservationId!, 7);
+      });
+      return { kind: 'pending' };
+    };
+
+    await assert.rejects(h.gateway.reconcile(operation.id, owner()), /STATE_CONFLICT/);
+    assert.equal(h.store.getOperation(operation.id)!.status, 'SUCCEEDED');
+    assert.equal(h.store.getBudgetReservation(operation.reservationId!)!.status, 'SETTLED');
   } finally {
     h.store.close();
     rmSync(h.state, { recursive: true, force: true });
@@ -400,6 +454,67 @@ test('lost compensation response survives restart and repeated recovery removes 
   } finally {
     store.close();
     rmSync(state, { recursive: true, force: true });
+  }
+});
+
+test('stale compensation reconciliation cannot overwrite a concurrently settled result', async () => {
+  const h = fixture();
+  try {
+    const operation = h.gateway.prepare({
+      ...prepareInput(),
+      payload: {
+        businessId: 'customer-7', value: 'enabled', behavior: 'success' as const,
+        compensationBehavior: 'lose-response-after-effect' as const,
+      },
+    });
+    await h.gateway.dispatch(operation.id, owner());
+    const workflow = new CompensationWorkflow(h.store, h.budget, h.provider);
+    const compensation = workflow.prepare({
+      operationId: operation.id, authorizationRef: 'decision:D-compensate',
+      resourceIdentity: 'fake-customer-7', ownershipRef: 'customer-7', targetVersion: 'fake-v1',
+    });
+    assert.equal((await workflow.dispatch(compensation.id, owner())).status, 'UNKNOWN');
+    h.provider.lookupCompensation = async () => {
+      const reconciling = h.store.getCompensation(compensation.id)!;
+      assert.equal(reconciling.status, 'RECONCILING');
+      h.store.withTransaction(() => {
+        h.store.updateCompensation({
+          ...reconciling, status: 'SUCCEEDED', updatedAt: new Date().toISOString(),
+        });
+        h.budget.settleInTransaction(compensation.reservationId!, 3);
+      });
+      return { kind: 'pending' };
+    };
+
+    await assert.rejects(workflow.reconcile(compensation.id, owner()), /STATE_CONFLICT/);
+    assert.equal(h.store.getCompensation(compensation.id)!.status, 'SUCCEEDED');
+    assert.equal(h.store.getBudgetReservation(compensation.reservationId!)!.status, 'SETTLED');
+  } finally {
+    h.store.close();
+    rmSync(h.state, { recursive: true, force: true });
+  }
+});
+
+test('compensation worker that loses authority leaves dispatch state for reconciliation', async () => {
+  const h = fixture();
+  try {
+    const operation = h.gateway.prepare(prepareInput());
+    await h.gateway.dispatch(operation.id, owner());
+    const workflow = new CompensationWorkflow(h.store, h.budget, h.provider);
+    const compensation = workflow.prepare({
+      operationId: operation.id, authorizationRef: 'decision:D-compensate',
+      resourceIdentity: 'fake-customer-7', ownershipRef: 'customer-7', targetVersion: 'fake-v1',
+    });
+
+    await assert.rejects(workflow.dispatch(compensation.id, expiringOwner(2)), /OWNER_UNKNOWN/);
+
+    assert.equal(h.provider.compensationEffectCount(), 1);
+    assert.equal(h.store.getCompensation(compensation.id)!.status, 'DISPATCHED');
+    assert.equal(h.store.listCompensationAttempts(compensation.id)[0]!.status, 'DISPATCHED');
+    assert.equal(h.store.getBudgetReservation(compensation.reservationId!)!.status, 'HELD');
+  } finally {
+    h.store.close();
+    rmSync(h.state, { recursive: true, force: true });
   }
 });
 

@@ -59,7 +59,7 @@ test('stale Temporal epoch is rejected before Gateway dispatch', async () => {
   }
 });
 
-test('epoch loss after provider call becomes UNKNOWN and the next epoch reconciles the same effect', async () => {
+test('epoch loss after provider call leaves DISPATCHED for the next epoch to reconcile', async () => {
   let state: RuntimeExecutionState = {
     workflowId: 'WF-epoch', runId: 'RUN-1', epoch: 1, status: 'ACTIVE',
   };
@@ -80,8 +80,9 @@ test('epoch loss after provider call becomes UNKNOWN and the next epoch reconcil
     const epoch1 = new TemporalDispatchAuthority(
       { workflowId: 'WF-epoch', runId: 'RUN-1', epoch: 1 }, () => state,
     );
-    const unknown = await h.gateway.dispatch(operation.id, epoch1);
-    assert.equal(unknown.status, 'UNKNOWN');
+    await assert.rejects(h.gateway.dispatch(operation.id, epoch1), /OWNER_UNKNOWN/);
+    assert.equal(h.store.getOperation(operation.id)?.status, 'DISPATCHED');
+    assert.equal(h.store.listOperationAttempts(operation.id)[0]?.status, 'DISPATCHED');
     assert.equal(h.provider.effectCount(), 1);
 
     const epoch2 = new TemporalDispatchAuthority(

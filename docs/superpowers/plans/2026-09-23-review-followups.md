@@ -31,7 +31,7 @@
     CANCEL_REQUESTED/QUIESCING；`TemporalDispatchAuthority.validate('dispatch')` 在取消後仍放行 provider 呼叫。
     G4 測試換用 `projectDurableRuntime` 所以沒抓到。
   - 方向：production 路徑改用（或共用）`projectDurableRuntime` 的狀態對應；G4 測試改走 production 路徑。
-- [ ] **#13 過時寫入覆蓋較新狀態**（讀碼）
+- [x] **#13 過時寫入覆蓋較新狀態**（已重現 operation race；operation／compensation 全部改用 CAS）
   - `src/tools/gateway.ts:101`：失去 dispatch authority 後仍經 `recordFailure` 寫 UNKNOWN；`updateOperation` 等 update
     沒有 expected-status 條件，另一個 worker 已 reconcile 成 SUCCEEDED 的 operation 會被改回 UNKNOWN。compensation 同樣。
   - 方向：update 帶 `where status = <expected>`（compare-and-set），不符就丟 STATE_CONFLICT；失去 authority 後不寫狀態。

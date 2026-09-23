@@ -88,7 +88,7 @@ export class CompensationWorkflow {
       };
       const dispatched: Compensation = { ...current, status: 'DISPATCHED', updatedAt: this.nowIso() };
       this.store.withTransaction(() => {
-        this.store.updateCompensation(dispatched);
+        this.store.updateCompensation(dispatched, current.status);
         this.store.insertCompensationAttempt(attempt);
       });
       try {
@@ -99,6 +99,8 @@ export class CompensationWorkflow {
         }
         return this.recordSuccess(dispatched, attempt, receipt);
       } catch (error) {
+        if ((error instanceof AdapterDispatchError && error.message.startsWith('OWNER_UNKNOWN:'))
+          || !await authority.validate('compensate')) throw error;
         return this.recordFailure(dispatched, attempt, error);
       }
     } finally {
@@ -126,12 +128,12 @@ export class CompensationWorkflow {
           this.store.updateCompensationAttempt({
             ...attempt, status: 'UNKNOWN', completedAt: this.nowIso(),
             error: 'process stopped after dispatch intent without a durable receipt',
-          });
+          }, attempt.status);
           this.budget.markUnknownInTransaction(this.requireReservation(current));
-          this.store.updateCompensation(reconciling);
+          this.store.updateCompensation(reconciling, current.status);
         });
       } else if (current.status !== 'RECONCILING') {
-        this.store.withTransaction(() => this.store.updateCompensation(reconciling));
+        this.store.withTransaction(() => this.store.updateCompensation(reconciling, current.status));
       }
       let outcome: CompensationLookupOutcome;
       try {
@@ -146,7 +148,7 @@ export class CompensationWorkflow {
           ...reconciling, status: 'SUCCEEDED', lastReconciliationArtifactId: artifact.id, updatedAt: this.nowIso(),
         };
         this.store.withTransaction(() => {
-          this.store.updateCompensation(succeeded);
+          this.store.updateCompensation(succeeded, reconciling.status);
           this.budget.settleInTransaction(this.requireReservation(reconciling), outcome.receipt.actualUnits);
           this.store.event('compensation.reconciled', {
             compensationId, outcome: outcome.kind, artifactId: artifact.id,
@@ -178,8 +180,8 @@ export class CompensationWorkflow {
       ...attempt, status: 'SUCCEEDED', completedAt: at, receiptArtifactId: artifact.id,
     };
     this.store.withTransaction(() => {
-      this.store.updateCompensationAttempt(completed);
-      this.store.updateCompensation(succeeded);
+      this.store.updateCompensationAttempt(completed, attempt.status);
+      this.store.updateCompensation(succeeded, compensation.status);
       this.budget.settleInTransaction(this.requireReservation(compensation), receipt.actualUnits);
     });
     return succeeded;
@@ -197,8 +199,8 @@ export class CompensationWorkflow {
       ...attempt, status: definitive ? 'FAILED' : 'UNKNOWN', completedAt: at, error: message,
     };
     this.store.withTransaction(() => {
-      this.store.updateCompensationAttempt(completed);
-      this.store.updateCompensation(updated);
+      this.store.updateCompensationAttempt(completed, attempt.status);
+      this.store.updateCompensation(updated, compensation.status);
       const reservation = this.requireReservation(compensation);
       if (definitive) this.budget.releaseConfirmedUnusedInTransaction(reservation);
       else this.budget.markUnknownInTransaction(reservation);
@@ -218,7 +220,7 @@ export class CompensationWorkflow {
       manualReason: status === 'WAITING_USER' ? reason : undefined, updatedAt: this.nowIso(),
     };
     this.store.withTransaction(() => {
-      this.store.updateCompensation(updated);
+      this.store.updateCompensation(updated, compensation.status);
       if (release) this.budget.releaseConfirmedUnusedInTransaction(this.requireReservation(compensation));
       this.store.event('compensation.reconciled', {
         compensationId: compensation.id, outcome: status, reason, artifactId,

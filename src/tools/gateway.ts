@@ -91,7 +91,7 @@ export class OperationGateway {
       };
       const dispatched: Operation = { ...current, status: 'DISPATCHED', updatedAt: this.nowIso() };
       this.store.withTransaction(() => {
-        this.store.updateOperation(dispatched);
+        this.store.updateOperation(dispatched, current.status);
         this.store.insertOperationAttempt(attempt);
       });
       try {
@@ -105,6 +105,8 @@ export class OperationGateway {
         }
         return this.recordSuccess(dispatched, attempt, receipt);
       } catch (error) {
+        if ((error instanceof AdapterDispatchError && error.message.startsWith('OWNER_UNKNOWN:'))
+          || !await authority.validate('dispatch')) throw error;
         return this.recordFailure(dispatched, attempt, error);
       }
     } finally {
@@ -127,7 +129,7 @@ export class OperationGateway {
         : { ...current, status: 'RECONCILING', updatedAt: this.nowIso() };
       if (current.status !== 'RECONCILING') {
         this.store.withTransaction(() => {
-          this.store.updateOperation(reconciling);
+          this.store.updateOperation(reconciling, current.status);
           if (current.status === 'DISPATCHED') {
             const attempt = this.store.listOperationAttempts(operationId).at(-1);
             if (!attempt || attempt.status !== 'DISPATCHED') {
@@ -136,7 +138,7 @@ export class OperationGateway {
             this.store.updateOperationAttempt({
               ...attempt, status: 'UNKNOWN', completedAt: this.nowIso(),
               error: 'worker completion unacknowledged; recovered by reconciliation',
-            });
+            }, attempt.status);
             this.budget.markUnknownInTransaction(this.requireReservation(current));
           }
         });
@@ -166,7 +168,7 @@ export class OperationGateway {
           updatedAt: this.nowIso(),
         };
         this.store.withTransaction(() => {
-          this.store.updateOperation(succeeded);
+          this.store.updateOperation(succeeded, reconciling.status);
           this.budget.settleInTransaction(this.requireReservation(reconciling), outcome.receipt.actualUnits);
           this.store.event('operation.reconciled', { operationId, outcome: outcome.kind, artifactId: artifact.id }, current.workId);
         });
@@ -178,7 +180,7 @@ export class OperationGateway {
           updatedAt: this.nowIso(),
         };
         this.store.withTransaction(() => {
-          this.store.updateOperation(failed);
+          this.store.updateOperation(failed, reconciling.status);
           this.budget.releaseConfirmedUnusedInTransaction(this.requireReservation(reconciling));
           this.store.event('operation.reconciled', { operationId, outcome: outcome.kind, artifactId: artifact.id }, current.workId);
         });
@@ -203,8 +205,8 @@ export class OperationGateway {
       ...attempt, status: 'SUCCEEDED', completedAt: at, receiptArtifactId: artifact.id,
     };
     this.store.withTransaction(() => {
-      this.store.updateOperationAttempt(completed);
-      this.store.updateOperation(succeeded);
+      this.store.updateOperationAttempt(completed, attempt.status);
+      this.store.updateOperation(succeeded, operation.status);
       this.budget.settleInTransaction(this.requireReservation(operation), receipt.actualUnits);
     });
     return succeeded;
@@ -219,8 +221,8 @@ export class OperationGateway {
       ...attempt, status, completedAt: at, error: error instanceof Error ? error.message : String(error),
     };
     this.store.withTransaction(() => {
-      this.store.updateOperationAttempt(completed);
-      this.store.updateOperation(updated);
+      this.store.updateOperationAttempt(completed, attempt.status);
+      this.store.updateOperation(updated, operation.status);
       const reservationId = this.requireReservation(operation);
       if (definitive) this.budget.releaseConfirmedUnusedInTransaction(reservationId);
       else this.budget.markUnknownInTransaction(reservationId);
@@ -256,7 +258,7 @@ export class OperationGateway {
       manualReason: status === 'WAITING_USER' ? reason : undefined, updatedAt: this.nowIso(),
     };
     this.store.withTransaction(() => {
-      this.store.updateOperation(updated);
+      this.store.updateOperation(updated, operation.status);
       this.store.event('operation.reconciled', {
         operationId: operation.id, outcome: status, reason, artifactId,
       }, operation.workId);

@@ -924,10 +924,18 @@ export class Store {
     }, operation.workId);
   }
 
-  updateOperation(operation: Operation): void {
-    const changed = this.db.prepare('update operations set status = ?, json = ? where id = ? and work_id = ?')
-      .run(operation.status, JSON.stringify(operation), operation.id, operation.workId);
-    if (Number(changed.changes) !== 1) throw new Error(`OPERATION_NOT_FOUND: ${operation.id}`);
+  updateOperation(operation: Operation, expectedStatus?: Operation['status']): void {
+    const changed = expectedStatus === undefined
+      ? this.db.prepare('update operations set status = ?, json = ? where id = ? and work_id = ?')
+        .run(operation.status, JSON.stringify(operation), operation.id, operation.workId)
+      : this.db.prepare('update operations set status = ?, json = ? where id = ? and work_id = ? and status = ?')
+        .run(operation.status, JSON.stringify(operation), operation.id, operation.workId, expectedStatus);
+    if (Number(changed.changes) !== 1) {
+      if (expectedStatus !== undefined) {
+        throw new Error(`STATE_CONFLICT: operation ${operation.id} expected ${expectedStatus}, got ${this.getOperation(operation.id)?.status ?? 'missing'}`);
+      }
+      throw new Error(`OPERATION_NOT_FOUND: ${operation.id}`);
+    }
     this.event('operation.state_changed', {
       operationId: operation.id, status: operation.status,
     }, operation.workId);
@@ -969,10 +977,18 @@ export class Store {
     }, operation?.workId);
   }
 
-  updateOperationAttempt(attempt: OperationAttempt): void {
-    const changed = this.db.prepare('update operation_attempts set status = ?, json = ? where id = ? and operation_id = ?')
-      .run(attempt.status, JSON.stringify(attempt), attempt.id, attempt.operationId);
-    if (Number(changed.changes) !== 1) throw new Error(`OPERATION_ATTEMPT_NOT_FOUND: ${attempt.id}`);
+  updateOperationAttempt(attempt: OperationAttempt, expectedStatus?: OperationAttempt['status']): void {
+    const changed = expectedStatus === undefined
+      ? this.db.prepare('update operation_attempts set status = ?, json = ? where id = ? and operation_id = ?')
+        .run(attempt.status, JSON.stringify(attempt), attempt.id, attempt.operationId)
+      : this.db.prepare('update operation_attempts set status = ?, json = ? where id = ? and operation_id = ? and status = ?')
+        .run(attempt.status, JSON.stringify(attempt), attempt.id, attempt.operationId, expectedStatus);
+    if (Number(changed.changes) !== 1) {
+      if (expectedStatus !== undefined) {
+        throw new Error(`STATE_CONFLICT: operation attempt ${attempt.id} expected ${expectedStatus}`);
+      }
+      throw new Error(`OPERATION_ATTEMPT_NOT_FOUND: ${attempt.id}`);
+    }
     const operation = this.getOperation(attempt.operationId);
     this.event('operation.attempt_state_changed', {
       operationId: attempt.operationId, operationAttemptId: attempt.id,
@@ -998,10 +1014,18 @@ export class Store {
     }, compensation.workId);
   }
 
-  updateCompensation(compensation: Compensation): void {
-    const changed = this.db.prepare('update compensations set status = ?, json = ? where id = ? and work_id = ?')
-      .run(compensation.status, JSON.stringify(compensation), compensation.id, compensation.workId);
-    if (Number(changed.changes) !== 1) throw new Error(`COMPENSATION_NOT_FOUND: ${compensation.id}`);
+  updateCompensation(compensation: Compensation, expectedStatus?: Compensation['status']): void {
+    const changed = expectedStatus === undefined
+      ? this.db.prepare('update compensations set status = ?, json = ? where id = ? and work_id = ?')
+        .run(compensation.status, JSON.stringify(compensation), compensation.id, compensation.workId)
+      : this.db.prepare('update compensations set status = ?, json = ? where id = ? and work_id = ? and status = ?')
+        .run(compensation.status, JSON.stringify(compensation), compensation.id, compensation.workId, expectedStatus);
+    if (Number(changed.changes) !== 1) {
+      if (expectedStatus !== undefined) {
+        throw new Error(`STATE_CONFLICT: compensation ${compensation.id} expected ${expectedStatus}, got ${this.getCompensation(compensation.id)?.status ?? 'missing'}`);
+      }
+      throw new Error(`COMPENSATION_NOT_FOUND: ${compensation.id}`);
+    }
     this.event('compensation.state_changed', {
       compensationId: compensation.id, operationId: compensation.operationId, status: compensation.status,
     }, compensation.workId);
@@ -1031,10 +1055,18 @@ export class Store {
     }, compensation?.workId);
   }
 
-  updateCompensationAttempt(attempt: CompensationAttempt): void {
-    const changed = this.db.prepare('update compensation_attempts set status = ?, json = ? where id = ? and compensation_id = ?')
-      .run(attempt.status, JSON.stringify(attempt), attempt.id, attempt.compensationId);
-    if (Number(changed.changes) !== 1) throw new Error(`COMPENSATION_ATTEMPT_NOT_FOUND: ${attempt.id}`);
+  updateCompensationAttempt(attempt: CompensationAttempt, expectedStatus?: CompensationAttempt['status']): void {
+    const changed = expectedStatus === undefined
+      ? this.db.prepare('update compensation_attempts set status = ?, json = ? where id = ? and compensation_id = ?')
+        .run(attempt.status, JSON.stringify(attempt), attempt.id, attempt.compensationId)
+      : this.db.prepare('update compensation_attempts set status = ?, json = ? where id = ? and compensation_id = ? and status = ?')
+        .run(attempt.status, JSON.stringify(attempt), attempt.id, attempt.compensationId, expectedStatus);
+    if (Number(changed.changes) !== 1) {
+      if (expectedStatus !== undefined) {
+        throw new Error(`STATE_CONFLICT: compensation attempt ${attempt.id} expected ${expectedStatus}`);
+      }
+      throw new Error(`COMPENSATION_ATTEMPT_NOT_FOUND: ${attempt.id}`);
+    }
     const compensation = this.getCompensation(attempt.compensationId);
     this.event('compensation.attempt_state_changed', {
       compensationId: attempt.compensationId, compensationAttemptId: attempt.id,
