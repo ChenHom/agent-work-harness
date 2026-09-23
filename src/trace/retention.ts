@@ -209,6 +209,17 @@ function computeManifest(store: Store, now: number, payloadExists: (path: string
   return { ...body, hash: manifestHash(body) };
 }
 
+/** Tombstones keep identity, hash, kind, size and times so causal history survives; bytes do not. */
+export function insertTombstone(store: Store, artifactId: string, deletion: {
+  deletedAt: string; deletionId: string; cause: 'retention' | 'redaction'; authority: string; reason: string;
+}): void {
+  store.db.prepare(`insert into artifact_tombstones (artifact_id, hash, kind, bytes, artifact_created_at,
+      deleted_at, deletion_id, cause, authority, reason, replay_limitation)
+    select id, hash, kind, bytes, created_at, ?, ?, ?, ?, ?, ? from artifacts where id = ?`).run(
+    deletion.deletedAt, deletion.deletionId, deletion.cause, deletion.authority, deletion.reason,
+    'payload bytes deleted; replay and re-validation of this artifact are no longer possible', artifactId);
+}
+
 /** Dry run: computes the manifest and changes nothing. */
 export function previewGc(store: Store, now = Date.now()): GcManifest {
   return computeManifest(store, now, (path) => existsSync(path));
@@ -257,11 +268,13 @@ export function applyGc(store: Store, manifest: GcManifest, ownership: Execution
     store.db.prepare(`insert into gc_runs(id, manifest_hash, policy_version, manifest_json, deleted_json, applied_at)
       values (?,?,?,?,?,?)`).run(gcRunId, hash, manifest.policyVersion, JSON.stringify(manifest),
       JSON.stringify(manifest.candidates.map((candidate) => candidate.path)), appliedAt);
-    const insert = store.db.prepare(`insert into artifact_tombstones
-      (artifact_id, hash, kind, bytes, artifact_created_at, deleted_at, gc_run_id, reason)
-      select id, hash, kind, bytes, created_at, ?, ?, ? from artifacts where id = ?`);
     for (const candidate of manifest.candidates) {
-      for (const artifact of candidate.artifacts) insert.run(appliedAt, gcRunId, artifact.reason, artifact.id);
+      for (const artifact of candidate.artifacts) {
+        insertTombstone(store, artifact.id, {
+          deletedAt: appliedAt, deletionId: gcRunId, cause: 'retention',
+          authority: `retention-policy:${manifest.policyVersion}`, reason: artifact.reason,
+        });
+      }
     }
     store.event('retention.gc_applied', {
       gcRunId, manifestHash: hash, policyVersion: manifest.policyVersion,
@@ -273,17 +286,24 @@ export function applyGc(store: Store, manifest: GcManifest, ownership: Execution
   return { gcRunId, deletedPaths: manifest.candidates.map((candidate) => candidate.path), tombstonedArtifactIds };
 }
 
+/** Artifact id → Work ids (or `global`) whose records mention it. One full scan; reuse it across Works. */
+export function artifactReferences(store: Store): Map<string, Set<string>> {
+  return scanReferences(store, new Set((store.db.prepare('select id from artifacts').all() as Array<{ id: string }>).map((row) => row.id)));
+}
+
+/** Artifact ids that any record owned by the Work mentions. */
+export function referencedArtifactIds(store: Store, workId: string, references = artifactReferences(store)): string[] {
+  return [...references].filter(([, sources]) => sources.has(workId)).map(([artifactId]) => artifactId).sort();
+}
+
 /**
  * Whether a Work's history can still be resumed or replayed. Deleted or damaged payloads make it
  * `unavailable`; an unresolved effect past its idempotency window makes it `unsafe`.
  */
-export function inspectRecoverability(store: Store, workId: string, now = Date.now()): {
+export function inspectRecoverability(store: Store, workId: string, now = Date.now(), references = artifactReferences(store)): {
   workId: string; status: 'available' | 'unsafe' | 'unavailable'; reasons: string[];
 } {
-  const artifactIds = new Set((store.db.prepare('select id from artifacts').all() as Array<{ id: string }>).map((row) => row.id));
-  const referenced = [...scanReferences(store, artifactIds)]
-    .filter(([, sources]) => sources.has(workId)).map(([artifactId]) => artifactId).sort();
-  const unavailable = referenced.flatMap((artifactId) => {
+  const unavailable = referencedArtifactIds(store, workId, references).flatMap((artifactId) => {
     const artifact = store.readVerifiedArtifact(artifactId);
     return artifact.status === 'verified' ? [] : [`ARTIFACT_${artifact.status.toUpperCase()}:${artifactId}:${artifact.reason ?? 'unknown'}`];
   });

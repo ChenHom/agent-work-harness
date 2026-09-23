@@ -84,12 +84,12 @@ The completion authority must satisfy all of the following:
 
 **Files:** `src/trace/backup.ts`, `src/trace/links.ts`, `src/trace/redaction.ts`, `src/trace/migrations.ts`, `test/backup-restore.test.ts`, `test/trace-links.test.ts`, `test/redaction.test.ts`
 
-- [ ] Create a consistent DB + artifact backup manifest with schema version, file/content hashes, sizes, and causal root identities. An incomplete or hash-invalid backup must not be restorable.
-- [ ] Restore into an empty target, verify every referenced artifact and database invariant, then run supported schema migration and audit replay without model/tool/provider calls.
-- [ ] Classify restored work as compatible, expired, or unreplayable with reasons; never regenerate missing historical results by calling a model.
-- [ ] Add trace/span links for asynchronous/cross-run causality using Work, operation, and causation-event identities. Authoritative event/operation/budget/evaluation records remain unsampled.
-- [ ] Redact or tombstone sensitive payloads while preserving content hash, type, timestamps, causal metadata, deletion authority, and explicit replay limitation. Record access class for raw logs.
-- [ ] Run targeted backup/link/redaction tests, one full `npm run check`, review the restore drill against a fresh target, and commit.
+- [x] Create a consistent DB + artifact backup manifest with schema version, file/content hashes, sizes, and causal root identities. An incomplete or hash-invalid backup must not be restorable.
+- [x] Restore into an empty target, verify every referenced artifact and database invariant, then run supported schema migration and audit replay without model/tool/provider calls.
+- [x] Classify restored work as compatible, expired, or unreplayable with reasons; never regenerate missing historical results by calling a model.
+- [x] Add trace/span links for asynchronous/cross-run causality using Work, operation, and causation-event identities. Authoritative event/operation/budget/evaluation records remain unsampled.
+- [x] Redact or tombstone sensitive payloads while preserving content hash, type, timestamps, causal metadata, deletion authority, and explicit replay limitation. Record access class for raw logs.
+- [x] Run targeted backup/link/redaction tests, one full `npm run check`, review the restore drill against a fresh target, and commit.
 
 ## Task 7: CLI, G5 adversarial fixture, runbooks, and final gate
 

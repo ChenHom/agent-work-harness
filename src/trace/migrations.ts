@@ -103,7 +103,8 @@ create table if not exists gc_runs(
   manifest_json text not null, deleted_json text not null, applied_at text not null);
 create table if not exists artifact_tombstones(
   artifact_id text primary key, hash text not null, kind text not null, bytes integer not null,
-  artifact_created_at text not null, deleted_at text not null, gc_run_id text not null, reason text not null);
+  artifact_created_at text not null, deleted_at text not null, deletion_id text not null,
+  cause text not null, authority text not null, reason text not null, replay_limitation text not null);
 create index if not exists idx_attempts_work on attempts(work_id);
 create index if not exists idx_evidence_attempt on evidence(attempt_id);
 create index if not exists idx_outcomes_attempt on outcomes(attempt_id);
@@ -230,7 +231,7 @@ const REQUIRED_TABLES: Record<string, Record<string, ColumnRequirement>> = {
   },
   artifact_tombstones: {
     artifact_id: PK_TEXT, hash: TEXT, kind: TEXT, bytes: INTEGER, artifact_created_at: TEXT,
-    deleted_at: TEXT, gc_run_id: TEXT, reason: TEXT,
+    deleted_at: TEXT, deletion_id: TEXT, cause: TEXT, authority: TEXT, reason: TEXT, replay_limitation: TEXT,
   },
 };
 

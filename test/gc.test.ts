@@ -5,7 +5,7 @@ import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:
 import { tmpdir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
 import { acquireExecutionOwnership } from '../src/runtime/ownership.ts';
-import { applyGc, inspectRecoverability, previewGc, type GcManifest } from '../src/trace/retention.ts';
+import { applyGc, insertTombstone, inspectRecoverability, previewGc, type GcManifest } from '../src/trace/retention.ts';
 import { Store } from '../src/trace/store.ts';
 import type { WorkState } from '../src/types.ts';
 
@@ -114,11 +114,11 @@ test('apply deletes exactly the manifest payloads and records tombstones and del
     assert.equal(run.manifest_hash, manifest.hash);
     assert.deepEqual(JSON.parse(run.manifest_json), manifest);
     assert.deepEqual(JSON.parse(run.deleted_json), result.deletedPaths);
-    const tombstone = store.db.prepare('select hash, kind, gc_run_id, reason from artifact_tombstones where artifact_id = ?')
-      .get(ids.tenLog) as { hash: string; kind: string; gc_run_id: string; reason: string };
+    const tombstone = store.db.prepare('select hash, kind, deletion_id, cause, authority, reason from artifact_tombstones where artifact_id = ?')
+      .get(ids.tenLog) as Record<string, string>;
     assert.deepEqual({ ...tombstone }, {
-      hash: basename(path(ids.tenLog)).split('.')[0], kind: 'runtime_stdout', gc_run_id: result.gcRunId,
-      reason: 'work:W-ten archived past raw-log window',
+      hash: basename(path(ids.tenLog)).split('.')[0], kind: 'runtime_stdout', deletion_id: result.gcRunId,
+      cause: 'retention', authority: 'retention-policy:1', reason: 'work:W-ten archived past raw-log window',
     });
     assert.equal((store.db.prepare("select count(*) as n from events where type = 'retention.gc_applied' and work_id is null")
       .get() as { n: number }).n, 1);
@@ -178,8 +178,7 @@ test('interrupted deletion remnants are collected, and rows pointing outside the
   const ownership = acquireExecutionOwnership(state);
   try {
     // Tombstone committed but unlink never happened (crash between commit and rmSync).
-    store.db.prepare(`insert into artifact_tombstones select id, hash, kind, bytes, created_at, ?, 'GC-crashed', 'test' from artifacts where id = ?`)
-      .run(OLD, ids.orphanOld);
+    insertTombstone(store, ids.orphanOld, { deletedAt: OLD, deletionId: 'GC-crashed', cause: 'retention', authority: 'test', reason: 'test' });
     // A corrupt row whose path escapes the artifact directory must not map to a same-named store file.
     const inside = path(ids.doneLog);
     const outside = join(state, 'elsewhere', basename(inside));
