@@ -224,7 +224,7 @@ export class OperationGateway {
     if (typeof resolution.note !== 'string' || !resolution.note.trim()) {
       throw new Error('OPERATION_MANUAL_NOTE_REQUIRED: note is empty');
     }
-    if (resolution.outcome === 'confirmed-success') this.validateManualReceipt(resolution.receipt);
+    if (resolution.outcome === 'confirmed-success') this.validateManualReceipt(current, resolution.receipt);
 
     const artifact = this.store.putArtifact('operation-manual-resolution', canonicalJson({
       schemaVersion: '1', source: 'human-review', ...resolution,
@@ -322,13 +322,16 @@ export class OperationGateway {
 
   private nowIso(): string { return new Date(this.clock()).toISOString(); }
 
-  private validateManualReceipt(receipt: OperationReceipt): void {
+  private validateManualReceipt(operation: Operation, receipt: OperationReceipt): void {
     if (!receipt || typeof receipt.providerReceiptId !== 'string' || !receipt.providerReceiptId.trim()
       || typeof receipt.externalId !== 'string' || !receipt.externalId.trim()
       || typeof receipt.resourceVersion !== 'string' || !receipt.resourceVersion.trim()
       || typeof receipt.ownershipRef !== 'string' || !receipt.ownershipRef.trim()
       || !Number.isSafeInteger(receipt.actualUnits) || receipt.actualUnits < 0) {
       throw new Error('OPERATION_MANUAL_RECEIPT_INVALID: receipt fields and actualUnits are required');
+    }
+    if (receipt.ownershipRef !== operation.targetScope) {
+      throw new Error(`OPERATION_MANUAL_RECEIPT_MISMATCH: ownership ${receipt.ownershipRef} != ${operation.targetScope}`);
     }
   }
 

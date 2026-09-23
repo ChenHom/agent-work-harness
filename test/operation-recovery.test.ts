@@ -356,6 +356,13 @@ test('human review resolves a waiting operation and settles its held budget exac
       outcome: 'confirmed-no-effect', authorizationRef: 'model:critic', note: 'model says no effect',
     }), /OPERATION_MANUAL_AUTHORITY_INVALID/);
     assert.throws(() => h.gateway.resolveWaitingUser(operation.id, {
+      outcome: 'confirmed-success', authorizationRef: 'human-review:TICKET-5B', note: 'wrong resource',
+      receipt: {
+        providerReceiptId: 'manual-receipt-5b', externalId: 'fake-other-customer',
+        resourceVersion: 'fake-v1', ownershipRef: 'other-customer', actualUnits: 7,
+      },
+    }), /OPERATION_MANUAL_RECEIPT_MISMATCH/);
+    assert.throws(() => h.gateway.resolveWaitingUser(operation.id, {
       outcome: 'confirmed-success', authorizationRef: 'human-review:TICKET-6', note: 'over budget',
       receipt: {
         providerReceiptId: 'manual-receipt-6', externalId: 'fake-customer-7',
