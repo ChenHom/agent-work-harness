@@ -42,7 +42,7 @@
   - `src/trace/store.ts`：durable worker（每個 activity 一個 Store）與 CLI 同時寫同一 DB 時立即 `database is locked`；
     `provider.execute` 之後的 `recordSuccess`／`recordFailure` 也可能撞 SQLITE_BUSY，operation 停在 DISPATCHED。
   - 方向：開啟時設 `pragma busy_timeout`；注意 GC／redaction 現在在寫鎖內 unlink，timeout 要涵蓋那段時間。
-- [ ] **#10 沒有 parent 的 checkpoint 不會標記下游 milestone stale**（讀碼）
+- [x] **#10 沒有 parent 的 checkpoint 不會標記下游 milestone stale**（已重現、修正並做 manual mutation）
   - `src/trace/checkpoints.ts:192`：`findArtifactReplacements` 只沿 `parentCheckpointId` 鏈比對；同一 plan、改了
     artifact hash 但沒填 parent 的 checkpoint，會讓已完成的 M-2 以過時輸入維持 COMPLETED。
   - 方向：以同一 plan 的最新已驗證 checkpoint 比對，而非只看 parent 鏈。

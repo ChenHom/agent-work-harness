@@ -270,6 +270,32 @@ test('artifact replacement marks completed downstream milestones stale with depe
   }
 });
 
+test('parentless checkpoint compares artifacts with the latest validated checkpoint in its plan', () => {
+  const h = fixture();
+  try {
+    h.store.setMilestoneStatus(h.activePlanId, 'M-2', 'COMPLETED', 'A-2');
+    const firstArtifact = h.store.putArtifact('checkpoint_output', 'first build', 'txt');
+    h.checkpoints.create({
+      workId: h.work.id, planId: h.activePlanId, milestoneId: 'M-1',
+      artifacts: [{ artifactId: firstArtifact.id, logicalName: 'build', producerMilestoneId: 'M-1' }],
+      validationStatus: 'validated', validationEvidenceIds: [],
+    });
+
+    const replacementArtifact = h.store.putArtifact('checkpoint_output', 'replacement build', 'txt');
+    h.checkpoints.create({
+      workId: h.work.id, planId: h.activePlanId, milestoneId: 'M-1',
+      artifacts: [{ artifactId: replacementArtifact.id, logicalName: 'build', producerMilestoneId: 'M-1' }],
+      validationStatus: 'validated', validationEvidenceIds: [],
+    });
+
+    assert.equal(h.store.getMilestone(h.activePlanId, 'M-2')?.status, 'STALE');
+    assert.match(h.store.getMilestone(h.activePlanId, 'M-2')?.staleReason ?? '', /M-1 -> M-2/);
+  } finally {
+    h.store.close();
+    rmSync(h.base, { recursive: true, force: true });
+  }
+});
+
 test('G2 acceptance: real harness workspace forks a two-milestone checkpoint without rewriting history', () => {
   const base = mkdtempSync(join(tmpdir(), 'harness-g2-'));
   const store = new Store(join(base, 'state'));

@@ -189,18 +189,14 @@ export class CheckpointService {
   }
 
   private findArtifactReplacements(checkpoint: LogicalCheckpoint): ArtifactReplacement[] {
-    if (!checkpoint.parentCheckpointId) return [];
-    const ancestors: LogicalCheckpoint[] = [];
-    let currentId: string | undefined = checkpoint.parentCheckpointId;
-    while (currentId) {
-      const current = this.store.getCheckpoint(currentId);
-      if (!current || current.workId !== checkpoint.workId || current.branchId !== checkpoint.branchId) break;
-      ancestors.push(current);
-      currentId = current.parentCheckpointId;
-    }
+    const previousCheckpoints = this.store.listCheckpoints(checkpoint.workId)
+      .filter((candidate) => candidate.planId === checkpoint.planId
+        && candidate.branchId === checkpoint.branchId
+        && candidate.validationStatus === 'validated')
+      .reverse();
     return checkpoint.artifactManifest.flatMap((entry) => {
       if (!entry.producerMilestoneId) return [];
-      const previous = ancestors
+      const previous = previousCheckpoints
         .flatMap((ancestor) => ancestor.artifactManifest)
         .find((candidate) => candidate.producerMilestoneId === entry.producerMilestoneId
           && candidate.logicalName === entry.logicalName);
