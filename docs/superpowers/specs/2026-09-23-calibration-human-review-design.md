@@ -12,21 +12,23 @@
 
 ## 產出
 
-建立 `docs/calibration-review-2026-09-23.1.md`，依原始 JSONL 順序列出全部 12 筆 case。每筆包含：
+建立 `docs/calibration-review-2026-09-23.1.md`，依原始 JSONL 順序列出全部 12 筆 case。人類閱讀的
+敘述一律使用正體中文，case ID、程式碼、檔名、指令及 schema 值保留原文。每筆包含：
 
 - `caseId` 與 task type。
-- criterion 原文。
-- artifact text 原文。
-- 現有 proposed verdict（`pass` 或 `fail`）與 rationale。
+- criterion 的正體中文忠實翻譯。
+- artifact text 的正體中文忠實翻譯。
+- 現有 proposed verdict（`pass` 或 `fail`）與 rationale 的正體中文呈現。
 - 尚未填入的 human decision 欄位。
 
-審閱表只投影原始 fixture，不修改 criterion、artifact、verdict 或 rationale，也不把文件本身當成
-完成審閱的 authority。
+審閱表只投影原始 fixture，不修改 JSONL 內的 criterion、artifact、verdict 或 rationale，也不把文件
+本身當成完成審閱的 authority。驗證以 case ID、順序、數量及判定值核對結構；翻譯內容另做逐筆校對。
 
 ## 使用方式
 
 使用者透過對話回覆「12 筆全部核准」，或列出例外，例如 `code-03 改為 pass` 並提供理由。
-不要求使用者直接編輯 JSONL。若回覆有歧義，相關 case 保持未核准。
+不要求使用者直接編輯 JSONL。若回覆有歧義，相關 case 保持未核准。無法判定時必須明確標記
+「無法確認」並附原因，不能留白，也不能把 `expected` 改為 schema 不接受的空值或 `unknown`。
 
 收到明確決定後，另一次變更才會：
 

@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Produce a complete, source-faithful Markdown review sheet for a human to approve, modify, or leave undecided for all 12 calibration cases.
+**Goal:** Produce a complete Traditional Chinese Markdown review sheet for a human to approve, modify, or leave undecided for all 12 calibration cases.
 
-**Architecture:** The review sheet is a read-only projection of `test/fixtures/evaluation/labels.jsonl`; it does not alter labels or provenance. Each case receives a stable section with the original criterion, artifact, proposed verdict, rationale, and an empty human-decision field. Human decisions arrive later through the conversation and are applied in a separate change.
+**Architecture:** The review sheet is a read-only projection of `test/fixtures/evaluation/labels.jsonl`; it does not alter labels or provenance. Human-facing descriptions use Traditional Chinese while stable IDs, code, filenames, commands, and schema values remain unchanged. Human decisions arrive later through the conversation and are applied in a separate change.
 
 **Tech Stack:** Markdown, JSONL fixtures, ripgrep, Git.
 
@@ -149,3 +149,21 @@ Use:
 - [x] **Step 2: Stop before editing the fixture**
 
 Do not modify `test/fixtures/evaluation/labels.jsonl`, the follow-up checkbox, or acceptance evidence until the user supplies explicit human decisions for the cases.
+
+### Task 4: Localize the review sheet to Traditional Chinese
+
+**Files:**
+- Modify: `docs/calibration-review-2026-09-23.1.md`
+- Modify: `docs/superpowers/specs/2026-09-23-calibration-human-review-design.md`
+
+- [x] **Step 1: Translate human-facing content**
+
+Translate instructions, task types, criteria, artifact descriptions, verdict labels, rationales, and response examples into Traditional Chinese. Preserve case IDs, code, filenames, commands, and `pass`／`fail` schema values.
+
+- [x] **Step 2: Preserve the authority boundary**
+
+Keep all 12 decisions at `尚未審閱`; do not modify `test/fixtures/evaluation/labels.jsonl` or claim `human-review` provenance. An unable-to-confirm decision must be explicit and include a reason; it never becomes a blank or `unknown` fixture value.
+
+- [x] **Step 3: Verify localized structure and repository cleanliness**
+
+Confirm all 12 case IDs occur once, all 12 decisions remain undecided, the proposed verdict mapping remains 5 `pass` and 7 `fail`, and `git diff --check` exits 0.
