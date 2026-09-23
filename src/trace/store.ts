@@ -1,8 +1,9 @@
 import { DatabaseSync } from 'node:sqlite';
 import {
-  closeSync, constants, existsSync, fstatSync, fsyncSync, mkdirSync, openSync, readFileSync, renameSync,
+  closeSync, constants, existsSync, fstatSync, fsyncSync, mkdirSync, mkdtempSync, openSync, readFileSync, renameSync,
   rmSync, writeFileSync,
 } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { createHash, randomUUID } from 'node:crypto';
@@ -72,6 +73,8 @@ function canonicalJson(value: unknown): string {
 
 export class Store {
   readonly db: DatabaseSync;
+  /** Private migrated copy used when an older schema is opened read-only; removed on close. */
+  private readonly snapshotDir: string | undefined;
   readonly artifactDir: string;
   private readonly readOnly: boolean;
   private inTransaction = false;
@@ -97,8 +100,20 @@ export class Store {
           throw new Error(`SCHEMA_TOO_NEW: database version ${version}, supported ${CURRENT_SCHEMA_VERSION}`);
         }
         if (version === CURRENT_SCHEMA_VERSION) validateSchema(this.db);
+        else {
+          // Read-only commands query newer tables and columns, but the file must not be migrated here.
+          // Read from a migrated private snapshot instead, reopened read-only so no write can land in it.
+          this.snapshotDir = mkdtempSync(join(tmpdir(), 'harness-readonly-'));
+          const snapshot = join(this.snapshotDir, 'harness.db');
+          this.db.prepare('vacuum into ?').run(snapshot);
+          this.db.close();
+          const migrating = new DatabaseSync(snapshot);
+          try { migrate(migrating); } finally { migrating.close(); }
+          this.db = new DatabaseSync(snapshot, { readOnly: true });
+        }
       } catch (error) {
-        this.db.close();
+        if (this.db.isOpen) this.db.close();
+        if (this.snapshotDir) rmSync(this.snapshotDir, { recursive: true, force: true });
         throw error;
       }
     } else {
@@ -118,7 +133,10 @@ export class Store {
       .some((column) => column.name === 'evidence_ids');
   }
 
-  close(): void { this.db.close(); }
+  close(): void {
+    this.db.close();
+    if (this.snapshotDir) rmSync(this.snapshotDir, { recursive: true, force: true });
+  }
 
   /** DB-only callback: no filesystem, process, network, or other asynchronous work. */
   withTransaction<T>(fn: () => T): T {

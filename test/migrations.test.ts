@@ -341,17 +341,30 @@ test('read-only open does not migrate a v0 database', () => {
   `);
   legacy.close();
 
+  const snapshots = () => readdirSync(tmpdir()).filter((name) => name.startsWith('harness-readonly-')).length;
+  const before = snapshots();
   const store = new Store(state, { readOnly: true });
   try {
     assert.equal(store.getWork('W')?.title, 'legacy');
-    assert.equal((store.db.prepare('pragma user_version').get() as { user_version: number }).user_version, 0);
-    assert.equal(store.db.prepare(`
-      select name from sqlite_master where type = 'table' and name = 'recovery_sessions'
-    `).get(), undefined);
+    // Queries against tables added after v0 answer from a migrated private snapshot instead of crashing.
+    assert.equal(store.getActivePlan('W'), null);
+    assert.equal(store.readVerifiedArtifact('AR-none').status, 'missing');
+    assert.throws(() => store.insertWork({ id: 'W2', title: 'x', repositoryId: 'r', workspace: '/r', state: 'ACTIVE',
+      currentContractVersion: 1, retryBudget: 0, createdAt: 't' }), /readonly/i);
+    const check = new DatabaseSync(path, { readOnly: true });
+    try {
+      assert.equal((check.prepare('pragma user_version').get() as { user_version: number }).user_version, 0);
+      assert.equal(check.prepare(`
+        select name from sqlite_master where type = 'table' and name = 'recovery_sessions'
+      `).get(), undefined);
+    } finally {
+      check.close();
+    }
   } finally {
     store.close();
     rmSync(state, { recursive: true, force: true });
   }
+  assert.equal(snapshots(), before, 'the private snapshot is removed on close');
 });
 
 test('malformed v0 schema is rejected without advancing user_version', () => {

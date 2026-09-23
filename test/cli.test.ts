@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { DatabaseSync } from 'node:sqlite';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
@@ -430,5 +431,31 @@ test('P5 CLI inspects evaluations and replay, runs reports, previews/applies GC,
   } finally {
     h.cleanup();
     rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('read-only commands work on a pre-v7 database without migrating the file', async () => {
+  const state = mkdtempSync(join(tmpdir(), 'harness-cli-legacy-'));
+  try {
+    const seed = new Store(state);
+    seed.insertWork({ id: 'W-LEGACY', title: 'legacy work', repositoryId: 'repo', workspace: state, state: 'ACTIVE',
+      currentContractVersion: 1, retryBudget: 1, createdAt: '2026-09-20T00:00:00.000Z' });
+    seed.insertContract({ id: 'C-LEGACY', workId: 'W-LEGACY', version: 1, request: 'legacy request', mode: 'write',
+      constraints: [], deniedPaths: [], successCriteria: ['done'], sourceMessageIds: [], createdAt: '2026-09-20T00:00:00.000Z' });
+    // Downgrade to what an older harness left behind: no plan or tombstone tables, user_version 0.
+    seed.db.exec('drop table plans; drop table milestones; drop table checkpoints; drop table artifact_tombstones; drop table gc_runs; pragma user_version = 0;');
+    seed.close();
+
+    assert.match(await runCli(state, ['show', 'W-LEGACY']), /legacy request/);
+    assert.match(await runCli(state, ['list']), /W-LEGACY/);
+    const check = new DatabaseSync(join(state, 'harness.db'), { readOnly: true });
+    try {
+      assert.equal((check.prepare('pragma user_version').get() as { user_version: number }).user_version, 0);
+      assert.equal(check.prepare("select 1 from sqlite_master where name = 'plans'").get(), undefined);
+    } finally {
+      check.close();
+    }
+  } finally {
+    rmSync(state, { recursive: true, force: true });
   }
 });
