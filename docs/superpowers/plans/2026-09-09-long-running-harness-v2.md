@@ -453,9 +453,9 @@ callback 重複亂序只處理一次有效狀態轉移；deadline 經重啟仍�
 先執行 P1 Task 1–7，每個提交都能獨立驗證。
 P1／P2／P3／P4／P5 已各自完成實作與 gate。P5 的細部計畫與證據見
 [P5 evaluation/retention plan](2026-09-23-p5-evaluation-retention.md)、`test/g5-acceptance.test.ts` 與
-[evaluation/retention runbook](../../runbooks/evaluation-retention.md)。P5 的校準標註集
-`2026-09-23.1` 由 fixture 作者手寫、尚未經人工審閱；對 Claude 系 critic 的校準結果在人工審閱前
-只能視為較弱的證據。
+[evaluation/retention runbook](../../runbooks/evaluation-retention.md)。P5 的 fixture-authored 校準標註集
+`2026-09-23.1` 已由 workspace owner 逐筆審閱，審閱結果以 `2026-09-23.2` 保存並標為
+`human-review` provenance。
 P1–P5 合併後的下一步（code review 剩餘項目、待決定事項與環境步驟）見
 [review 後續處理計畫](2026-09-23-review-followups.md)。
 

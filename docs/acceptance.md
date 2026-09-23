@@ -162,8 +162,8 @@ G5 fixture 在同一個 store 內依序證明：critic 對另一個 artifact 的
 給出誤收／誤拒與分母，recovery 報告保留 failed／unknown／waiting_user／budget_blocked 與人工解決的 run。
 
 限制：recovery-v1 是本機 fake provider 的故障注入，不代表真實 provider 的延遲或失效分布；其中
-`manually_resolved` 由 fake provider ledger 模擬獨立人工查核。校準標註集 `2026-09-23.1`
-由 fixture 作者（Claude Code session）手寫，尚未經人工審閱。備份還原是同一主機的檔案層演練，
+`manually_resolved` 由 fake provider ledger 模擬獨立人工查核。校準標註集 `2026-09-23.2`
+的 12 筆標註已由 workspace owner 逐筆審閱，provenance 為 `human-review`。備份還原是同一主機的檔案層演練，
 不代表異地備份、權限控管或排程已在 production 就緒。
 
 量測（同一主機，2026-09-23）：recovery-v1 seed 1、64 runs，latency p50 7.97 ms／p99 25.41 ms、

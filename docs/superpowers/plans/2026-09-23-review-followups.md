@@ -68,7 +68,8 @@
 
 ## P5 留下的限制（非 bug，列入考量）
 
-- [ ] 校準標註集 `2026-09-23.1` 由 fixture 作者（Claude Code session）手寫，尚未人工審閱；審閱後將 provenance 改為 `human-review`。
+- [x] 校準標註集 `2026-09-23.1` 的 12 筆標註已由 workspace owner 逐筆審閱；結果以新 corpus 版本
+  `2026-09-23.2` 保存，provenance 為 `human-review`，審閱紀錄見 `docs/calibration-review-2026-09-23.1.md`。
 - [x] Recovery benchmark 無法產生 `manually_resolved` run：已新增具 human-review authority、artifact 與預算原子結算的
   `WAITING_USER` resolution API／CLI，benchmark 會走此路徑。Security review 後將 authority 改為獨立呼叫參數；
   resolution JSON 的 audit reference 不能自行把內容提升為 `human-review` authority。

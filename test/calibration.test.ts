@@ -43,8 +43,10 @@ const line = (overrides: Record<string, unknown>): string => JSON.stringify({ ..
 
 test('fixed label corpus is versioned, independent, and covers pass and fail per task type', () => {
   assert.equal(corpus.length, 12);
-  assert.ok(corpus.every((labeled) => labeled.corpusVersion === '2026-09-23.1' && labeled.fixtureVersion === '1'));
-  assert.ok(corpus.every((labeled) => labeled.provenance.source === 'fixture-author'));
+  assert.ok(corpus.every((labeled) => labeled.corpusVersion === '2026-09-23.2' && labeled.fixtureVersion === '1'));
+  assert.ok(corpus.every((labeled) => labeled.provenance.source === 'human-review'
+    && labeled.provenance.author === 'workspace-owner'
+    && labeled.provenance.labeledAt === '2026-09-23'));
   for (const taskType of ['code-change', 'doc-update', 'config-change']) {
     const expected = new Set(corpus.filter((labeled) => labeled.taskType === taskType).map((labeled) => labeled.expected));
     assert.deepEqual([...expected].sort(), ['fail', 'pass'], taskType);
@@ -58,7 +60,7 @@ test('calibration reports false accept, false reject, abstention, and confusion 
       caseId: labeled.caseId, verdict: verdictFor(labeled, abstainingCritic, 'unknown', 'EVALUATOR_ABSTAINED'),
     })),
   }]);
-  assert.equal(report.corpusVersion, '2026-09-23.1');
+  assert.equal(report.corpusVersion, '2026-09-23.2');
   assert.deepEqual(report.fixtureVersions, ['1']);
   const summary = report.groups.map((group) => ({
     evaluator: `${group.evaluator.name}@${group.evaluator.version}`, taskType: group.taskType, cases: group.cases,

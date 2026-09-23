@@ -14,7 +14,7 @@ Trigger: a completion later found wrong (`harness note <workId> false-accept ...
 ## Oracle and version changes
 
 - The label corpus (`test/fixtures/evaluation/labels.jsonl`) is the calibration oracle. Only `human-review` and `fixture-author` provenance is accepted; model-produced labels and labels authored by the evaluator under test are rejected (`CALIBRATION_LABEL_NOT_INDEPENDENT`).
-- The shipped corpus `2026-09-23.1` was hand-written by the fixture author (a Claude Code session), not human-reviewed. Before calibrating a Claude-based critic against it, have a human review each case and relabel its provenance `human-review`; until then treat such results as weaker evidence.
+- The shipped corpus `2026-09-23.2` contains the same 12 cases as fixture-authored version `2026-09-23.1`, with every expected verdict independently reviewed by the workspace owner. Its provenance is `human-review`; the completed review record is `docs/calibration-review-2026-09-23.1.md`.
 - Changing a label, adding cases, or changing a rationale requires a new `corpusVersion`. Never mix versions in one file (`CALIBRATION_CORPUS_VERSION_MIXED`).
 - Changing a critic's prompt, model, provider, or configuration requires a new evaluator `version`/`configHash`. Calibration groups are keyed by evaluator identity, so old and new results never merge.
 - Run `harness report calibration <labels.jsonl> <predictions.jsonl>` and compare `falseAccept`, `falseReject`, and `abstention` per task type with explicit denominators. A `null` rate means the denominator is zero, not zero error. There is deliberately no combined score.

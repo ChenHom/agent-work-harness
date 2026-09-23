@@ -167,3 +167,33 @@ Keep all 12 decisions at `尚未審閱`; do not modify `test/fixtures/evaluation
 - [x] **Step 3: Verify localized structure and repository cleanliness**
 
 Confirm all 12 case IDs occur once, all 12 decisions remain undecided, the proposed verdict mapping remains 5 `pass` and 7 `fail`, and `git diff --check` exits 0.
+
+### Task 5: Apply explicit human decisions to a new corpus version
+
+**Files:**
+- Modify: `test/fixtures/evaluation/labels.jsonl`
+- Modify: `test/calibration.test.ts`
+- Modify: `docs/calibration-review-2026-09-23.1.md`
+- Modify: `docs/acceptance.md`
+- Modify: `docs/runbooks/evaluation-retention.md`
+- Modify: `docs/superpowers/plans/2026-09-23-review-followups.md`
+
+- [x] **Step 1: Parse and validate all human decisions**
+
+Normalize decision casing and confirm all 12 entries are explicit `pass`／`fail`, none are blank or unable to confirm, and every decision matches its proposed verdict.
+
+- [x] **Step 2: Require human-reviewed provenance in the calibration test**
+
+Update the corpus test to require version `2026-09-23.2`, `source: human-review`, `author: workspace-owner`, and the review date. Run it before updating the fixture and confirm it fails.
+
+- [x] **Step 3: Apply provenance without rewriting approved labels**
+
+Keep every criterion, artifact, expected verdict, and rationale unchanged; bump `corpusVersion` to `2026-09-23.2` and set the reviewed provenance on all 12 cases. Preserve the two additional human notes in the review record.
+
+- [x] **Step 4: Update current documentation**
+
+Record the reviewed corpus version and evidence, and mark the human-review follow-up complete without changing the offsite-backup limitation.
+
+- [x] **Step 5: Verify calibration and the complete repository gate**
+
+Run the calibration tests, validate the review-to-fixture mapping, run `npm run check`, and commit only after all checks pass.
