@@ -12,6 +12,7 @@ import type {
 import type { RuntimeExecutionState } from '../src/durable/runtime-state.ts';
 import { createDurableWorker } from '../src/durable/worker.ts';
 import { FakeProvider } from '../src/tools/fake-provider.ts';
+import { Store } from '../src/trace/store.ts';
 
 async function waitForStatus(
   handle: { query<R>(name: string): Promise<R> },
@@ -29,6 +30,27 @@ async function waitForStatus(
     await delay(20);
   }
   throw new Error(`workflow did not reach ${expected}: ${String(last)}`);
+}
+
+async function waitForOperationStatus(
+  stateDir: string,
+  workId: string,
+  expected: string,
+): Promise<void> {
+  let last = 'missing';
+  for (let attempt = 0; attempt < 150; attempt += 1) {
+    try {
+      const store = new Store(stateDir, { readOnly: true });
+      try {
+        last = store.listOperations(workId).at(-1)?.status ?? 'missing';
+        if (last === expected) return;
+      } finally { store.close(); }
+    } catch (error) {
+      last = String(error);
+    }
+    await delay(20);
+  }
+  throw new Error(`operation did not reach ${expected}: ${last}`);
 }
 
 test('cancellation quiesces dispatch, unknown delivery, reconciliation, and compensation', {
@@ -71,6 +93,7 @@ test('cancellation quiesces dispatch, unknown delivery, reconciliation, and comp
   try {
     const dispatchHandle = await start('dispatch', { dispatchDelayMs: 350 });
     await waitForStatus(dispatchHandle, 'DISPATCHING');
+    await waitForOperationStatus(stateDir, 'W-cancel-dispatch', 'DISPATCHED');
     await cancel(dispatchHandle);
     const dispatchResult = await dispatchHandle.result() as DurableWorkflowResult;
     assert.equal(dispatchResult.status, 'CANCELLED');
