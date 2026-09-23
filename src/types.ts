@@ -171,6 +171,71 @@ export interface LogicalCheckpoint {
   createdAt: string;
 }
 
+type CriterionKind = 'mechanical' | 'semantic' | 'hard_constraint';
+type CriterionVerdict = 'pass' | 'fail' | 'unknown';
+
+export interface ArtifactBinding {
+  artifactId: string;
+  sha256: string;
+}
+
+export interface ArtifactObservation extends ArtifactBinding {
+  status: 'verified' | 'missing' | 'corrupt';
+}
+
+export interface ValidatorIdentity {
+  name: string;
+  version: string;
+  configHash: string;
+}
+
+export interface CriterionDefinition {
+  schemaVersion: '1';
+  id: string;
+  version: number;
+  description: string;
+  kind: CriterionKind;
+  required: boolean;
+  artifactBindings: ArtifactBinding[];
+  validator: ValidatorIdentity;
+}
+
+export type CriterionReasonCode =
+  | 'VALIDATED'
+  | 'VALIDATION_FAILED'
+  | 'EVALUATOR_ABSTAINED'
+  | 'CRITERION_MISMATCH'
+  | 'CRITERION_VERSION_MISMATCH'
+  | 'CRITERION_AUTHORITY_MISMATCH'
+  | 'VALIDATOR_MISMATCH'
+  | 'ARTIFACT_BINDING_MISMATCH'
+  | 'ARTIFACT_MISSING'
+  | 'ARTIFACT_CORRUPT'
+  | 'ARTIFACT_HASH_MISMATCH';
+
+export interface CriterionVerdictRecord {
+  schemaVersion: '1';
+  criterionId: string;
+  criterionVersion: number;
+  kind: CriterionKind;
+  required: boolean;
+  artifactBindings: ArtifactBinding[];
+  validator: ValidatorIdentity;
+  verdict: CriterionVerdict;
+  reasonCode: CriterionReasonCode;
+  reason: string;
+  evidenceArtifactIds: string[];
+  /** Diagnostic only. The completion policy never reads or aggregates it. */
+  confidence?: number;
+}
+
+export interface GlobalCriterionDecision {
+  policyVersion: '1';
+  verdict: CriterionVerdict;
+  canComplete: boolean;
+  reasonCodes: Array<CriterionReasonCode | 'MISSING_VERDICT' | 'DUPLICATE_VERDICT'>;
+}
+
 type OperationStatus =
   | 'PREPARED' | 'DISPATCHED' | 'SUCCEEDED' | 'FAILED'
   | 'UNKNOWN' | 'RECONCILING' | 'WAITING_USER';

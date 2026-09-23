@@ -29,12 +29,12 @@ The completion authority must satisfy all of the following:
 
 **Files:** `src/types.ts`, `src/evaluation/criteria.ts`, `test/criteria.test.ts`
 
-- [ ] Define versioned criterion, artifact binding, validator identity, criterion verdict, and global verdict types. Keep semantic confidence informational and out of the completion rule.
-- [ ] Validate exact criterion ID/version, required/hard flags, validator name/version/config hash, and artifact ID/SHA-256 bindings before accepting a verdict.
-- [ ] Convert evaluator abstention and missing/corrupt/mismatched evidence to `unknown` with structured reason codes.
-- [ ] Implement the fixed global rule: required/hard `fail` wins; otherwise required `unknown` or missing verdict blocks completion; only all required `pass` may produce global `pass`.
-- [ ] Prove “criterion A requested, artifact B delivered” is rejected, optional results cannot mask a hard failure, duplicate/conflicting verdicts fail closed, and no average score participates.
-- [ ] Run `node --test test/criteria.test.ts`, one full `npm run check`, review this task against Gate 0, and commit.
+- [x] Define versioned criterion, artifact binding, validator identity, criterion verdict, and global verdict types. Keep semantic confidence informational and out of the completion rule.
+- [x] Validate exact criterion ID/version, required/hard flags, validator name/version/config hash, and artifact ID/SHA-256 bindings before accepting a verdict.
+- [x] Convert evaluator abstention and missing/corrupt/mismatched evidence to `unknown` with structured reason codes.
+- [x] Implement the fixed global rule: required/hard `fail` wins; otherwise required `unknown` or missing verdict blocks completion; only all required `pass` may produce global `pass`.
+- [x] Prove “criterion A requested, artifact B delivered” is rejected, optional results cannot mask a hard failure, duplicate/conflicting verdicts fail closed, and no average score participates.
+- [x] Run `node --test test/criteria.test.ts`, one full `npm run check`, review this task against Gate 0, and commit.
 
 ## Task 2: Durable evaluation ledger and atomic completion gate
 
