@@ -148,6 +148,7 @@ export class CodexDriver {
         : { phase: 'unknown', child: null, quiesced: false });
 
       let stdout = '', stderr = '', timedOut = false;
+      let stdinError: NodeJS.ErrnoException | null = null;
       let finished = false;
       const cap = this.policy.maxOutputBytes;
       const append = (buf: Buffer, cur: string): string =>
@@ -155,6 +156,10 @@ export class CodexDriver {
 
       child.stdout.on('data', (b: Buffer) => { stdout = append(b, stdout); });
       child.stderr.on('data', (b: Buffer) => { stderr = append(b, stderr); });
+      child.stdin.on('error', (error: NodeJS.ErrnoException) => {
+        stdinError = error;
+        stderr += `\nstdin error: ${error.code ?? 'UNKNOWN'}: ${error.message}`;
+      });
       child.stdin.write(readFileSync(run.promptPath));
       child.stdin.end();
 
@@ -167,7 +172,10 @@ export class CodexDriver {
         notify({ phase: 'stopped', child: identity, quiesced: true });
         const lastMessage = existsSync(run.lastMessagePath) ? readFileSync(run.lastMessagePath, 'utf8') : '';
         writeFileSync(run.logPath, `--- stdout ---\n${stdout}\n--- stderr ---\n${stderr}\n`);
-        resolve({ exitCode, signal, timedOut, stdout, stderr, lastMessage, durationMs: Date.now() - started });
+        resolve({
+          exitCode: stdinError ? null : exitCode,
+          signal, timedOut, stdout, stderr, lastMessage, durationMs: Date.now() - started,
+        });
       };
 
       child.on('error', (e) => {

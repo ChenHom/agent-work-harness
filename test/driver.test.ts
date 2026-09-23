@@ -123,6 +123,26 @@ test('spawn error and close produce only one stopped receipt', async () => {
   rmSync(base, { recursive: true, force: true });
 });
 
+test('stdin EPIPE becomes a runtime failure result instead of crashing the harness', async () => {
+  const base = mkdtempSync(join(tmpdir(), 'harness-drv-'));
+  const promptPath = join(base, 'prompt.txt');
+  writeFileSync(promptPath, Buffer.alloc(8 * 1024 * 1024, 'x'));
+  const phases: string[] = [];
+
+  const result = await new CodexDriver({ ...policyIn(base), codexBin: '/bin/true' }).run({
+    attemptDir: base,
+    promptPath,
+    lastMessagePath: join(base, 'last.json'),
+    logPath: join(base, 'runtime.log'),
+    argv: [], env: process.env, cwd: base,
+  }, (state) => phases.push(state.phase));
+
+  assert.equal(result.exitCode, null);
+  assert.match(result.stderr, /stdin error:.*EPIPE/);
+  assert.equal(phases.at(-1), 'stopped');
+  rmSync(base, { recursive: true, force: true });
+});
+
 test('a rejected launching receipt prevents spawning the child', async () => {
   const base = mkdtempSync(join(tmpdir(), 'harness-drv-'));
   const marker = join(base, 'spawned');
