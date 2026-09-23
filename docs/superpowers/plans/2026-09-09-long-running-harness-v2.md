@@ -456,6 +456,8 @@ P1／P2／P3／P4／P5 已各自完成實作與 gate。P5 的細部計畫與證�
 [evaluation/retention runbook](../../runbooks/evaluation-retention.md)。P5 的校準標註集
 `2026-09-23.1` 由 fixture 作者手寫、尚未經人工審閱；對 Claude 系 critic 的校準結果在人工審閱前
 只能視為較弱的證據。
+P1–P5 合併後的下一步（code review 剩餘項目、待決定事項與環境步驟）見
+[review 後續處理計畫](2026-09-23-review-followups.md)。
 
 本輪文件驗證只包含來源對照、章節與 review 覆蓋、相對連結與 diff 檢查。
 P4 的實作與 G4 證據見獨立 P4 plan、`test/g4-acceptance.test.ts` 與 operations runbook。
