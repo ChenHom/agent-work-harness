@@ -50,7 +50,7 @@
   - `src/orchestrator.ts:604`：plan 已完成（evaluation gate 讓 Work 停在 VERIFYING）時 `harness retry` 丟 PLAN_NOT_ACTIVE；
     重新規劃改了 milestone 名稱時丟 PLAN_MILESTONE_INVALID。
   - 方向：只有上一個 milestone 仍屬啟用中的 plan 才沿用；否則要求 `--milestone` 並給明確訊息，或在沒有 plan 時走無 milestone 路徑。
-- [ ] **#15 checkout 路徑含空白或中文時 worker 起不來**（讀碼）
+- [x] **#15 checkout 路徑含空白或中文時 worker 起不來**（已重現、修正並做 manual mutation）
   - `src/durable/worker.ts:19`：`new URL(...).pathname` 保留百分比編碼；改用 `fileURLToPath`。
 
 ## 需要決定
