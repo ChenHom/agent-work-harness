@@ -138,7 +138,7 @@ The commit body records that this is review material only and does not establish
 **Files:**
 - Read: `docs/calibration-review-2026-09-23.1.md`
 
-- [ ] **Step 1: Give the user the absolute clickable path**
+- [x] **Step 1: Give the user the absolute clickable path**
 
 Use:
 
@@ -146,6 +146,6 @@ Use:
 /home/hom/code/harness/.worktrees/five-wave-hardening/docs/calibration-review-2026-09-23.1.md
 ```
 
-- [ ] **Step 2: Stop before editing the fixture**
+- [x] **Step 2: Stop before editing the fixture**
 
 Do not modify `test/fixtures/evaluation/labels.jsonl`, the follow-up checkbox, or acceptance evidence until the user supplies explicit human decisions for the cases.
