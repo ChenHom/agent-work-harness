@@ -91,3 +91,48 @@ test('planner, executor, and critic identities retain versioned model config and
       evaluationRunId: 'ER-planner', verdict: h.candidate, createdAt: at }), /EVALUATION_ROLE_INVALID/);
   } finally { h.store.close(); rmSync(h.state, { recursive: true, force: true }); }
 });
+
+test('a failed critic call resolves its dispatch and budget instead of holding them forever', () => {
+  const h = evaluationFixture();
+  try {
+    h.store.insertEvaluationContract(h.contract);
+    const ledger = new BudgetLedger(h.store);
+    const limit = ledger.configureLimit({ workId: h.work.id, resourceKind: 'critic_tokens', currency: 'TOK',
+      limitUnits: 100, pricingVersion: 'p1' });
+    const model = validateModelRoleConfig({
+      schemaVersion: '1', role: 'critic', provider: 'provider', model: 'model-v2',
+      configVersion: 'prompt-v4', configHash: 'a'.repeat(64),
+      budget: { resourceKind: 'critic_tokens', currency: 'TOK', upperBoundUnits: 20, pricingVersion: 'p1' },
+    });
+    const failedRun = (id: string, cost: EvaluationRun['evaluator']['cost']): EvaluationRun => ({
+      schemaVersion: '1', id, workId: h.work.id, contractId: h.contract.id,
+      evaluator: { role: 'critic', name: 'semantic-critic', version: 'critic-1', provider: 'provider',
+        model: 'model-v2', configVersion: 'prompt-v4', configHash: 'a'.repeat(64), cost },
+      status: 'FAILED', startedAt: at, completedAt: at,
+    });
+    const reserve = (minute: number) => {
+      const scheduler = new CriticScheduler(h.store, ledger, () => `2026-09-23T02:0${minute}:00.000Z`);
+      const scheduled = scheduler.reserve({ id: `CDIS-FAIL-${minute}`, evaluationRunId: `ER-FAIL-${minute}`, workId: h.work.id,
+        contractId: h.contract.id, trigger: { type: 'tool_failure', eventId: `EV-FAIL-${minute}` },
+        policy: { cooldownMs: 0, periodicIntervalMs: 1, maxInvocations: 3 }, model });
+      assert.equal(scheduled.status, 'scheduled');
+      return { scheduler, dispatch: scheduled.dispatch };
+    };
+
+    // Provider confirmed nothing was billed: the reservation is released back to the budget.
+    const first = reserve(0);
+    assert.throws(() => first.scheduler.complete(first.dispatch.id, failedRun('ER-FAIL-0', { status: 'exact', units: 0, currency: 'TOK' })),
+      /CRITIC_RESULT_INVALID_STATE: FAILED/);
+    assert.equal(first.scheduler.fail(first.dispatch.id, failedRun('ER-FAIL-0', { status: 'exact', units: 0, currency: 'TOK' })).status, 'FAILED');
+    assert.equal(h.store.getCriticDispatch(first.dispatch.id)?.status, 'FAILED');
+    assert.equal(h.store.getEvaluationRun('ER-FAIL-0')?.status, 'FAILED');
+    assert.deepEqual(ledger.summary(limit.id), { limitUnits: 100, reservedUnits: 0, spentUnits: 0, availableUnits: 100 });
+
+    // Timeout with unknown billing: never silently released.
+    const second = reserve(1);
+    second.scheduler.fail(second.dispatch.id, failedRun('ER-FAIL-1', { status: 'unknown', currency: 'TOK' }));
+    assert.equal(h.store.getBudgetReservation(second.dispatch.reservationId)?.status, 'UNKNOWN');
+    assert.throws(() => second.scheduler.fail(second.dispatch.id, failedRun('ER-FAIL-1', { status: 'unknown', currency: 'TOK' })),
+      /CRITIC_DISPATCH_INVALID_STATE/);
+  } finally { h.store.close(); rmSync(h.state, { recursive: true, force: true }); }
+});

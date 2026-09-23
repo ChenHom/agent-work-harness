@@ -106,6 +106,19 @@ export class CriticScheduler {
   }
 
   complete(dispatchId: string, run: EvaluationRun): CriticDispatch {
+    return this.finish(dispatchId, run, 'COMPLETED');
+  }
+
+  /**
+   * Records a critic call that produced no usable result, so its dispatch and budget never stay
+   * RESERVED/HELD. Exact cost (0 when the provider confirms no charge) settles; anything else is
+   * marked UNKNOWN, because a failed model call may still have been billed.
+   */
+  fail(dispatchId: string, run: EvaluationRun): CriticDispatch {
+    return this.finish(dispatchId, run, 'FAILED');
+  }
+
+  private finish(dispatchId: string, run: EvaluationRun, status: 'COMPLETED' | 'FAILED'): CriticDispatch {
     const dispatch = this.store.getCriticDispatch(dispatchId);
     if (!dispatch || dispatch.status !== 'RESERVED') {
       throw new Error(`CRITIC_DISPATCH_INVALID_STATE: ${dispatchId}`);
@@ -119,8 +132,8 @@ export class CriticScheduler {
       || run.evaluator.cost.currency !== dispatch.modelConfig.currency) {
       throw new Error('CRITIC_RESULT_IDENTITY_MISMATCH');
     }
-    if (run.status !== 'COMPLETED') throw new Error(`CRITIC_RESULT_INVALID_STATE: ${run.status}`);
-    const completed: CriticDispatch = { ...dispatch, status: 'COMPLETED', updatedAt: this.now() };
+    if (run.status !== status) throw new Error(`CRITIC_RESULT_INVALID_STATE: ${run.status}`);
+    const completed: CriticDispatch = { ...dispatch, status, updatedAt: this.now() };
     return this.store.withTransaction(() => {
       this.store.insertEvaluationRun(run);
       if (run.evaluator.cost.status === 'exact') {
