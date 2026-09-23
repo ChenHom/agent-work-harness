@@ -631,6 +631,19 @@ export class Orchestrator {
     const work = this.requireWork(workId);
     const attempt = this.store.listAttempts(workId).at(-1);
     if (!attempt) throw new Error('沒有 attempt 可恢復');
+    if (attempt.status === 'RUNNING') {
+      attempt.status = 'RECOVERY_REQUIRED';
+      attempt.endedAt = nowIso();
+      attempt.failureReason = 'OWNER_UNKNOWN: execution ownership was cleared before recovery';
+      this.store.withTransaction(() => {
+        this.store.updateAttempt(attempt);
+        this.store.setWorkState(workId, 'BLOCKED');
+        this.store.event('recovery.required', {
+          attemptId: attempt.id,
+          reason: attempt.failureReason,
+        }, workId, attempt.id);
+      });
+    }
     if (attempt.status !== 'RECOVERY_REQUIRED') {
       throw new Error(`RECOVERY_NOT_APPLICABLE: attempt ${attempt.id} status is ${attempt.status}`);
     }

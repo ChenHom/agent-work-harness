@@ -12,12 +12,13 @@
 
 ## 環境（合併後立即）
 
-- [ ] 主 checkout（`/home/hom/code/harness`）執行 `npm ci`：合併帶入 Temporal 相依，目前 `npm ls` 回報
-  `@temporalio/{activity,client,proto,testing}` missing。完成後在 `master` 跑一次 `npm run check` 留下證據。
+- [x] 隔離 checkout 執行 `npm ci` 並確認 Temporal 相依完整；2026-09-23 baseline `npm test` 為
+  389 pass、0 fail、0 skip。受限 sandbox 會讓測試內 `git init` 出現 `spawnSync git EPERM`，提交 gate
+  須在允許暫存子行程與本機 Temporal server 的環境執行。
 
 ## 第一組：會讓恢復失敗或效果重複（優先）
 
-- [ ] **#1＋#14 崩潰後 attempt 永遠卡在 RUNNING**（讀碼）
+- [x] **#1＋#14 崩潰後 attempt 永遠卡在 RUNNING**（已重現、修正並做 manual mutation）
   - `src/orchestrator.ts:634`：CLI 啟動時不再呼叫 `markCrashedAttempts`，也沒有替代；硬崩潰（SIGKILL、OOM、斷電）或
     `finalizeAttempt` 拋 STATE_CONFLICT 後，attempt 停在 RUNNING，`harness recover` 一律回 `RECOVERY_NOT_APPLICABLE`，
     `docs/usage.md` 的 OWNER_UNKNOWN 處理步驟走不通。

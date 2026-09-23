@@ -243,6 +243,26 @@ test('recover uses the original input snapshot and never reruns model or changed
   h.store.close(); rmSync(h.base, { recursive: true, force: true });
 });
 
+test('recover adopts a RUNNING attempt only after stale ownership has been removed', async () => {
+  const h = recoveryHarness();
+  const ids = await interruptedAttempt(h);
+  const attempt = h.store.getAttempt(ids.attemptId)!;
+  attempt.status = 'RUNNING';
+  attempt.endedAt = undefined;
+  attempt.failureReason = undefined;
+  h.store.updateAttempt(attempt);
+  h.store.setWorkState(ids.workId, 'RUNNING');
+
+  const report = await h.orch.recover(ids.workId);
+
+  assert.equal(report.decision.outcome, 'NEEDS_USER_DECISION');
+  assert.equal(h.store.getAttempt(ids.attemptId)!.status, 'RECOVERY_REQUIRED');
+  assert.equal(h.store.getWork(ids.workId)!.state, 'WAITING_USER');
+  assert.equal(h.store.listRecoverySessions(ids.workId).length, 1);
+  assert.equal(h.store.events(ids.workId).filter((event) => event.type === 'recovery.required').length, 2);
+  h.store.close(); rmSync(h.base, { recursive: true, force: true });
+});
+
 test('recover binds the attempt contract and blocks resumption under stricter current authority', async () => {
   const h = recoveryHarness();
   const ids = await interruptedAttempt(h);
@@ -305,7 +325,7 @@ test('recover rejects terminal attempts and an active owner before creating a se
   await assert.rejects(h.orch.recover(ids.workId), /RECOVERY_NOT_APPLICABLE/);
   assert.deepEqual(h.store.listRecoverySessions(ids.workId), []);
 
-  attempt.status = 'RECOVERY_REQUIRED';
+  attempt.status = 'RUNNING';
   attempt.phase = 'executing';
   h.store.updateAttempt(attempt);
   const owner = acquireExecutionOwnership(h.policy.stateDir);
@@ -315,6 +335,7 @@ test('recover rejects terminal attempts and an active owner before creating a se
       return true;
     });
     assert.deepEqual(h.store.listRecoverySessions(ids.workId), []);
+    assert.equal(h.store.getAttempt(ids.attemptId)!.status, 'RUNNING');
   } finally {
     owner.release();
     h.store.close(); rmSync(h.base, { recursive: true, force: true });
