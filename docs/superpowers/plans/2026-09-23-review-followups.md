@@ -55,11 +55,11 @@
 
 ## 需要決定
 
-- [ ] **#11 fork／重新規劃會把所有 milestone 重設為 PENDING**（讀碼）
+- [x] **#11 fork／重新規劃會把所有 milestone 重設為 PENDING**（決定維持保守語意，見 D-34）
   - `src/work/plans.ts:156`：未變動、已完成、且已記在 checkpoint 裡的 milestone 也要重跑；`harness answer` 提高 contract
     版本會讓 plan 過期而強制重新規劃，同樣歸零。
-  - **待使用者決定：** 這是刻意的保守設計（新 contract／新 plan 下重新驗證一切），還是應沿用 checkpoint 內已驗證的進度？
-    決定前不動。
+  - **決定：** 這是刻意的保守設計。可重用 checkpoint artifact，但新 contract／新 plan 下重新驗證所有 milestone，
+    不把舊 authority 的完成判定帶入新 plan。
 
 ## 整理（不影響行為）
 

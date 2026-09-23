@@ -244,6 +244,34 @@ test('only one competing child plan can activate from the same parent', () => {
   }
 });
 
+test('child plan may reuse artifacts but never inherits milestone completion authority', () => {
+  const h = fixture();
+  try {
+    h.store.insertContract(contract());
+    const service = new PlanService(h.store);
+    const parent = service.propose({
+      workId: h.work.id, contractVersion: 1, reason: 'parent', branchId: 'B-main',
+      milestones: proposalMilestones(),
+    }).plan;
+    service.activate(parent.id);
+    h.store.setMilestoneStatus(parent.id, 'M-1', 'COMPLETED', 'A-1');
+    h.store.setMilestoneStatus(parent.id, 'M-2', 'COMPLETED', 'A-2');
+    const reusable = h.store.putArtifact('checkpoint_fixture', 'verified input', 'txt');
+
+    const child = service.propose({
+      workId: h.work.id, contractVersion: 1, parentPlanId: parent.id, reason: 'replan',
+      branchId: 'B-child', milestones: proposalMilestones(), reusableArtifactIds: [reusable.id],
+    });
+
+    assert.deepEqual(child.plan.changedMilestoneIds, []);
+    assert.deepEqual(child.plan.reusableArtifactIds, [reusable.id]);
+    assert.deepEqual(child.milestones.map((milestone) => milestone.status), ['PENDING', 'PENDING']);
+  } finally {
+    h.store.close();
+    rmSync(h.state, { recursive: true, force: true });
+  }
+});
+
 test('user amendment versions the goal while preserving accumulated restrictions', () => {
   const h = fixture();
   try {

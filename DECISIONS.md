@@ -101,6 +101,14 @@ workspace readback 與 current policy 評估；不重跑模型或 verification�
 也不把最新設定補成歷史輸入。這是單主機互斥與保守人工恢復，不是自動 orphan 接手；自動 lease、
 heartbeat、execution epoch 與 supervisor 邊界留到 P4。
 
+### D-34 [取捨] 新 plan 不繼承舊 plan 的 milestone 完成狀態
+fork、重新規劃或 contract 版本變更後，新 plan 的每個 milestone 一律從 `PENDING` 開始，即使名稱、
+內容與舊 plan 相同，且來源 checkpoint 已記錄該 milestone 完成。checkpoint artifact 可以列為
+`reusableArtifactIds`，但 artifact 可重用只是輸入資料的 provenance，不是新 authority 下的完成證據。
+
+自動沿用完成狀態會把舊 contract／plan 的判定提升成新 authority，違反 fail-closed 原則；若要完成新
+milestone，必須建立綁定新 plan 與 contract 的 attempt 重新驗證。這是刻意的保守成本，不是進度遺失 bug。
+
 ### D-20 [取捨] Protocol 失敗不做「請重輸出 JSON」的 in-session 重試
 §22 允許有限次重新輸出，但那需要 resume 同一個 codex session。MVP 直接判 RETRYABLE_FAILURE，
 由 retry 建立新 attempt（context 只帶 evidence，不重播 transcript）。真實使用若發現這類失敗頻繁，

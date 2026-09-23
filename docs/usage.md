@@ -116,7 +116,8 @@ harness run W-xxx --milestone M-1
 
 有 active plan 時，每個 run/retry 都必須綁定 milestone。單一 milestone 的 SUCCESS 只完成該
 milestone；active plan 的 required milestones 全部通過後，Work 才會 DONE。過期 plan 的
-成功結果不會推進目前 active plan。
+成功結果不會推進目前 active plan。fork 或重新規劃可引用 checkpoint artifact，但新 plan 的
+milestone 一律從 PENDING 開始；artifact 可重用不等於舊 plan 的完成判定可沿用（D-34）。
 
 Checkpoint JSON 指定 `planId`、選用的 `parentCheckpointId`/`milestoneId`、`artifacts`、
 `validationStatus` 與 `validationEvidenceIds`。Runtime 會驗證 artifact 存在且 hash 正確後才保存：
