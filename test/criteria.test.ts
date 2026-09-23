@@ -163,3 +163,16 @@ test('missing or duplicate blocking verdict fails closed as unknown', () => {
   assert.equal(duplicate.verdict, 'unknown');
   assert.deepEqual(duplicate.reasonCodes, ['DUPLICATE_VERDICT']);
 });
+
+test('verdict values outside pass/fail/unknown fail closed instead of reading as a pass', () => {
+  const required = criterion();
+  for (const bad of ['PASS', 'error', '', undefined]) {
+    const forged = candidate(required, { verdict: bad as never });
+    const accepted = acceptCriterionVerdict(required, forged, [observation()]);
+    assert.equal(accepted.verdict, 'unknown', String(bad));
+    assert.equal(accepted.reasonCode, 'EVALUATOR_OUTPUT_INVALID');
+    // Even a record that bypassed acceptance cannot complete the Work.
+    const decision = decideGlobalVerdict([required], [forged]);
+    assert.deepEqual([decision.verdict, decision.canComplete, decision.reasonCodes], ['unknown', false, ['EVALUATOR_OUTPUT_INVALID']]);
+  }
+});

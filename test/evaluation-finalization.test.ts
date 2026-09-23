@@ -91,3 +91,17 @@ test('completion decision and DONE transition roll back atomically', () => {
     assert.equal(h.store.getWork(h.work.id)?.state, 'VERIFYING');
   } finally { h.store.close(); rmSync(h.state, { recursive: true, force: true }); }
 });
+
+test('a stored verdict value outside pass/fail/unknown cannot move Work to DONE', () => {
+  const h = evaluationFixture();
+  try {
+    h.store.insertEvaluationContract(h.contract); h.store.insertEvaluationRun(h.run);
+    const stored = h.store.insertCriterionVerdict({ id: 'CV-BAD', workId: h.work.id, evaluationRunId: h.run.id,
+      verdict: { ...h.candidate, verdict: 'PASS' as never }, createdAt: at });
+    assert.deepEqual([stored.verdict.verdict, stored.verdict.reasonCode], ['unknown', 'EVALUATOR_OUTPUT_INVALID']);
+    const decision = finalizeEvaluation(h.store, { id: 'CD-BAD', workId: h.work.id,
+      evaluationRunId: h.run.id, expectedWorkState: 'VERIFYING', createdAt: at });
+    assert.deepEqual([decision.verdict, decision.canComplete], ['unknown', false]);
+    assert.equal(h.store.getWork(h.work.id)?.state, 'VERIFYING');
+  } finally { h.store.close(); rmSync(h.state, { recursive: true, force: true }); }
+});

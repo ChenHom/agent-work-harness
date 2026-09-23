@@ -154,3 +154,13 @@ test('zero denominators are reported as null rates, not zero or one', () => {
   assert.deepEqual(group.abstention, { count: 2, denominator: 2, rate: 1 });
   assert.deepEqual(group.unknownReasons, { MISSING_VERDICT: 2 });
 });
+
+test('an invalid verdict value counts as abstention and never produces NaN rates', () => {
+  const [labeled] = corpus.filter((entry) => entry.caseId === 'code-02');
+  const forged = { ...verdictFor(labeled!, keywordCritic, 'pass', 'VALIDATED'), verdict: 'PASS' as never };
+  const group = calibrate([labeled!], [{ evaluator: keywordCritic, predictions: [{ caseId: 'code-02', verdict: forged }] }]).groups[0]!;
+  assert.deepEqual(group.confusion.fail, { pass: 0, fail: 0, unknown: 1 });
+  assert.deepEqual(group.unknownReasons, { EVALUATOR_OUTPUT_INVALID: 1 });
+  assert.deepEqual(group.falseAccept, { count: 0, denominator: 1, rate: 0 });
+  assert.deepEqual(group.abstention, { count: 1, denominator: 1, rate: 1 });
+});

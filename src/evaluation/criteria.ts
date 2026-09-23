@@ -51,6 +51,10 @@ export function acceptCriterionVerdict(
   candidate: CriterionVerdictRecord,
   observations: readonly ArtifactObservation[],
 ): CriterionVerdictRecord {
+  // Values outside the contract (e.g. 'PASS', '', 'error') must never read as a pass.
+  if (!(['pass', 'fail', 'unknown'] as unknown[]).includes(candidate.verdict)) {
+    return unknownVerdict(definition, candidate, 'EVALUATOR_OUTPUT_INVALID', 'verdict must be pass, fail, or unknown');
+  }
   if (candidate.criterionId !== definition.id) {
     return unknownVerdict(definition, candidate, 'CRITERION_MISMATCH', 'criterion identity does not match');
   }
@@ -126,9 +130,10 @@ export function decideGlobalVerdict(
       reasons.push('CRITERION_AUTHORITY_MISMATCH');
       continue;
     }
+    if (verdict.verdict === 'pass') continue;
     if (verdict.verdict === 'fail') hasFailure = true;
-    if (verdict.verdict === 'unknown') hasUnknown = true;
-    if (verdict.verdict !== 'pass') reasons.push(verdict.reasonCode);
+    else hasUnknown = true; // 'unknown', or any value outside the contract
+    reasons.push(verdict.verdict === 'fail' || verdict.verdict === 'unknown' ? verdict.reasonCode : 'EVALUATOR_OUTPUT_INVALID');
   }
 
   const verdict = hasFailure ? 'fail' : hasUnknown ? 'unknown' : 'pass';
