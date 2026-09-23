@@ -199,7 +199,7 @@ test('v2 migration preserves authoritative rows and adds P2 plan tables', () => 
 
   const migrated = new Store(state);
   try {
-    assert.equal(CURRENT_SCHEMA_VERSION, 5);
+    assert.equal(CURRENT_SCHEMA_VERSION, 6);
     assert.equal(migrated.getWork('W-v2')!.title, 'v2 row');
     assert.equal(migrated.events('W-v2')[0]!.type, 'v2.event');
     for (const table of ['plans', 'milestones', 'checkpoints']) {
@@ -230,7 +230,7 @@ test('v3 migration preserves authoritative rows and adds P3 operation and budget
 
   const migrated = new Store(state);
   try {
-    assert.equal(CURRENT_SCHEMA_VERSION, 5);
+    assert.equal(CURRENT_SCHEMA_VERSION, 6);
     assert.equal(migrated.getWork('W-v3')!.title, 'v3 row');
     assert.equal(migrated.events('W-v3')[0]!.type, 'v3.event');
     for (const table of [
@@ -261,7 +261,7 @@ test('v4 migration preserves authoritative rows and adds P5 evaluation ledger ta
 
   const migrated = new Store(state);
   try {
-    assert.equal(CURRENT_SCHEMA_VERSION, 5);
+    assert.equal(CURRENT_SCHEMA_VERSION, 6);
     assert.equal(migrated.getWork('W-v4')!.title, 'v4 row');
     assert.equal(migrated.events('W-v4')[0]!.type, 'v4.event');
     for (const table of [
@@ -269,6 +269,30 @@ test('v4 migration preserves authoritative rows and adds P5 evaluation ledger ta
     ]) {
       assert.ok(migrated.db.prepare(`select name from sqlite_master where type='table' and name=?`).get(table));
     }
+  } finally {
+    migrated.close();
+    rmSync(state, { recursive: true, force: true });
+  }
+});
+
+test('v5 migration adds durable critic dispatch ownership without losing budgets', () => {
+  const state = mkdtempSync(join(tmpdir(), 'harness-migration-'));
+  const seeded = new Store(state);
+  seeded.db.exec(`
+    insert into works values ('W-v5','v5 row','repo','/repo','ACTIVE',1,2,'t0');
+    drop table critic_dispatches;
+    alter table budget_reservations drop column evaluation_run_id;
+    pragma user_version = 5;
+  `);
+  seeded.close();
+
+  const migrated = new Store(state);
+  try {
+    assert.equal(CURRENT_SCHEMA_VERSION, 6);
+    assert.equal(migrated.getWork('W-v5')!.title, 'v5 row');
+    assert.ok(migrated.db.prepare("select name from sqlite_master where type='table' and name='critic_dispatches'").get());
+    const columns = migrated.db.prepare('pragma table_info(budget_reservations)').all() as Array<{ name: string }>;
+    assert.ok(columns.some((column) => column.name === 'evaluation_run_id'));
   } finally {
     migrated.close();
     rmSync(state, { recursive: true, force: true });

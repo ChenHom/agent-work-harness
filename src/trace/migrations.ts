@@ -1,6 +1,6 @@
 import type { DatabaseSync } from 'node:sqlite';
 
-export const CURRENT_SCHEMA_VERSION = 5;
+export const CURRENT_SCHEMA_VERSION = 6;
 
 const SCHEMA = `
 create table if not exists works(
@@ -71,7 +71,8 @@ create table if not exists budget_limits(
   json text not null, created_at text not null, unique(work_id, resource_kind, currency));
 create table if not exists budget_reservations(
   id text primary key, work_id text not null, limit_id text not null,
-  operation_id text, compensation_id text, status text not null, json text not null, created_at text not null);
+  operation_id text, compensation_id text, evaluation_run_id text,
+  status text not null, json text not null, created_at text not null);
 create table if not exists budget_ledger(
   id text primary key, work_id text not null, limit_id text not null, reservation_id text not null,
   kind text not null, json text not null, created_at text not null);
@@ -91,6 +92,12 @@ create table if not exists completion_decisions(
   id text primary key, work_id text not null, run_id text not null unique,
   contract_id text not null, verdict text not null, policy_version text not null,
   json text not null, created_at text not null);
+create table if not exists critic_dispatches(
+  id text primary key, work_id text not null, contract_id text not null,
+  evaluation_run_id text not null unique, trigger_key text not null,
+  trigger_type text not null, reservation_id text not null unique,
+  status text not null, json text not null, created_at text not null,
+  unique(work_id, trigger_key));
 create index if not exists idx_attempts_work on attempts(work_id);
 create index if not exists idx_evidence_attempt on evidence(attempt_id);
 create index if not exists idx_outcomes_attempt on outcomes(attempt_id);
@@ -113,6 +120,7 @@ create index if not exists idx_evaluation_contracts_work on evaluation_contracts
 create index if not exists idx_evaluation_runs_work on evaluation_runs(work_id, started_at);
 create index if not exists idx_criterion_verdicts_run on criterion_verdicts(run_id, created_at);
 create index if not exists idx_completion_decisions_work on completion_decisions(work_id, created_at);
+create index if not exists idx_critic_dispatches_work on critic_dispatches(work_id, created_at);
 `;
 
 interface ColumnRequirement {
@@ -184,7 +192,8 @@ const REQUIRED_TABLES: Record<string, Record<string, ColumnRequirement>> = {
   },
   budget_reservations: {
     id: PK_TEXT, work_id: TEXT, limit_id: TEXT, operation_id: NULLABLE_TEXT,
-    compensation_id: NULLABLE_TEXT, status: TEXT, json: TEXT, created_at: TEXT,
+    compensation_id: NULLABLE_TEXT, evaluation_run_id: NULLABLE_TEXT,
+    status: TEXT, json: TEXT, created_at: TEXT,
   },
   budget_ledger: {
     id: PK_TEXT, work_id: TEXT, limit_id: TEXT, reservation_id: TEXT,
@@ -204,6 +213,11 @@ const REQUIRED_TABLES: Record<string, Record<string, ColumnRequirement>> = {
   completion_decisions: {
     id: PK_TEXT, work_id: TEXT, run_id: TEXT, contract_id: TEXT,
     verdict: TEXT, policy_version: TEXT, json: TEXT, created_at: TEXT,
+  },
+  critic_dispatches: {
+    id: PK_TEXT, work_id: TEXT, contract_id: TEXT, evaluation_run_id: TEXT,
+    trigger_key: TEXT, trigger_type: TEXT, reservation_id: TEXT,
+    status: TEXT, json: TEXT, created_at: TEXT,
   },
 };
 
@@ -229,6 +243,7 @@ const REQUIRED_INDEXES: Record<string, { table: string; columns: readonly string
   idx_evaluation_runs_work: { table: 'evaluation_runs', columns: ['work_id', 'started_at'] },
   idx_criterion_verdicts_run: { table: 'criterion_verdicts', columns: ['run_id', 'created_at'] },
   idx_completion_decisions_work: { table: 'completion_decisions', columns: ['work_id', 'created_at'] },
+  idx_critic_dispatches_work: { table: 'critic_dispatches', columns: ['work_id', 'created_at'] },
 };
 
 export function validateSchema(db: DatabaseSync): void {
@@ -298,6 +313,15 @@ export function validateSchema(db: DatabaseSync): void {
   if (!hasUnique('completion_decisions', 'run_id')) {
     problems.push('completion_decisions must have unique(run_id)');
   }
+  if (!hasUnique('critic_dispatches', 'evaluation_run_id')) {
+    problems.push('critic_dispatches must have unique(evaluation_run_id)');
+  }
+  if (!hasUnique('critic_dispatches', 'reservation_id')) {
+    problems.push('critic_dispatches must have unique(reservation_id)');
+  }
+  if (!hasUnique('critic_dispatches', 'work_id,trigger_key')) {
+    problems.push('critic_dispatches must have unique(work_id, trigger_key)');
+  }
   const planIndexes = db.prepare('pragma index_list(plans)').all() as Array<{
     name: string; unique: number; partial: number;
   }>;
@@ -350,6 +374,11 @@ export function migrate(db: DatabaseSync): void {
     }
     if (!outcomeColumns.some((column) => column.name === 'finalization_key')) {
       db.exec('alter table outcomes add column finalization_key text');
+    }
+    const reservationColumns = db.prepare('pragma table_info(budget_reservations)')
+      .all() as Array<{ name: string }>;
+    if (!reservationColumns.some((column) => column.name === 'evaluation_run_id')) {
+      db.exec('alter table budget_reservations add column evaluation_run_id text');
     }
     const recoveryColumns = db.prepare('pragma table_info(recovery_sessions)').all() as Array<{ name: string }>;
     const recoveryNames = recoveryColumns.map((column) => column.name);

@@ -16,6 +16,7 @@ interface ReservationInput {
   workId: string;
   operationId?: string;
   compensationId?: string;
+  evaluationRunId?: string;
   cost: AdapterCapabilitySnapshot['cost'];
 }
 
@@ -61,8 +62,9 @@ export class BudgetLedger {
       throw new Error(`BUDGET_UNBOUNDED: ${cost.resourceKind} cost is ${cost.mode}`);
     }
     units(cost.upperBoundUnits, 'upperBoundUnits');
-    if (Boolean(input.operationId) === Boolean(input.compensationId)) {
-      throw new Error('BUDGET_INVALID: exactly one operationId or compensationId is required');
+    const owners = [input.operationId, input.compensationId, input.evaluationRunId].filter(Boolean);
+    if (owners.length !== 1) {
+      throw new Error('BUDGET_INVALID: exactly one operationId, compensationId, or evaluationRunId is required');
     }
     const limit = this.store.findBudgetLimit(input.workId, cost.resourceKind, cost.currency);
     if (!limit) {
@@ -80,6 +82,7 @@ export class BudgetLedger {
     const reservation: BudgetReservation = {
       id: newId('BR'), workId: input.workId, limitId: limit.id,
       operationId: input.operationId, compensationId: input.compensationId,
+      evaluationRunId: input.evaluationRunId,
       amountUnits: cost.upperBoundUnits, status: 'HELD', createdAt: at, updatedAt: at,
     };
     this.store.insertBudgetReservation(reservation);

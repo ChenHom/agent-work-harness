@@ -17,6 +17,7 @@ import type {
   BudgetLimit, BudgetReservation, BudgetLedgerEntry,
   EvaluationContract, EvaluationRun, StoredCriterionVerdict, CompletionDecisionRecord,
   CriterionDefinition, CriterionVerdictRecord,
+  CriticDispatch,
 } from '../types.ts';
 
 const ARTIFACT_READ_FLAGS = constants.O_RDONLY | constants.O_NONBLOCK | constants.O_NOFOLLOW;
@@ -40,6 +41,7 @@ export type EventType =
   | 'budget.limit_configured' | 'budget.reservation_recorded' | 'budget.ledger_recorded'
   | 'evaluation.contract_recorded' | 'evaluation.run_recorded'
   | 'evaluation.verdict_recorded' | 'evaluation.completed'
+  | 'critic.dispatch_reserved' | 'critic.dispatch_completed'
   | 'usage.note';   // 人對結果的判讀 —— 機器不知道 evidence 判錯了，只有人知道
 
 export type VerifiedArtifact =
@@ -743,10 +745,19 @@ export class Store {
     return row ? JSON.parse(row.json) as EvaluationRun : null;
   }
 
+  listEvaluationRuns(workId: string): EvaluationRun[] {
+    const rows = this.db.prepare('select json from evaluation_runs where work_id = ? order by started_at, rowid')
+      .all(workId) as Array<{ json: string }>;
+    return rows.map((row) => JSON.parse(row.json) as EvaluationRun);
+  }
+
   insertCriterionVerdict(entry: StoredCriterionVerdict): StoredCriterionVerdict {
     const run = this.getEvaluationRun(entry.evaluationRunId);
     if (!run || run.workId !== entry.workId) {
       throw new Error(`EVALUATION_INVALID: run ${entry.evaluationRunId} does not belong to work ${entry.workId}`);
+    }
+    if (run.evaluator.role !== 'validator' && run.evaluator.role !== 'critic') {
+      throw new Error(`EVALUATION_ROLE_INVALID: ${run.evaluator.role} cannot record criterion verdicts`);
     }
     const contract = this.getEvaluationContract(run.contractId);
     const definition = contract?.criteria.find((criterion) => criterion.id === entry.verdict.criterionId);
@@ -829,6 +840,44 @@ export class Store {
     }
     this.event('work.state_changed', { state }, id);
     if (state === 'DONE') this.event('work.completed', {}, id);
+  }
+
+  insertCriticDispatch(dispatch: CriticDispatch): void {
+    this.db.prepare(`
+      insert into critic_dispatches(id,work_id,contract_id,evaluation_run_id,trigger_key,
+        trigger_type,reservation_id,status,json,created_at) values (?,?,?,?,?,?,?,?,?,?)
+    `).run(dispatch.id, dispatch.workId, dispatch.contractId, dispatch.evaluationRunId,
+      dispatch.triggerKey, dispatch.trigger.type, dispatch.reservationId,
+      dispatch.status, JSON.stringify(dispatch), dispatch.createdAt);
+    this.event('critic.dispatch_reserved', {
+      criticDispatchId: dispatch.id, evaluationRunId: dispatch.evaluationRunId,
+      trigger: dispatch.trigger, reservationId: dispatch.reservationId,
+    }, dispatch.workId);
+  }
+
+  updateCriticDispatch(dispatch: CriticDispatch): void {
+    const changed = this.db.prepare(`
+      update critic_dispatches set status = ?, json = ? where id = ? and status = 'RESERVED'
+    `).run(dispatch.status, JSON.stringify(dispatch), dispatch.id);
+    if (Number(changed.changes) !== 1) {
+      throw new Error(`CRITIC_DISPATCH_INVALID_STATE: ${dispatch.id}`);
+    }
+    this.event('critic.dispatch_completed', {
+      criticDispatchId: dispatch.id, evaluationRunId: dispatch.evaluationRunId,
+      status: dispatch.status,
+    }, dispatch.workId);
+  }
+
+  getCriticDispatch(id: string): CriticDispatch | null {
+    const row = this.db.prepare('select json from critic_dispatches where id = ?')
+      .get(id) as { json: string } | undefined;
+    return row ? JSON.parse(row.json) as CriticDispatch : null;
+  }
+
+  listCriticDispatches(workId: string): CriticDispatch[] {
+    const rows = this.db.prepare('select json from critic_dispatches where work_id = ? order by created_at, rowid')
+      .all(workId) as Array<{ json: string }>;
+    return rows.map((row) => JSON.parse(row.json) as CriticDispatch);
   }
 
   // ---- operations / external effects ----
@@ -999,11 +1048,11 @@ export class Store {
 
   insertBudgetReservation(reservation: BudgetReservation): void {
     this.db.prepare(`
-      insert into budget_reservations(id,work_id,limit_id,operation_id,compensation_id,status,json,created_at)
-      values (?,?,?,?,?,?,?,?)
+      insert into budget_reservations(id,work_id,limit_id,operation_id,compensation_id,
+        evaluation_run_id,status,json,created_at) values (?,?,?,?,?,?,?,?,?)
     `).run(reservation.id, reservation.workId, reservation.limitId,
       reservation.operationId ?? null, reservation.compensationId ?? null,
-      reservation.status, JSON.stringify(reservation), reservation.createdAt);
+      reservation.evaluationRunId ?? null, reservation.status, JSON.stringify(reservation), reservation.createdAt);
     this.event('budget.reservation_recorded', {
       reservationId: reservation.id, limitId: reservation.limitId,
       amountUnits: reservation.amountUnits, status: reservation.status,

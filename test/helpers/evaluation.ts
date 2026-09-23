@@ -33,7 +33,8 @@ export function evaluationFixture(): {
   const run: EvaluationRun = {
     schemaVersion: '1', id: 'ER-1', workId: work.id, contractId: contract.id,
     evaluator: {
-      role: 'validator', name: 'exact-output', version: '1.0.0', configHash: 'c'.repeat(64),
+      role: 'validator', name: 'exact-output', version: '1.0.0',
+      configVersion: 'validator-config-v1', configHash: 'c'.repeat(64),
       cost: { status: 'unknown' },
     }, status: 'COMPLETED', startedAt: at, completedAt: at,
   };

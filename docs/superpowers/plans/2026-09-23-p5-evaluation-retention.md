@@ -51,12 +51,12 @@ The completion authority must satisfy all of the following:
 
 **Files:** `src/evaluation/critic.ts`, `src/evaluation/model-config.ts`, `src/trace/store.ts`, `test/semantic-critic.test.ts`, `test/evaluator-cost.test.ts`
 
-- [ ] Define event triggers for milestone completion, retry exhaustion, tool/evidence failure, plan change, budget acceleration, pre-checkpoint, and pre-finalization, with a periodic fallback.
-- [ ] Deduplicate equivalent triggers and enforce per-Work cooldown, invocation limit, and cost reservation before dispatch. A periodic trigger must not bypass these controls.
-- [ ] Require the critic to return criterion-level `pass`/`fail`/`unknown`, reasons, evidence references, and evaluator version; malformed or unsupported output becomes `unknown`.
-- [ ] Store planner/executor/critic role, provider/model/config version, and exact/estimated/unknown cost without deriving tokens or currency from character counts.
-- [ ] Keep critic output subordinate to deterministic validation and the completion policy; evaluator confidence is diagnostic only.
-- [ ] Run targeted critic/cost tests, one full `npm run check`, review against this task, and commit.
+- [x] Define event triggers for milestone completion, retry exhaustion, tool/evidence failure, plan change, budget acceleration, pre-checkpoint, and pre-finalization, with a periodic fallback.
+- [x] Deduplicate equivalent triggers and enforce per-Work cooldown, invocation limit, and cost reservation before dispatch. A periodic trigger must not bypass these controls.
+- [x] Require the critic to return criterion-level `pass`/`fail`/`unknown`, reasons, evidence references, and evaluator version; malformed or unsupported output becomes `unknown`.
+- [x] Store planner/executor/critic role, provider/model/config version, and exact/estimated/unknown cost without deriving tokens or currency from character counts.
+- [x] Keep critic output subordinate to deterministic validation and the completion policy; evaluator confidence is diagnostic only.
+- [x] Run targeted critic/cost tests, one full `npm run check`, review against this task, and commit.
 
 ## Task 4: Independent calibration corpus and recovery benchmark
 

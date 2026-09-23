@@ -204,6 +204,8 @@ export type CriterionReasonCode =
   | 'VALIDATED'
   | 'VALIDATION_FAILED'
   | 'EVALUATOR_ABSTAINED'
+  | 'EVALUATOR_OUTPUT_INVALID'
+  | 'EVALUATOR_VERSION_MISMATCH'
   | 'CRITERION_MISMATCH'
   | 'CRITERION_VERSION_MISMATCH'
   | 'CRITERION_AUTHORITY_MISMATCH'
@@ -252,6 +254,7 @@ interface EvaluatorIdentity {
   version: string;
   provider?: string;
   model?: string;
+  configVersion: string;
   configHash: string;
   cost: {
     status: 'exact' | 'estimated' | 'unknown';
@@ -287,6 +290,34 @@ export interface CompletionDecisionRecord extends GlobalCriterionDecision {
   contractId: string;
   criterionVerdictIds: string[];
   createdAt: string;
+}
+
+export type CriticTriggerType =
+  | 'milestone_completed' | 'retry_exhausted' | 'tool_failure' | 'evidence_failure'
+  | 'plan_changed' | 'budget_acceleration' | 'pre_checkpoint' | 'pre_finalization' | 'periodic';
+
+export interface CriticDispatch {
+  schemaVersion: '1';
+  id: string;
+  workId: string;
+  contractId: string;
+  evaluationRunId: string;
+  trigger: { type: CriticTriggerType; eventId: string };
+  triggerKey: string;
+  modelConfig: {
+    provider: string;
+    model: string;
+    configVersion: string;
+    configHash: string;
+    resourceKind: string;
+    currency?: string;
+    upperBoundUnits: number;
+    pricingVersion: string;
+  };
+  reservationId: string;
+  status: 'RESERVED' | 'COMPLETED' | 'FAILED';
+  createdAt: string;
+  updatedAt: string;
 }
 
 type OperationStatus =
@@ -393,6 +424,7 @@ export interface BudgetReservation {
   limitId: string;
   operationId?: string;
   compensationId?: string;
+  evaluationRunId?: string;
   amountUnits: number;
   settledUnits?: number;
   status: 'HELD' | 'SETTLED' | 'RELEASED' | 'UNKNOWN';
