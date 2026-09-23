@@ -46,7 +46,7 @@
   - `src/trace/checkpoints.ts:192`：`findArtifactReplacements` 只沿 `parentCheckpointId` 鏈比對；同一 plan、改了
     artifact hash 但沒填 parent 的 checkpoint，會讓已完成的 M-2 以過時輸入維持 COMPLETED。
   - 方向：以同一 plan 的最新已驗證 checkpoint 比對，而非只看 parent 鏈。
-- [ ] **#12 retry 預設沿用已失效 plan 的 milestone**（讀碼）
+- [x] **#12 retry 預設沿用已失效 plan 的 milestone**（已重現、修正並做 manual mutation）
   - `src/orchestrator.ts:604`：plan 已完成（evaluation gate 讓 Work 停在 VERIFYING）時 `harness retry` 丟 PLAN_NOT_ACTIVE；
     重新規劃改了 milestone 名稱時丟 PLAN_MILESTONE_INVALID。
   - 方向：只有上一個 milestone 仍屬啟用中的 plan 才沿用；否則要求 `--milestone` 並給明確訊息，或在沒有 plan 時走無 milestone 路徑。

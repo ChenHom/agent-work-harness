@@ -246,6 +246,58 @@ test('success from a superseded plan cannot satisfy the active plan', async () =
   }
 });
 
+test('retry after a completed plan does not reuse its inactive milestone', async () => {
+  const s = setup({ retryBudget: 1, evidence: fakeEvidence({ changedPaths: ['src/a.ts'] }) });
+  try {
+    activateTwoMilestonePlan(s.store, s.work.id);
+    await s.orch.runAttempt(s.work.id, { milestoneId: 'M-1' });
+    await s.orch.runAttempt(s.work.id, { milestoneId: 'M-2' });
+
+    const retried = await s.orch.retry(s.work.id);
+
+    assert.equal(retried.attempt.retryOf, s.store.listAttempts(s.work.id)[1]?.id);
+    assert.equal(retried.attempt.planId, undefined);
+    assert.equal(retried.attempt.milestoneId, undefined);
+  } finally {
+    s.cleanup();
+  }
+});
+
+test('retry after replanning requires an explicit milestone from the active plan', async () => {
+  const s = setup({ retryBudget: 1, evidence: fakeEvidence({ changedPaths: ['src/a.ts'] }) });
+  try {
+    const original = activateTwoMilestonePlan(s.store, s.work.id);
+    await s.orch.runAttempt(s.work.id, { milestoneId: 'M-1' });
+    const work = s.store.getWork(s.work.id)!;
+    const contract = s.store.getContract(s.work.id, work.currentContractVersion)!;
+    const plans = new PlanService(s.store);
+    const replacement = plans.propose({
+      workId: s.work.id, contractVersion: contract.version, parentPlanId: original.id,
+      branchId: original.branchId, reason: 'rename milestones', milestones: [
+        {
+          id: 'N-1', objective: 'implement replacement',
+          acceptanceCriterionIds: [acceptanceCriterionId(contract.successCriteria[0]!)],
+        },
+        {
+          id: 'N-2', objective: 'verify replacement', dependsOn: ['N-1'],
+          acceptanceCriterionIds: [acceptanceCriterionId(contract.successCriteria[1]!)],
+        },
+      ],
+    }).plan;
+    plans.activate(replacement.id);
+    const attemptsBefore = s.store.listAttempts(s.work.id).length;
+
+    await assert.rejects(() => s.orch.retry(s.work.id), /PLAN_MILESTONE_REQUIRED.*active plan/);
+    assert.equal(s.store.listAttempts(s.work.id).length, attemptsBefore);
+
+    const retried = await s.orch.retry(s.work.id, { milestoneId: 'N-1' });
+    assert.equal(retried.attempt.planId, replacement.id);
+    assert.equal(retried.attempt.milestoneId, 'N-1');
+  } finally {
+    s.cleanup();
+  }
+});
+
 // ---------------------------------------------------------------- 規則 1：retry budget
 
 test('retry budget 正向：還有額度時，驗證失敗判 RETRYABLE_FAILURE', async () => {

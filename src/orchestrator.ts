@@ -598,10 +598,23 @@ export class Orchestrator {
       this.applyWorkState(workId, decision);
       return { attempt: last, decision, evidence: this.store.listEvidence(last.id), response: buildResponse({ attempt: last, decision, evidence: this.store.listEvidence(last.id), notExecuted: [] }) };
     }
+    const activePlan = this.store.getActivePlan(workId);
+    let milestoneId = opts?.milestoneId;
+    if (!milestoneId && activePlan) {
+      const previousMilestone = last.planId === activePlan.id && last.milestoneId
+        ? this.store.getMilestone(activePlan.id, last.milestoneId)
+        : null;
+      if (!previousMilestone) {
+        throw new Error(
+          `PLAN_MILESTONE_REQUIRED: retry ${last.id} is not attached to active plan ${activePlan.id}; pass --milestone`,
+        );
+      }
+      milestoneId = previousMilestone.id;
+    }
     return this.runAttemptOwned(workId, {
       retryOf: last.id,
       noBaseline: opts?.noBaseline,
-      milestoneId: opts?.milestoneId ?? last.milestoneId,
+      milestoneId,
     }, ownership);
   }
 
