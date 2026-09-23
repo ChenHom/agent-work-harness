@@ -7,6 +7,7 @@ import { dirname, join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { createHash, randomUUID } from 'node:crypto';
 import { newId, nowIso } from '../ids.ts';
+import { acceptCriterionVerdict } from '../evaluation/criteria.ts';
 import { CURRENT_SCHEMA_VERSION, migrate, rethrowAfterRollback, validateSchema } from './migrations.ts';
 import type {
   Work, WorkContract, Attempt, DecisionRecord, EvidenceRecord,
@@ -14,6 +15,8 @@ import type {
   WorkPlan, PlanMilestone, LogicalCheckpoint,
   Operation, OperationAttempt, Compensation, CompensationAttempt,
   BudgetLimit, BudgetReservation, BudgetLedgerEntry,
+  EvaluationContract, EvaluationRun, StoredCriterionVerdict, CompletionDecisionRecord,
+  CriterionDefinition, CriterionVerdictRecord,
 } from '../types.ts';
 
 const ARTIFACT_READ_FLAGS = constants.O_RDONLY | constants.O_NONBLOCK | constants.O_NOFOLLOW;
@@ -35,6 +38,8 @@ export type EventType =
   | 'compensation.prepared' | 'compensation.state_changed' | 'compensation.attempt_recorded'
   | 'compensation.attempt_state_changed' | 'compensation.reconciled'
   | 'budget.limit_configured' | 'budget.reservation_recorded' | 'budget.ledger_recorded'
+  | 'evaluation.contract_recorded' | 'evaluation.run_recorded'
+  | 'evaluation.verdict_recorded' | 'evaluation.completed'
   | 'usage.note';   // 人對結果的判讀 —— 機器不知道 evidence 判錯了，只有人知道
 
 export type VerifiedArtifact =
@@ -464,6 +469,9 @@ export class Store {
           workState = 'ACTIVE';
         }
       }
+      if (workState === 'DONE' && this.getCurrentEvaluationContract(input.attempt.workId)) {
+        workState = 'VERIFYING';
+      }
       const workUpdate = this.db.prepare('update works set state = ? where id = ? and state = ?')
         .run(workState, input.attempt.workId, input.expectedWorkState);
       if (Number(workUpdate.changes) !== 1) {
@@ -671,6 +679,156 @@ export class Store {
     const rows = this.db.prepare('select json from checkpoints where work_id = ? order by created_at, rowid')
       .all(workId) as Array<{ json: string }>;
     return rows.map((row) => JSON.parse(row.json) as LogicalCheckpoint);
+  }
+
+  // ---- P5 evaluation ledger ----
+  insertEvaluationContract(contract: EvaluationContract): void {
+    if (!this.getWork(contract.workId)) {
+      throw new Error(`EVALUATION_INVALID: work ${contract.workId} does not exist`);
+    }
+    if (contract.criteria.length === 0) throw new Error('EVALUATION_INVALID: contract has no criteria');
+    const criterionIds = contract.criteria.map((criterion) => criterion.id);
+    if (new Set(criterionIds).size !== criterionIds.length) {
+      throw new Error('EVALUATION_INVALID: criterion identities must be unique');
+    }
+    this.db.prepare(`
+      insert into evaluation_contracts(id,work_id,version,policy_version,json,created_at)
+      values (?,?,?,?,?,?)
+    `).run(contract.id, contract.workId, contract.version, contract.policyVersion,
+      JSON.stringify(contract), contract.createdAt);
+    this.event('evaluation.contract_recorded', {
+      evaluationContractId: contract.id, version: contract.version,
+      policyVersion: contract.policyVersion, criterionIds,
+    }, contract.workId);
+  }
+
+  getEvaluationContract(id: string): EvaluationContract | null {
+    const row = this.db.prepare('select json from evaluation_contracts where id = ?')
+      .get(id) as { json: string } | undefined;
+    return row ? JSON.parse(row.json) as EvaluationContract : null;
+  }
+
+  getCurrentEvaluationContract(workId: string): EvaluationContract | null {
+    const row = this.db.prepare(`
+      select json from evaluation_contracts where work_id = ? order by version desc limit 1
+    `).get(workId) as { json: string } | undefined;
+    return row ? JSON.parse(row.json) as EvaluationContract : null;
+  }
+
+  insertEvaluationRun(run: EvaluationRun): void {
+    const contract = this.getEvaluationContract(run.contractId);
+    if (!contract || contract.workId !== run.workId) {
+      throw new Error(`EVALUATION_INVALID: contract ${run.contractId} does not belong to work ${run.workId}`);
+    }
+    if (run.attemptId) {
+      const attempt = this.getAttempt(run.attemptId);
+      if (!attempt || attempt.workId !== run.workId) {
+        throw new Error(`EVALUATION_INVALID: attempt ${run.attemptId} does not belong to work ${run.workId}`);
+      }
+    }
+    this.db.prepare(`
+      insert into evaluation_runs(id,work_id,contract_id,attempt_id,evaluator_version,status,json,started_at)
+      values (?,?,?,?,?,?,?,?)
+    `).run(run.id, run.workId, run.contractId, run.attemptId ?? null,
+      run.evaluator.version, run.status, JSON.stringify(run), run.startedAt);
+    this.event('evaluation.run_recorded', {
+      evaluationRunId: run.id, evaluationContractId: run.contractId,
+      evaluator: run.evaluator, status: run.status,
+    }, run.workId, run.attemptId);
+  }
+
+  getEvaluationRun(id: string): EvaluationRun | null {
+    const row = this.db.prepare('select json from evaluation_runs where id = ?')
+      .get(id) as { json: string } | undefined;
+    return row ? JSON.parse(row.json) as EvaluationRun : null;
+  }
+
+  insertCriterionVerdict(entry: StoredCriterionVerdict): StoredCriterionVerdict {
+    const run = this.getEvaluationRun(entry.evaluationRunId);
+    if (!run || run.workId !== entry.workId) {
+      throw new Error(`EVALUATION_INVALID: run ${entry.evaluationRunId} does not belong to work ${entry.workId}`);
+    }
+    const contract = this.getEvaluationContract(run.contractId);
+    const definition = contract?.criteria.find((criterion) => criterion.id === entry.verdict.criterionId);
+    if (!contract || !definition) {
+      throw new Error(`EVALUATION_INVALID: criterion ${entry.verdict.criterionId} is not in contract ${run.contractId}`);
+    }
+    const accepted: StoredCriterionVerdict = {
+      ...entry,
+      verdict: this.validateCriterionVerdict(definition, entry.verdict),
+    };
+    this.db.prepare(`
+      insert into criterion_verdicts(id,work_id,run_id,criterion_id,verdict,json,created_at)
+      values (?,?,?,?,?,?,?)
+    `).run(accepted.id, accepted.workId, accepted.evaluationRunId,
+      accepted.verdict.criterionId, accepted.verdict.verdict, JSON.stringify(accepted), accepted.createdAt);
+    this.event('evaluation.verdict_recorded', {
+      evaluationRunId: accepted.evaluationRunId, criterionVerdictId: accepted.id,
+      criterionId: accepted.verdict.criterionId, verdict: accepted.verdict.verdict,
+      reasonCode: accepted.verdict.reasonCode,
+    }, accepted.workId, run.attemptId);
+    return accepted;
+  }
+
+  validateCriterionVerdict(
+    definition: CriterionDefinition,
+    candidate: CriterionVerdictRecord,
+  ): CriterionVerdictRecord {
+    const observations = definition.artifactBindings.map((binding) => {
+      const artifact = this.readVerifiedArtifact(binding.artifactId);
+      return artifact.status === 'verified'
+        ? { artifactId: binding.artifactId, sha256: artifact.hash, status: 'verified' as const }
+        : { artifactId: binding.artifactId, sha256: binding.sha256, status: artifact.status };
+    });
+    const accepted = acceptCriterionVerdict(definition, candidate, observations);
+    if (accepted.verdict === 'unknown') return accepted;
+    for (const artifactId of accepted.evidenceArtifactIds) {
+      const artifact = this.readVerifiedArtifact(artifactId);
+      if (artifact.status !== 'verified') {
+        return {
+          ...accepted,
+          verdict: 'unknown',
+          reasonCode: artifact.status === 'missing' ? 'ARTIFACT_MISSING' : 'ARTIFACT_CORRUPT',
+          reason: `evidence artifact ${artifactId} is ${artifact.status}`,
+          confidence: undefined,
+        };
+      }
+    }
+    return accepted;
+  }
+
+  listCriterionVerdicts(evaluationRunId: string): StoredCriterionVerdict[] {
+    const rows = this.db.prepare('select json from criterion_verdicts where run_id = ? order by created_at, rowid')
+      .all(evaluationRunId) as Array<{ json: string }>;
+    return rows.map((row) => JSON.parse(row.json) as StoredCriterionVerdict);
+  }
+
+  insertCompletionDecision(decision: CompletionDecisionRecord): void {
+    this.db.prepare(`
+      insert into completion_decisions(id,work_id,run_id,contract_id,verdict,policy_version,json,created_at)
+      values (?,?,?,?,?,?,?,?)
+    `).run(decision.id, decision.workId, decision.evaluationRunId, decision.contractId,
+      decision.verdict, decision.policyVersion, JSON.stringify(decision), decision.createdAt);
+    this.event('evaluation.completed', {
+      completionDecisionId: decision.id, evaluationRunId: decision.evaluationRunId,
+      verdict: decision.verdict, reasonCodes: decision.reasonCodes,
+    }, decision.workId);
+  }
+
+  getCompletionDecision(evaluationRunId: string): CompletionDecisionRecord | null {
+    const row = this.db.prepare('select json from completion_decisions where run_id = ?')
+      .get(evaluationRunId) as { json: string } | undefined;
+    return row ? JSON.parse(row.json) as CompletionDecisionRecord : null;
+  }
+
+  transitionWorkState(id: string, expected: WorkState, state: WorkState): void {
+    const changed = this.db.prepare('update works set state = ? where id = ? and state = ?')
+      .run(state, id, expected);
+    if (Number(changed.changes) !== 1) {
+      throw new Error(`STATE_CONFLICT: work ${id} expected ${expected}`);
+    }
+    this.event('work.state_changed', { state }, id);
+    if (state === 'DONE') this.event('work.completed', {}, id);
   }
 
   // ---- operations / external effects ----

@@ -40,12 +40,12 @@ The completion authority must satisfy all of the following:
 
 **Files:** `src/trace/migrations.ts`, `src/trace/store.ts`, `src/types.ts`, `src/evaluation/finalization.ts`, `test/migrations.test.ts`, `test/evaluation-store.test.ts`, `test/evaluation-finalization.test.ts`
 
-- [ ] Add append-only evaluation contracts, runs, criterion verdicts, and completion decisions with explicit schema/policy versions and parent/source identities.
-- [ ] Store artifact bindings, evaluator/validator identity, model/config identity when applicable, cost status, timestamps, reasons, and evidence references. Reject mutation or conflicting reuse of an evaluation identity.
-- [ ] Verify referenced artifacts through the existing hash-checking read path before persisting an accepted verdict; artifact payloads never supply authority fields.
-- [ ] Finalize an opted-in Work atomically only when the current contract's required criteria globally pass. Persist `unknown`/`fail` decisions without moving the Work to `DONE`.
-- [ ] Keep legacy P1-P4 flows compatible until an evaluation contract is explicitly attached; never infer semantic criteria from free-form success text.
-- [ ] Run targeted migration/store/finalization tests, one full `npm run check`, review against this task, and commit.
+- [x] Add append-only evaluation contracts, runs, criterion verdicts, and completion decisions with explicit schema/policy versions and parent/source identities.
+- [x] Store artifact bindings, evaluator/validator identity, model/config identity when applicable, cost status, timestamps, reasons, and evidence references. Reject mutation or conflicting reuse of an evaluation identity.
+- [x] Verify referenced artifacts through the existing hash-checking read path before persisting an accepted verdict; artifact payloads never supply authority fields.
+- [x] Finalize an opted-in Work atomically only when the current contract's required criteria globally pass. Persist `unknown`/`fail` decisions without moving the Work to `DONE`.
+- [x] Keep legacy P1-P4 flows compatible until an evaluation contract is explicitly attached; never infer semantic criteria from free-form success text.
+- [x] Run targeted migration/store/finalization tests, one full `npm run check`, review against this task, and commit.
 
 ## Task 3: Semantic critic scheduling, abstention, and cost accounting
 

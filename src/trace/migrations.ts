@@ -1,6 +1,6 @@
 import type { DatabaseSync } from 'node:sqlite';
 
-export const CURRENT_SCHEMA_VERSION = 4;
+export const CURRENT_SCHEMA_VERSION = 5;
 
 const SCHEMA = `
 create table if not exists works(
@@ -75,6 +75,22 @@ create table if not exists budget_reservations(
 create table if not exists budget_ledger(
   id text primary key, work_id text not null, limit_id text not null, reservation_id text not null,
   kind text not null, json text not null, created_at text not null);
+create table if not exists evaluation_contracts(
+  id text primary key, work_id text not null, version integer not null,
+  policy_version text not null, json text not null, created_at text not null,
+  unique(work_id, version));
+create table if not exists evaluation_runs(
+  id text primary key, work_id text not null, contract_id text not null,
+  attempt_id text, evaluator_version text not null, status text not null,
+  json text not null, started_at text not null);
+create table if not exists criterion_verdicts(
+  id text primary key, work_id text not null, run_id text not null,
+  criterion_id text not null, verdict text not null, json text not null, created_at text not null,
+  unique(run_id, criterion_id));
+create table if not exists completion_decisions(
+  id text primary key, work_id text not null, run_id text not null unique,
+  contract_id text not null, verdict text not null, policy_version text not null,
+  json text not null, created_at text not null);
 create index if not exists idx_attempts_work on attempts(work_id);
 create index if not exists idx_evidence_attempt on evidence(attempt_id);
 create index if not exists idx_outcomes_attempt on outcomes(attempt_id);
@@ -93,6 +109,10 @@ create index if not exists idx_compensation_attempts_compensation on compensatio
 create index if not exists idx_budget_limits_work on budget_limits(work_id, resource_kind);
 create index if not exists idx_budget_reservations_limit on budget_reservations(limit_id, status);
 create index if not exists idx_budget_ledger_limit on budget_ledger(limit_id, created_at);
+create index if not exists idx_evaluation_contracts_work on evaluation_contracts(work_id, version);
+create index if not exists idx_evaluation_runs_work on evaluation_runs(work_id, started_at);
+create index if not exists idx_criterion_verdicts_run on criterion_verdicts(run_id, created_at);
+create index if not exists idx_completion_decisions_work on completion_decisions(work_id, created_at);
 `;
 
 interface ColumnRequirement {
@@ -170,6 +190,21 @@ const REQUIRED_TABLES: Record<string, Record<string, ColumnRequirement>> = {
     id: PK_TEXT, work_id: TEXT, limit_id: TEXT, reservation_id: TEXT,
     kind: TEXT, json: TEXT, created_at: TEXT,
   },
+  evaluation_contracts: {
+    id: PK_TEXT, work_id: TEXT, version: INTEGER, policy_version: TEXT, json: TEXT, created_at: TEXT,
+  },
+  evaluation_runs: {
+    id: PK_TEXT, work_id: TEXT, contract_id: TEXT, attempt_id: NULLABLE_TEXT,
+    evaluator_version: TEXT, status: TEXT, json: TEXT, started_at: TEXT,
+  },
+  criterion_verdicts: {
+    id: PK_TEXT, work_id: TEXT, run_id: TEXT, criterion_id: TEXT,
+    verdict: TEXT, json: TEXT, created_at: TEXT,
+  },
+  completion_decisions: {
+    id: PK_TEXT, work_id: TEXT, run_id: TEXT, contract_id: TEXT,
+    verdict: TEXT, policy_version: TEXT, json: TEXT, created_at: TEXT,
+  },
 };
 
 const REQUIRED_INDEXES: Record<string, { table: string; columns: readonly string[] }> = {
@@ -190,6 +225,10 @@ const REQUIRED_INDEXES: Record<string, { table: string; columns: readonly string
   idx_budget_limits_work: { table: 'budget_limits', columns: ['work_id', 'resource_kind'] },
   idx_budget_reservations_limit: { table: 'budget_reservations', columns: ['limit_id', 'status'] },
   idx_budget_ledger_limit: { table: 'budget_ledger', columns: ['limit_id', 'created_at'] },
+  idx_evaluation_contracts_work: { table: 'evaluation_contracts', columns: ['work_id', 'version'] },
+  idx_evaluation_runs_work: { table: 'evaluation_runs', columns: ['work_id', 'started_at'] },
+  idx_criterion_verdicts_run: { table: 'criterion_verdicts', columns: ['run_id', 'created_at'] },
+  idx_completion_decisions_work: { table: 'completion_decisions', columns: ['work_id', 'created_at'] },
 };
 
 export function validateSchema(db: DatabaseSync): void {
@@ -249,6 +288,15 @@ export function validateSchema(db: DatabaseSync): void {
   }
   if (!hasUnique('budget_limits', 'work_id,resource_kind,currency')) {
     problems.push('budget_limits must have unique(work_id, resource_kind, currency)');
+  }
+  if (!hasUnique('evaluation_contracts', 'work_id,version')) {
+    problems.push('evaluation_contracts must have unique(work_id, version)');
+  }
+  if (!hasUnique('criterion_verdicts', 'run_id,criterion_id')) {
+    problems.push('criterion_verdicts must have unique(run_id, criterion_id)');
+  }
+  if (!hasUnique('completion_decisions', 'run_id')) {
+    problems.push('completion_decisions must have unique(run_id)');
   }
   const planIndexes = db.prepare('pragma index_list(plans)').all() as Array<{
     name: string; unique: number; partial: number;

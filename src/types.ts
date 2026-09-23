@@ -236,6 +236,59 @@ export interface GlobalCriterionDecision {
   reasonCodes: Array<CriterionReasonCode | 'MISSING_VERDICT' | 'DUPLICATE_VERDICT'>;
 }
 
+export interface EvaluationContract {
+  schemaVersion: '1';
+  id: string;
+  workId: string;
+  version: number;
+  policyVersion: '1';
+  criteria: CriterionDefinition[];
+  createdAt: string;
+}
+
+interface EvaluatorIdentity {
+  role: 'planner' | 'executor' | 'critic' | 'validator';
+  name: string;
+  version: string;
+  provider?: string;
+  model?: string;
+  configHash: string;
+  cost: {
+    status: 'exact' | 'estimated' | 'unknown';
+    units?: number;
+    currency?: string;
+  };
+}
+
+export interface EvaluationRun {
+  schemaVersion: '1';
+  id: string;
+  workId: string;
+  contractId: string;
+  attemptId?: string;
+  evaluator: EvaluatorIdentity;
+  status: 'RUNNING' | 'COMPLETED' | 'FAILED';
+  startedAt: string;
+  completedAt?: string;
+}
+
+export interface StoredCriterionVerdict {
+  id: string;
+  workId: string;
+  evaluationRunId: string;
+  verdict: CriterionVerdictRecord;
+  createdAt: string;
+}
+
+export interface CompletionDecisionRecord extends GlobalCriterionDecision {
+  id: string;
+  workId: string;
+  evaluationRunId: string;
+  contractId: string;
+  criterionVerdictIds: string[];
+  createdAt: string;
+}
+
 type OperationStatus =
   | 'PREPARED' | 'DISPATCHED' | 'SUCCEEDED' | 'FAILED'
   | 'UNKNOWN' | 'RECONCILING' | 'WAITING_USER';
