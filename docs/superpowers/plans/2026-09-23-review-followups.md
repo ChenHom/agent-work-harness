@@ -26,7 +26,7 @@
     harness 在持鎖狀態下崩潰，正好落入上一條。
   - 方向：recover 在確認 ownership 已失效（OWNER_UNKNOWN 經人工處理）後，接受 RUNNING attempt 並轉成 recovery session；
     stdin 加 error handler，把 EPIPE 當成 runtime 失敗結果。驗證：kill 子行程與 EPIPE 各一個測試。
-- [ ] **#5 取消後 worker 仍派發**（讀碼）
+- [x] **#5 取消後 worker 仍派發**（已重現並改由 production reader 查詢 workflow durable state）
   - `src/durable/client.ts:131`：worker 的 `readRuntime` 對 RUNNING workflow 一律回 ACTIVE，不讀 workflow 自己的
     CANCEL_REQUESTED/QUIESCING；`TemporalDispatchAuthority.validate('dispatch')` 在取消後仍放行 provider 呼叫。
     G4 測試換用 `projectDurableRuntime` 所以沒抓到。

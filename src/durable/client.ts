@@ -6,7 +6,9 @@ import { createDurableActivities } from './activities.ts';
 import type {
   DurableCallback, DurableWorkflowInput, DurableWorkflowSnapshot,
 } from './contracts.ts';
-import type { RuntimeExecutionIdentity, RuntimeExecutionState } from './runtime-state.ts';
+import type {
+  RuntimeExecutionIdentity, RuntimeExecutionReader, RuntimeExecutionState,
+} from './runtime-state.ts';
 import { createDurableWorker } from './worker.ts';
 
 export interface DurableWorkerReady {
@@ -58,7 +60,7 @@ export function loadDurableConnectionSettings(
   };
 }
 
-export function projectDurableRuntime(
+function projectDurableRuntime(
   workflowId: string,
   snapshot: DurableWorkflowSnapshot,
 ): RuntimeExecutionState | null {
@@ -72,6 +74,33 @@ export function projectDurableRuntime(
             : snapshot.status === 'SUCCEEDED' || snapshot.status === 'FAILED' ? 'COMPLETED'
               : 'ACTIVE';
   return { workflowId, runId: snapshot.runId, epoch: snapshot.epoch, status };
+}
+
+export interface DurableRuntimeClient {
+  workflow: {
+    getHandle(workflowId: string): {
+      query<R>(name: string): Promise<R>;
+    };
+  };
+}
+
+export async function readDurableRuntime(
+  client: DurableRuntimeClient,
+  workflowId: string,
+  expected?: RuntimeExecutionIdentity,
+): Promise<RuntimeExecutionState | null> {
+  if (!expected) return null;
+  try {
+    const snapshot = await client.workflow.getHandle(workflowId)
+      .query<DurableWorkflowSnapshot>('durable.state');
+    return projectDurableRuntime(workflowId, snapshot);
+  } catch {
+    return null;
+  }
+}
+
+export function temporalRuntimeReader(client: DurableRuntimeClient): RuntimeExecutionReader {
+  return (workflowId, expected) => readDurableRuntime(client, workflowId, expected);
 }
 
 export class TemporalDurableCommandService implements DurableCommandService {
@@ -118,27 +147,7 @@ export class TemporalDurableCommandService implements DurableCommandService {
     mkdirSync(dirname(this.settings.providerLedgerPath), { recursive: true });
     const connection = await NativeConnection.connect(this.connectionOptions());
     const client = new Client({ connection, namespace: this.settings.namespace });
-    const readRuntime = async (
-      workflowId: string,
-      expected?: RuntimeExecutionIdentity,
-    ): Promise<RuntimeExecutionState | null> => {
-      if (!expected) return null;
-      try {
-        const description = await client.workflow.getHandle(workflowId).describe();
-        if (description.runId !== expected.runId) {
-          return {
-            workflowId, runId: description.runId, epoch: expected.epoch + 1,
-            status: description.status.name === 'RUNNING' ? 'ACTIVE' : 'COMPLETED',
-          };
-        }
-        return {
-          workflowId, runId: expected.runId, epoch: expected.epoch,
-          status: description.status.name === 'RUNNING' ? 'ACTIVE' : 'COMPLETED',
-        };
-      } catch {
-        return null;
-      }
-    };
+    const readRuntime = temporalRuntimeReader(client);
     const activities = createDurableActivities({
       stateDir: this.stateDir,
       providerLedgerPath: this.settings.providerLedgerPath,

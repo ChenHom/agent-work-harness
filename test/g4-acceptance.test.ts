@@ -7,9 +7,7 @@ import { setTimeout as delay } from 'node:timers/promises';
 import test from 'node:test';
 import { TestWorkflowEnvironment } from '@temporalio/testing';
 import { DurablePublisher } from '../src/durable/publication.ts';
-import {
-  projectDurableRuntime,
-} from '../src/durable/client.ts';
+import { temporalRuntimeReader } from '../src/durable/client.ts';
 import type { DurableWorkflowResult, DurableWorkflowSnapshot } from '../src/durable/contracts.ts';
 import { TemporalDispatchAuthority } from '../src/durable/runtime-state.ts';
 import { FakeProvider } from '../src/tools/fake-provider.ts';
@@ -154,14 +152,12 @@ test('G4 durable runtime survives process and server takeover with fenced effect
     assert.equal(continued.outputArtifactId, waiting.outputArtifactId);
     assert.equal(continued.ignoredCallbackCount, 2);
 
-    const readRuntime = async () => projectDurableRuntime(
-      workflowId,
-      await env.client.workflow.getHandle(workflowId).query<DurableWorkflowSnapshot>('durable.state'),
-    );
     const publisher = new DurablePublisher(workspace);
     assert.ok(waiting.runId);
     const oldIdentity = { workflowId, runId: waiting.runId, epoch: 1 };
     const currentIdentity = { workflowId, runId: continued.runId, epoch: 2 };
+    const productionRuntimeReader = temporalRuntimeReader(env.client);
+    const readRuntime = (id: string, expected = currentIdentity) => productionRuntimeReader(id, expected);
     const staleArtifact = publisher.stageArtifact(oldIdentity, 'result.txt', 'stale result');
     const currentArtifact = publisher.stageArtifact(currentIdentity, 'result.txt', 'current result');
     await publisher.publishManifest(
@@ -202,11 +198,21 @@ test('G4 durable runtime survives process and server takeover with fenced effect
       args: [{
         workId: 'W-G4-cancel', epoch: 1, businessId: 'customer-g4-cancel', value: 'enabled',
         generatedText: 'cancel output', callbackTimeoutMs: 30_000,
-        lookupDelayCount: 5, maxReconcileAttempts: 1,
+        lookupDelayCount: 5, lookupDelayMs: 300, maxReconcileAttempts: 1,
       }],
     });
     await waitForSnapshot(cancellation, (snapshot) => snapshot.status === 'WAITING_EXTERNAL');
     await cancellation.signal('durable.cancel');
+    const cancelling = await waitForSnapshot(cancellation,
+      (snapshot) => snapshot.status === 'CANCEL_REQUESTED' || snapshot.status === 'QUIESCING');
+    assert.ok(cancelling.runId);
+    assert.ok(cancelling.epoch);
+    const cancellingIdentity = { workflowId: cancelId, runId: cancelling.runId, epoch: cancelling.epoch };
+    const productionAuthority = new TemporalDispatchAuthority(
+      cancellingIdentity,
+      temporalRuntimeReader(env.client),
+    );
+    assert.equal(await productionAuthority.validate('dispatch'), false);
     const cancelled = await cancellation.result() as DurableWorkflowResult;
     assert.equal(cancelled.status, 'WAITING_USER');
     assert.equal(cancelled.operationStatus, 'UNKNOWN');
