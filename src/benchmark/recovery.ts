@@ -1,3 +1,5 @@
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { performance } from 'node:perf_hooks';
 import { BudgetLedger, type BudgetSummary } from '../budget/ledger.ts';
@@ -301,4 +303,17 @@ export function summarizeRecoveryBenchmark(
     constraintViolations: { runs: count((run) => run.constraintViolations.length > 0), byCode },
     independentlyAccepted: ratio(accepted, runs.length),
   };
+}
+
+/** Runs recovery-v1 in a throwaway state directory; returns the aggregate and every raw run record. */
+export async function benchmarkRecoveryReport(options: { seed: number; runs: number }): Promise<{
+  report: RecoveryBenchmarkReport; runs: RecoveryRunRecord[];
+}> {
+  const stateDir = mkdtempSync(join(tmpdir(), 'harness-recovery-bench-'));
+  try {
+    const { manifest, runs } = await runRecoveryBenchmark({ stateDir, ...options });
+    return { report: summarizeRecoveryBenchmark(manifest, runs), runs };
+  } finally {
+    rmSync(stateDir, { recursive: true, force: true });
+  }
 }

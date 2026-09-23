@@ -430,18 +430,18 @@ callback 重複亂序只處理一次有效狀態轉移；deadline 經重啟仍�
 **預定模組：** `src/evaluation/criteria.ts`、`src/trace/retention.ts`、
 `scripts/benchmark-recovery.ts` 與對應 node:test 測試。
 
-- [ ] Verdict 為 pass/fail/unknown，固定 criterion／artifact hash／validator version；
+- [x] Verdict 為 pass/fail/unknown，固定 criterion／artifact hash／validator version；
   必要 unknown 阻擋 DONE，硬限制不平均。
-- [ ] Semantic critic event-driven + periodic fallback，去重、cooldown、預算上限；
+- [x] Semantic critic event-driven + periodic fallback，去重、cooldown、預算上限；
   planner／executor／critic 各模型設定與成本入帳。
-- [ ] 以獨立標註集測 false accept/reject／abstention；模型互投不能替代 oracle。
-- [ ] Benchmark 納入失敗 runs 成本，報 p50/p95/p99、unknown age、
+- [x] 以獨立標註集測 false accept/reject／abstention；模型互投不能替代 oracle。
+- [x] Benchmark 納入失敗 runs 成本，報 p50/p95/p99、unknown age、
   重複效果、人工介入與恢復 SLA；保持 fixture／seed／模型版本。
-- [ ] 定義 active／resumable／archived 的 retention window，
+- [x] 定義 active／resumable／archived 的 retention window，
   依引用可達性做 GC dry-run；未決 operation 與 key 紀錄不可過早刪除。
-- [ ] DB + artifact 備份還原與 schema migration drill；過期／無法重播要明示，
+- [x] DB + artifact 備份還原與 schema migration drill；過期／無法重播要明示，
   不自動重問模型補失去的歷史。
-- [ ] Trace 支持 span links，權威帳本不採樣；
+- [x] Trace 支持 span links，權威帳本不採樣；
   raw logs 脫敏與權限控管，敏感 payload 刪除不破壞必要的因果 metadata。
 
 **G5：** 驗證 A 交付 B 被拒絕、malicious artifact 不能改 authority、
@@ -451,8 +451,11 @@ callback 重複亂序只處理一次有效狀態轉移；deadline 經重啟仍�
 ## 16. 執行順序與交接
 
 先執行 P1 Task 1–7，每個提交都能獨立驗證。
-P1／P2／P3／P4 已各自完成實作與 gate；P5 語意驗收取決於獨立 oracle。
-P5 是明確延後的工作，不代表整個 v2 已完成。
+P1／P2／P3／P4／P5 已各自完成實作與 gate。P5 的細部計畫與證據見
+[P5 evaluation/retention plan](2026-09-23-p5-evaluation-retention.md)、`test/g5-acceptance.test.ts` 與
+[evaluation/retention runbook](../../runbooks/evaluation-retention.md)。P5 的校準標註集
+`2026-09-23.1` 由 fixture 作者手寫、尚未經人工審閱；對 Claude 系 critic 的校準結果在人工審閱前
+只能視為較弱的證據。
 
 本輪文件驗證只包含來源對照、章節與 review 覆蓋、相對連結與 diff 檢查。
 P4 的實作與 G4 證據見獨立 P4 plan、`test/g4-acceptance.test.ts` 與 operations runbook。

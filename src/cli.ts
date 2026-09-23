@@ -22,7 +22,12 @@ import {
   formatDurableSnapshot,
 } from './cli-format.ts';
 import { formatPromptChars } from './response.ts';
-import type { GlobalPolicy } from './types.ts';
+import type { CriterionVerdictRecord, GlobalPolicy, ValidatorIdentity } from './types.ts';
+import { benchmarkRecoveryReport } from './benchmark/recovery.ts';
+import { calibrate, parseLabelCorpus, type CalibrationRun } from './evaluation/calibration.ts';
+import { auditReplay, createBackup, restoreBackup, verifyBackup } from './trace/backup.ts';
+import { redactArtifact } from './trace/redaction.ts';
+import { applyGc, artifactReferences, inspectRecoverability, previewGc, type GcManifest } from './trace/retention.ts';
 import { BudgetLedger } from './budget/ledger.ts';
 import { FakeProvider } from './tools/fake-provider.ts';
 import { OperationGateway } from './tools/gateway.ts';
@@ -71,6 +76,19 @@ P4 Temporal durable runtime:
   harness durable rollover <workflowId>
   harness durable worker
 
+P5 evaluation, retention, and recovery（輸出 JSON）:
+  harness eval show <workId>            evaluation contract / runs / verdicts / completion decisions（唯讀）
+  harness report calibration <labels.jsonl> <predictions.jsonl>
+                                        false accept/reject/abstention，依 task type × evaluator version
+  harness report recovery [--seed N] [--runs N]  recovery-v1 benchmark（含全部 run 與 p50/p95/p99）
+  harness gc preview [--out manifest.json]       dry run：只產生 manifest，不刪任何東西（唯讀）
+  harness gc apply <manifest.json>      依未變動的 manifest 刪除 payload，留 tombstone 與刪除證據
+  harness redact <artifactId> --authority <誰核准> --reason <原因>
+  harness backup create <dir>           DB + artifact 一致性備份（manifest 最後寫入）
+  harness backup verify <dir>
+  harness backup restore <dir> <新 state 目錄>  只還原到空目錄；驗 hash、migration、audit replay
+  harness replay inspect [workId]       audit replay + compatible/unsafe/unavailable（唯讀）
+
 Shared administration:
   harness skills list|approve <id> <dir>
   harness doctor [dir]                  檢查 runtime 與隔離是否真的生效
@@ -88,16 +106,18 @@ const NOTE_KINDS = ['false-accept', 'false-block', 'retry-churn', 'blocked-work'
 
 const STORE_COMMANDS = new Set([
   'new', 'run', 'retry', 'recover', 'answer', 'amend', 'plan', 'checkpoint',
-  'list', 'show', 'trace', 'prompt', 'note', 'notes', 'stats', 'fake',
+  'list', 'show', 'trace', 'prompt', 'note', 'notes', 'stats', 'fake', 'eval', 'gc', 'redact', 'replay',
 ]);
-const READ_ONLY_COMMANDS = new Set(['list', 'show', 'trace', 'prompt', 'notes', 'stats']);
+const READ_ONLY_COMMANDS = new Set(['list', 'show', 'trace', 'prompt', 'notes', 'stats', 'eval', 'replay']);
 const MUTATING_COMMANDS = new Set([
   'init', 'new', 'run', 'retry', 'recover', 'answer', 'amend', 'plan', 'checkpoint', 'note', 'doctor', 'fake',
+  'gc', 'redact',
 ]);
 
 function isReadOnlyCommand(cmd: string | undefined, rest: string[]): boolean {
   return Boolean(cmd && (READ_ONLY_COMMANDS.has(cmd)
-    || (cmd === 'fake' && rest[1] === 'show')));
+    || (cmd === 'fake' && rest[1] === 'show')
+    || (cmd === 'gc' && rest[0] === 'preview')));
 }
 
 export async function main(
@@ -518,6 +538,90 @@ export async function main(
       return leaked ? 4 : 0;
     }
 
+    case 'eval': {
+      const [sub, workId] = rest;
+      if (sub !== 'show' || !workId) { console.log(USAGE); return 1; }
+      if (!store!.getWork(workId)) { console.error('找不到 work'); return 1; }
+      printJson({
+        contract: store!.getCurrentEvaluationContract(workId),
+        runs: store!.listEvaluationRuns(workId).map((run) => ({
+          run, verdicts: store!.listCriterionVerdicts(run.id), decision: store!.getCompletionDecision(run.id),
+        })),
+      });
+      return 0;
+    }
+
+    case 'report': {
+      const [sub, ...args] = rest;
+      if (sub === 'recovery') {
+        const { values } = parseArgs({ args, options: { seed: { type: 'string', default: '1' }, runs: { type: 'string', default: '64' } } });
+        printJson(await benchmarkRecoveryReport({ seed: Number(values.seed), runs: Number(values.runs) }));
+        return 0;
+      }
+      const [labels, predictions] = args;
+      if (sub !== 'calibration' || !labels || !predictions) { console.log(USAGE); return 1; }
+      const runs = new Map<string, CalibrationRun>();
+      for (const line of readFileSync(resolve(predictions), 'utf8').split('\n').filter((row) => row.trim())) {
+        const row = JSON.parse(line) as { evaluator: ValidatorIdentity; caseId: string; verdict: CriterionVerdictRecord };
+        const key = JSON.stringify(row.evaluator);
+        const run = runs.get(key) ?? { evaluator: row.evaluator, predictions: [] };
+        run.predictions.push({ caseId: row.caseId, verdict: row.verdict });
+        runs.set(key, run);
+      }
+      printJson(calibrate(parseLabelCorpus(readFileSync(resolve(labels), 'utf8')), [...runs.values()]));
+      return 0;
+    }
+
+    case 'gc': {
+      const [sub, file] = rest;
+      if (sub === 'preview') {
+        const { values } = parseArgs({ args: rest.slice(1), options: { out: { type: 'string' } } });
+        const manifest = previewGc(store!);
+        if (!values.out) { printJson(manifest); return 0; }
+        writeFileSync(resolve(values.out), `${JSON.stringify(manifest, null, 2)}\n`);
+        const bytes = manifest.candidates.reduce((total, candidate) => total + candidate.bytes, 0);
+        console.log(`manifest ${manifest.hash}: ${manifest.candidates.length} payload(s), ${bytes} bytes → ${values.out}`);
+        return 0;
+      }
+      if (sub !== 'apply' || !file) { console.log(USAGE); return 1; }
+      printJson(applyGc(store!, readJson(file) as GcManifest, ownership!));
+      return 0;
+    }
+
+    case 'redact': {
+      const { values, positionals } = parseArgs({
+        args: rest, allowPositionals: true, options: { authority: { type: 'string' }, reason: { type: 'string' } },
+      });
+      const [artifactId] = positionals;
+      if (positionals.length !== 1 || !artifactId || !values.authority || !values.reason) { console.log(USAGE); return 1; }
+      printJson(redactArtifact(store!, artifactId, { authority: values.authority, reason: values.reason }, ownership!));
+      return 0;
+    }
+
+    case 'backup': {
+      const [sub, dir, target] = rest;
+      if (sub === 'create' && dir) {
+        store = new Store(policy.stateDir, { readOnly: true });
+        const manifest = createBackup(store, resolve(dir));
+        console.log(`backup ${manifest.hash}: schema v${manifest.db.schemaVersion}, ${manifest.artifacts.length} payload file(s), `
+          + `${manifest.notCopied.length} not copied → ${dir}`);
+        return 0;
+      }
+      if (sub === 'verify' && dir) { console.log(`backup ${verifyBackup(resolve(dir)).hash} verified`); return 0; }
+      if (sub === 'restore' && dir && target) { printJson(restoreBackup(resolve(dir), resolve(target))); return 0; }
+      console.log(USAGE);
+      return 1;
+    }
+
+    case 'replay': {
+      const [sub, workId] = rest;
+      if (sub !== 'inspect') { console.log(USAGE); return 1; }
+      const references = artifactReferences(store!);
+      const ids = workId ? [workId] : store!.listWorks().map((work) => work.id);
+      printJson({ audit: auditReplay(store!), works: ids.map((id) => inspectRecoverability(store!, id, Date.now(), references)) });
+      return 0;
+    }
+
     default:
       console.log(USAGE);
       return cmd ? 1 : 0;
@@ -536,6 +640,10 @@ export async function main(
     store?.close();
     ownership?.release();
   }
+}
+
+function printJson(value: unknown): void {
+  console.log(JSON.stringify(value, null, 2));
 }
 
 function readJson(path: string): unknown {

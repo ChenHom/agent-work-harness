@@ -16,7 +16,7 @@ P1 Recovery correctness ✅ G1 通過：durable inputs/outputs、ownership、tra
 P2 Plans/checkpoints    ✅ G2 通過：versioned plans、logical checkpoints、verified resume/fork
 P3 Operation/Budget    ✅ G3 通過：fake adapter、UNKNOWN reconciliation、compensation、integer hard cap
 P4 durable runtime     ✓ Temporal workflow、跨 worker 接手、timer/signal/cancel、version/replay
-P5                     ◻ 尚未實作
+P5 evaluation/retention ✅ G5 通過：criterion 完成規則、獨立標註校準、recovery benchmark、GC、備份還原
 需要修改 Core 的證據      無
 ```
 
@@ -72,6 +72,12 @@ cancel 與 worker takeover owner；Gateway 仍負責 operation identity、receip
 server restart deadline、callback 去重、版本暫停及 stale publication fencing。詳見
 [使用手冊](docs/usage.md#temporal-durable-runtimep4)與
 [operations runbook](docs/runbooks/temporal-operations.md)。
+
+P5 讓完成判定以 criterion 為單位：必要或硬限制的 `fail`／`unknown` 一律擋住 `DONE`，semantic critic
+只能提供 verdict，不能改 authority，並以獨立標註集校準誤收／誤拒／棄權。保留依引用可達性做 GC
+（先 dry run、manifest 未變才套用、刪除留 tombstone），備份可還原到全新目錄並以已存 evidence 重算決策，
+不呼叫任何模型。詳見[使用手冊](docs/usage.md#evaluation保留與備份p5)與
+[evaluation/retention runbook](docs/runbooks/evaluation-retention.md)。
 
 需要你決定時（`NEEDS_USER_DECISION`）：
 
@@ -181,7 +187,7 @@ run  ┌ prepare  contract 快照 → admitSkills → manifest → budget → co
 
 ## 文件
 
-- [長任務架構 v2（P1–P4 已實作；P5 為設計）](docs/superpowers/specs/2026-09-09-long-running-harness-v2-design.md)
+- [長任務架構 v2（P1–P5 已實作）](docs/superpowers/specs/2026-09-09-long-running-harness-v2-design.md)
 - [v2 分階段實作計畫（P1 本機恢復優先）](docs/superpowers/plans/2026-09-09-long-running-harness-v2.md)
 
 - 決策記錄：`DECISIONS.md`

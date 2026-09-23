@@ -138,3 +138,38 @@ shared Temporal/provider/ledger topology、TLS/auth、監控與實際故障演�
 2026-09-23 驗收環境：Node v24.19.0、Linux 6.8.0-124-generic x86_64、Temporal CLI 1.9.1／
 Server 1.32.0、Temporal TypeScript SDK 1.24.0。主機環境執行 `npm run check`：exit 0，
 325 pass、0 fail、0 skip，lint/typecheck/Knip 全部通過。
+
+## Long-running v2 G5：P5 evaluation, benchmark, and retention
+
+| # | G5 條件 | 驗證來源 |
+|---|---|---|
+| 1 | Criterion／artifact／validator binding 拒絕替換、損壞、過期版本與 artifact 內容注入 authority | `test/criteria.test.ts`、`test/g5-acceptance.test.ts`（A 要求／B 交付、`required=false` 注入、critic 輸出覆寫欄位被忽略） |
+| 2 | 必要 `fail`／`unknown` 不會 `DONE`；硬限制不被 optional 分數平均掉 | `test/evaluation-finalization.test.ts`、`test/g5-acceptance.test.ts`（hard fail + optional pass 0.99 → `fail`） |
+| 3 | Semantic critic 可棄權、觸發與預算 deterministic、只以獨立標註校準 | `test/semantic-critic.test.ts`、`test/evaluator-cost.test.ts`、`test/calibration.test.ts` |
+| 4 | Evaluation、成本、完成決策 immutable、versioned、可檢視、可由已存 evidence 重算 | `test/evaluation-store.test.ts`、`test/backup-restore.test.ts`（audit replay）、`harness eval show`／`replay inspect` |
+| 5 | 報告保留失敗與不確定 run、分母、尾端分布、人工介入、重複效果與恢復 SLA | `test/recovery-benchmark.test.ts`、`test/calibration.test.ts`、`test/g5-acceptance.test.ts` |
+| 6 | GC 依可達性、先 dry run、stale manifest 失敗關閉、保留 active／resumable／未決效果依賴 | `test/gc.test.ts`、`test/retention.test.ts`、`test/g5-acceptance.test.ts` |
+| 7 | 備份把 DB 與 artifact 還原到全新目錄、驗 hash、安全 migration、標出 expired／unreplayable | `test/backup-restore.test.ts`、`test/g5-acceptance.test.ts`（含 v6 → v7） |
+| 8 | Span link 保留非同步因果；權威帳本不取樣；redaction 保留因果 tombstone 並明示無法重播 | `test/trace-links.test.ts`、`test/redaction.test.ts` |
+| 9 | Evaluator 事故、oracle 版本、長期 unknown、保留窗口、GC、備份、還原演練、redaction 有 runbook | `docs/runbooks/evaluation-retention.md` |
+
+G5 fixture 在同一個 store 內依序證明：critic 對另一個 artifact 的 pass 被記為
+`ARTIFACT_BINDING_MISMATCH`、宣稱 `required=false` 的 verdict 被記為 `CRITERION_AUTHORITY_MISMATCH`、
+棄權讓 Work 停在 `VERIFYING`、硬限制 `fail` 不被 optional `pass`（confidence 0.99）蓋掉，而同一 contract
+在硬限制通過後才進入 `DONE`；GC 不收任何 active／resumable／未決 operation 參照的 payload、在候選
+重新被引用後拒絕 stale manifest，並留下 `gc_runs` 與 tombstone；DB + artifact 備份在網路被封鎖下還原到
+新目錄，audit replay 無問題、六個完成決策可重算，v6 備份還原時 migration 到 v7；校準報告依 task type
+給出誤收／誤拒與分母，recovery 報告保留 failed／unknown／waiting_user／budget_blocked 與人工解決的 run。
+
+限制：recovery-v1 是本機 fake provider 的故障注入，不代表真實 provider 的延遲或失效分布；runner
+沒有人工解決 operation 的 API，`manually_resolved` 只由 summary 處理。校準標註集 `2026-09-23.1`
+由 fixture 作者（Claude Code session）手寫，尚未經人工審閱。備份還原是同一主機的檔案層演練，
+不代表異地備份、權限控管或排程已在 production 就緒。
+
+量測（同一主機，2026-09-23）：recovery-v1 seed 1、64 runs，latency p50 6.75 ms／p99 31.76 ms、
+unknown age p50 5,000 ms／p95 86,401,001 ms（離線超過 dedupe 窗口）、SLA 內解決 16/40、重複效果 0、
+限制違反 0。2,000 Work／6,000 artifact 時 GC preview 89 ms、apply 3,000 筆刪除 132 ms；備份 143 ms、
+驗證 41 ms、還原 989 ms（修正前每個 Work 重掃全表為 42.2 s）。
+
+2026-09-23 驗收環境：Node v24.19.0、Linux 6.8.0-124-generic x86_64。主機環境執行 `npm run check`：
+exit 0，380 pass、0 fail、0 skip、0 cancelled，lint/typecheck/Knip 全部通過。

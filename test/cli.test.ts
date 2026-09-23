@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
@@ -8,6 +8,12 @@ import {
   formatBudget, formatCompensation, formatDurableSnapshot, formatOperation,
 } from '../src/cli-format.ts';
 import { main } from '../src/cli.ts';
+import type { RecoveryBenchmarkReport } from '../src/benchmark/recovery.ts';
+import { criterionForCase, parseLabelCorpus, type CalibrationReport } from '../src/evaluation/calibration.ts';
+import type { RestoreReport } from '../src/trace/backup.ts';
+import type { GcRunResult } from '../src/trace/retention.ts';
+import { acquireExecutionOwnership } from '../src/runtime/ownership.ts';
+import { richHistory } from './helpers/history.ts';
 import {
   loadDurableConnectionSettings, TemporalDurableCommandService, type DurableCommandService,
 } from '../src/durable/client.ts';
@@ -361,5 +367,68 @@ test('P3 fake CLI reuses provider state across restarts and keeps display comman
     assert.equal(existsSync(join(stateDir, 'fake-provider', 'ledger.json')), true);
   } finally {
     rmSync(base, { recursive: true, force: true });
+  }
+});
+
+test('P5 CLI inspects evaluations and replay, runs reports, previews/applies GC, redacts, and backs up/restores', async () => {
+  const h = await richHistory();
+  const dir = mkdtempSync(join(tmpdir(), 'harness-cli-p5-'));
+  const json = async <T>(args: string[]) => JSON.parse(await runCli(h.state, args)) as T;
+  try {
+    const evaluation = await json<{ contract: { id: string }; runs: Array<{ decision: { verdict: string } }> }>(['eval', 'show', 'W-EVAL']);
+    assert.equal(evaluation.contract.id, 'EC-1');
+    assert.equal(evaluation.runs[0]?.decision.verdict, 'pass');
+
+    const replay = await json<{ audit: { problems: string[] }; works: Array<{ workId: string; status: string }> }>(['replay', 'inspect']);
+    assert.deepEqual(replay.audit.problems, []);
+    const status = Object.fromEntries(replay.works.map((work) => [work.workId, work.status]));
+    assert.deepEqual(status, { 'W-EVAL': 'available', 'W-LOST': 'unavailable', 'W-OLD': 'unavailable', 'W-OP': 'available' });
+
+    // Read-only preview works while another process owns execution; apply needs the lock itself.
+    const orphan = h.store.putArtifact('prompt', 'orphan for cli gc');
+    h.store.db.prepare('update artifacts set created_at = ? where id = ?').run('2026-01-01T00:00:00.000Z', orphan.id);
+    const held = acquireExecutionOwnership(h.state);
+    const manifestPath = join(dir, 'gc.json');
+    try {
+      assert.match(await runCli(h.state, ['gc', 'preview', '--out', manifestPath]), /manifest [0-9a-f]{64}: 1 payload\(s\)/);
+      await assert.rejects(main(['gc', 'apply', manifestPath], { ...DEFAULT_POLICY, stateDir: h.state }), /OWNER_ACTIVE/);
+    } finally {
+      held.release();
+    }
+    const applied = await json<GcRunResult>(['gc', 'apply', manifestPath]);
+    assert.deepEqual(applied.tombstonedArtifactIds, [orphan.id]);
+
+    const redacted = await json<{ tombstonedArtifactIds: string[] }>(['redact', h.ids.rawLog, '--authority', 'user:ops', '--reason', 'privacy request']);
+    assert.deepEqual(redacted.tombstonedArtifactIds, [h.ids.rawLog]);
+
+    assert.match(await runCli(h.state, ['backup', 'create', join(dir, 'backup')]), /backup [0-9a-f]{64}: schema v7/);
+    assert.match(await runCli(h.state, ['backup', 'verify', join(dir, 'backup')]), /verified/);
+    const restored = await json<RestoreReport>(['backup', 'restore', join(dir, 'backup'), join(dir, 'restored')]);
+    const replayability = Object.fromEntries(restored.works.map((work) => [work.workId, work.replay]));
+    assert.deepEqual(replayability, { 'W-EVAL': 'compatible', 'W-LOST': 'unreplayable', 'W-OLD': 'expired', 'W-OP': 'expired' });
+
+    const labelsPath = new URL('fixtures/evaluation/labels.jsonl', import.meta.url);
+    const cases = parseLabelCorpus(readFileSync(labelsPath, 'utf8'));
+    const evaluator = { name: 'abstaining-critic', version: '1', configHash: 'sha256:abstain' };
+    const predictionsPath = join(dir, 'predictions.jsonl');
+    writeFileSync(predictionsPath, cases.map((labeled) => {
+      const definition = criterionForCase(labeled, evaluator);
+      return JSON.stringify({ evaluator, caseId: labeled.caseId, verdict: {
+        schemaVersion: '1', criterionId: definition.id, criterionVersion: definition.version, kind: definition.kind,
+        required: definition.required, artifactBindings: definition.artifactBindings, validator: evaluator,
+        verdict: 'unknown', reasonCode: 'EVALUATOR_ABSTAINED', reason: 'abstain', evidenceArtifactIds: [],
+      } });
+    }).join('\n'));
+    const calibration = await json<CalibrationReport>(['report', 'calibration', labelsPath.pathname, predictionsPath]);
+    assert.deepEqual(calibration.groups
+      .map((group) => [group.abstention.count, group.abstention.denominator]), [[5, 5], [3, 3], [4, 4]]);
+
+    const recovery = await json<{ report: RecoveryBenchmarkReport; runs: unknown[] }>(['report', 'recovery', '--seed', '3', '--runs', '8']);
+    assert.equal(recovery.report.runs.total, 8);
+    assert.equal(recovery.runs.length, 8);
+    assert.equal(recovery.report.manifest.failureSeed, 3);
+  } finally {
+    h.cleanup();
+    rmSync(dir, { recursive: true, force: true });
   }
 });

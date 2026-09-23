@@ -268,6 +268,30 @@ callback dedupe、deadline 與 artifact refs 會帶到新 run，epoch 會增加�
 [Temporal operations runbook](runbooks/temporal-operations.md)，版本升級見
 [Temporal upgrade runbook](runbooks/temporal-upgrade.md)。
 
+### Evaluation、保留與備份（P5）
+
+P5 的指令都輸出 JSON。完成判定固定：必要或硬限制的 `fail` 優先，其次任何必要 `unknown`
+（含缺少、過期、替換或損壞的 evidence）都擋住 `DONE`；critic 的 confidence 與 optional criterion
+不參與判定。
+
+```bash
+harness eval show W-xxx                        # contract、runs、每個 criterion 的 verdict 與完成決策
+harness replay inspect [W-xxx]                 # 從已存 evidence 重算決策與預算，並分類可否重播
+harness report calibration labels.jsonl predictions.jsonl   # 依 task type × evaluator version 的誤收／誤拒／棄權
+harness report recovery --seed 1 --runs 64     # recovery-v1 benchmark，含失敗與 unknown run 的尾端分布
+harness gc preview --out gc.json               # 只產生 manifest，不刪任何東西
+harness gc apply gc.json                       # manifest 未變且候選仍不可達才刪，留 tombstone 與證據
+harness redact AR-xxx --authority user:ops --reason "外洩憑證"
+harness backup create /backups/2026-09-23      # DB + artifact，一致性快照
+harness backup verify /backups/2026-09-23
+harness backup restore /backups/2026-09-23 /tmp/restore-drill   # 只能還原到空目錄
+```
+
+`predictions.jsonl` 每行是 `{ "evaluator": {name, version, configHash}, "caseId", "verdict": <criterion verdict> }`；
+標註集只接受 `human-review` 或 `fixture-author` 來源，模型產生或受測 evaluator 自己產生的標註會被拒絕。
+保留窗口、GC 審核、備份存取、還原演練、redaction 與無法重播時的處理見
+[evaluation/retention runbook](runbooks/evaluation-retention.md)。
+
 ### 讀懂結果
 
 回應分成三塊，來源不同，不要混著看：

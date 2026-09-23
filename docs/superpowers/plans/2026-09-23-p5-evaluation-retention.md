@@ -95,21 +95,21 @@ The completion authority must satisfy all of the following:
 
 **Files:** `src/cli.ts`, `src/cli-format.ts`, `test/g5-acceptance.test.ts`, `test/cli.test.ts`, `docs/usage.md`, `docs/acceptance.md`, `docs/runbooks/evaluation-retention.md`, `README.md`, `docs/superpowers/plans/2026-09-09-long-running-harness-v2.md`
 
-- [ ] Add explicit commands to inspect evaluations, run calibration/benchmark reports, preview/apply GC manifests, create/verify/restore backups, and inspect replay compatibility.
-- [ ] In one G5 fixture prove: A requested/B delivered is rejected; malicious artifact text cannot change authority; required `unknown` blocks `DONE`; optional scores cannot mask hard failure.
-- [ ] Prove GC preserves every active/resumable and unresolved-effect reference, refuses a stale manifest, and records applied deletion evidence.
-- [ ] Prove a fresh-target DB + artifact restore passes hashes, migrations, audit replay, and completion-policy inspection without an external call.
-- [ ] Prove benchmark/calibration reports retain failed/unknown/manual runs, tail percentiles, counts/denominators, fixed versions, and per-group false accept/reject/abstention.
-- [ ] Document evaluator incident response, oracle/version changes, long-lived unknowns, retention windows, GC approval/recovery, backup schedule/access, restore drill, redaction, and unreplayable-state handling.
-- [ ] Mark P5/G5 complete only when every assertion has executable evidence. Run one final `npm run check`, validate Markdown relative links and `git diff --check`, record pass/fail/skip counts, review all G5 items, and commit.
+- [x] Add explicit commands to inspect evaluations, run calibration/benchmark reports, preview/apply GC manifests, create/verify/restore backups, and inspect replay compatibility.
+- [x] In one G5 fixture prove: A requested/B delivered is rejected; malicious artifact text cannot change authority; required `unknown` blocks `DONE`; optional scores cannot mask hard failure.
+- [x] Prove GC preserves every active/resumable and unresolved-effect reference, refuses a stale manifest, and records applied deletion evidence.
+- [x] Prove a fresh-target DB + artifact restore passes hashes, migrations, audit replay, and completion-policy inspection without an external call.
+- [x] Prove benchmark/calibration reports retain failed/unknown/manual runs, tail percentiles, counts/denominators, fixed versions, and per-group false accept/reject/abstention.
+- [x] Document evaluator incident response, oracle/version changes, long-lived unknowns, retention windows, GC approval/recovery, backup schedule/access, restore drill, redaction, and unreplayable-state handling.
+- [x] Mark P5/G5 complete only when every assertion has executable evidence. Run one final `npm run check`, validate Markdown relative links and `git diff --check`, record pass/fail/skip counts, review all G5 items, and commit.
 
 ## G5 acceptance checklist
 
-- [ ] Criterion/artifact/validator bindings reject substitution, corruption, stale versions, and authority injection from artifact content.
-- [ ] Required `fail` or `unknown` cannot reach `DONE`; hard constraints cannot be averaged away.
-- [ ] Semantic critics may abstain, are triggered and budgeted deterministically, and are calibrated only against independent labels.
-- [ ] Evaluation, cost, and completion decisions are immutable, versioned, inspectable, and replayable from saved evidence.
-- [ ] Reports include failed and uncertain runs, counts/denominators, tail distributions, manual intervention, duplicate effects, and recovery SLA.
-- [ ] GC is reachability-based, dry-run first, stale-manifest safe, and preserves active/resumable/unresolved-effect dependencies.
-- [ ] Backup restores both DB and artifacts into a fresh target, verifies hashes, migrates safely, and identifies expired/unreplayable history.
-- [ ] Span links preserve asynchronous causality; authoritative ledgers are unsampled; redaction retains causal tombstones without pretending payload replay remains possible.
+- [x] Criterion/artifact/validator bindings reject substitution, corruption, stale versions, and authority injection from artifact content.
+- [x] Required `fail` or `unknown` cannot reach `DONE`; hard constraints cannot be averaged away.
+- [x] Semantic critics may abstain, are triggered and budgeted deterministically, and are calibrated only against independent labels.
+- [x] Evaluation, cost, and completion decisions are immutable, versioned, inspectable, and replayable from saved evidence.
+- [x] Reports include failed and uncertain runs, counts/denominators, tail distributions, manual intervention, duplicate effects, and recovery SLA.
+- [x] GC is reachability-based, dry-run first, stale-manifest safe, and preserves active/resumable/unresolved-effect dependencies.
+- [x] Backup restores both DB and artifacts into a fresh target, verifies hashes, migrates safely, and identifies expired/unreplayable history.
+- [x] Span links preserve asynchronous causality; authoritative ledgers are unsampled; redaction retains causal tombstones without pretending payload replay remains possible.
