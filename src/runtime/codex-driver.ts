@@ -1,6 +1,7 @@
 import { spawn } from 'node:child_process';
 import { mkdirSync, writeFileSync, readFileSync, existsSync, cpSync, rmSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
+import { readProcessStart } from './process-identity.ts';
 import type { GlobalPolicy, Mode } from '../types.ts';
 import { agentEnv, ensureRuntimeDirs } from './isolation.ts';
 import type { DriverExecutionState, ProcessIdentity } from './ownership.ts';
@@ -141,7 +142,7 @@ export class CodexDriver {
       });
       const identity: ProcessIdentity | null = child.pid === undefined ? null : {
         pid: child.pid,
-        processStart: processStart(child.pid),
+        processStart: readProcessStart(child.pid),
       };
       notify(identity
         ? { phase: 'running', child: identity, quiesced: false }
@@ -191,14 +192,5 @@ export class CodexDriver {
       });
       child.on('close', finish);
     });
-  }
-}
-
-function processStart(pid: number): string {
-  try {
-    const stat = readFileSync(`/proc/${pid}/stat`, 'utf8');
-    return stat.slice(stat.lastIndexOf(')') + 2).trim().split(/\s+/)[19] || 'unknown';
-  } catch {
-    return 'unknown';
   }
 }

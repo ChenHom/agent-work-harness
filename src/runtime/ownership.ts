@@ -4,6 +4,7 @@ import {
 } from 'node:fs';
 import { hostname } from 'node:os';
 import { join } from 'node:path';
+import { readProcessStart } from './process-identity.ts';
 
 export interface ProcessIdentity {
   pid: number;
@@ -46,16 +47,6 @@ export class OwnershipError extends Error {
 
 const lockPath = (stateDir: string): string => join(stateDir, 'execution.lock');
 const metadataPath = (stateDir: string): string => join(lockPath(stateDir), 'owner.json');
-
-function processStart(pid: number): string {
-  try {
-    const stat = readFileSync(`/proc/${pid}/stat`, 'utf8');
-    const fields = stat.slice(stat.lastIndexOf(')') + 2).trim().split(/\s+/);
-    return fields[19] || 'unknown';
-  } catch {
-    return 'unknown';
-  }
-}
 
 function readMetadata(stateDir: string): OwnershipMetadata | null {
   try {
@@ -119,7 +110,7 @@ export function acquireExecutionOwnership(stateDir: string): ExecutionOwnership 
   const token = randomUUID();
   const now = new Date().toISOString();
   publishMetadata(stateDir, {
-    token, host: hostname(), pid: process.pid, processStart: processStart(process.pid),
+    token, host: hostname(), pid: process.pid, processStart: readProcessStart(process.pid),
     phase: 'not_started', child: null, acquiredAt: now, updatedAt: now,
   });
   let currentState: DriverExecutionState = { phase: 'not_started', child: null, quiesced: true };

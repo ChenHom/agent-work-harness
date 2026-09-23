@@ -64,7 +64,7 @@
 ## 整理（不影響行為）
 
 - [x] `canonicalJson` 已收斂到 `src/canonical-json.ts`，store 與 operation hash 共用同一實作。
-- [ ] `processStart` 重複於 `src/runtime/ownership.ts:50` 與 `src/runtime/codex-driver.ts:189`。
+- [x] `processStart` 已收斂到 `src/runtime/process-identity.ts`，ownership 與 driver 共用同一 fail-closed 解析。
 
 ## P5 留下的限制（非 bug，列入考量）
 
