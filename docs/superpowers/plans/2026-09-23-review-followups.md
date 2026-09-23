@@ -38,7 +38,7 @@
 
 ## 第二組：可用性與一致性
 
-- [ ] **#8 沒有 SQLite busy timeout**（讀碼）
+- [x] **#8 沒有 SQLite busy timeout**（已重現、修正並做 manual mutation）
   - `src/trace/store.ts`：durable worker（每個 activity 一個 Store）與 CLI 同時寫同一 DB 時立即 `database is locked`；
     `provider.execute` 之後的 `recordSuccess`／`recordFailure` 也可能撞 SQLITE_BUSY，operation 停在 DISPATCHED。
   - 方向：開啟時設 `pragma busy_timeout`；注意 GC／redaction 現在在寫鎖內 unlink，timeout 要涵蓋那段時間。

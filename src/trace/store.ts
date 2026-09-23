@@ -71,6 +71,12 @@ function canonicalJson(value: unknown): string {
   return JSON.stringify(sort(JSON.parse(JSON.stringify(value)) as unknown));
 }
 
+const SQLITE_BUSY_TIMEOUT_MS = 5_000;
+
+function configureConnection(db: DatabaseSync): void {
+  db.exec(`pragma busy_timeout = ${SQLITE_BUSY_TIMEOUT_MS}`);
+}
+
 export class Store {
   readonly db: DatabaseSync;
   /** Private migrated copy used when an older schema is opened read-only; removed on close. */
@@ -95,6 +101,7 @@ export class Store {
       immutable.searchParams.set('immutable', '1');
       this.db = new DatabaseSync(walExists ? path : immutable, { readOnly: true });
       try {
+        configureConnection(this.db);
         const version = (this.db.prepare('pragma user_version').get() as { user_version: number }).user_version;
         if (version > CURRENT_SCHEMA_VERSION) {
           throw new Error(`SCHEMA_TOO_NEW: database version ${version}, supported ${CURRENT_SCHEMA_VERSION}`);
@@ -108,8 +115,12 @@ export class Store {
           this.db.prepare('vacuum into ?').run(snapshot);
           this.db.close();
           const migrating = new DatabaseSync(snapshot);
-          try { migrate(migrating); } finally { migrating.close(); }
+          try {
+            configureConnection(migrating);
+            migrate(migrating);
+          } finally { migrating.close(); }
           this.db = new DatabaseSync(snapshot, { readOnly: true });
+          configureConnection(this.db);
         }
       } catch (error) {
         if (this.db.isOpen) this.db.close();
@@ -121,6 +132,7 @@ export class Store {
       mkdirSync(this.artifactDir, { recursive: true });
       this.db = new DatabaseSync(path);
       try {
+        configureConnection(this.db);
         migrate(this.db);
         this.db.exec('pragma journal_mode = WAL');
         this.db.exec('pragma foreign_keys = ON');

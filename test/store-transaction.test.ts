@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, readdirSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { Store } from '../src/trace/store.ts';
 import type { Attempt, EvidenceRecord, Work } from '../src/types.ts';
 
@@ -33,6 +33,42 @@ function completed(attempt: Attempt): Attempt {
 }
 
 const STORE_MODULE = new URL('../src/trace/store.ts', import.meta.url).href;
+
+async function holdWriteLock(state: string, milliseconds: number): Promise<ReturnType<typeof spawn>> {
+  const child = spawn(process.execPath, ['--input-type=module', '--eval', `
+    import { DatabaseSync } from 'node:sqlite';
+    const db = new DatabaseSync(process.env.LOCK_DB);
+    db.exec('BEGIN IMMEDIATE');
+    process.stdout.write('locked\\n');
+    setTimeout(() => {
+      db.exec('COMMIT');
+      db.close();
+    }, Number(process.env.LOCK_MS));
+  `], {
+    env: {
+      ...process.env,
+      LOCK_DB: join(state, 'harness.db'),
+      LOCK_MS: String(milliseconds),
+    },
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  await new Promise<void>((resolve, reject) => {
+    let stdout = '';
+    let stderr = '';
+    child.stdout.on('data', (chunk: Buffer) => {
+      stdout += chunk.toString();
+      if (stdout.includes('locked\n')) resolve();
+    });
+    child.stderr.on('data', (chunk: Buffer) => { stderr += chunk.toString(); });
+    child.once('error', reject);
+    child.once('exit', (code, signal) => {
+      if (!stdout.includes('locked\n')) {
+        reject(new Error(`lock child exited before acquiring lock: ${code ?? signal}: ${stderr}`));
+      }
+    });
+  });
+  return child;
+}
 
 function crashChild(state: string, body: string): ReturnType<typeof spawnSync> {
   return spawnSync(process.execPath, ['--input-type=module', '--eval', `
@@ -107,6 +143,26 @@ test('withTransaction rolls back an event when the callback throws', () => {
     assert.deepEqual(reopened.events('W'), []);
   } finally {
     reopened.close();
+    rmSync(state, { recursive: true, force: true });
+  }
+});
+
+test('withTransaction waits for a short concurrent writer', async () => {
+  const state = mkdtempSync(join(tmpdir(), 'harness-store-busy-'));
+  const store = new Store(state);
+  const child = await holdWriteLock(state, 250);
+  try {
+    const startedAt = Date.now();
+    store.withTransaction(() => {
+      store.event('usage.note', { kind: 'test', text: 'written after lock release' }, 'W');
+    });
+    const elapsedMs = Date.now() - startedAt;
+
+    assert.ok(elapsedMs >= 100, `expected a lock wait, got ${elapsedMs}ms`);
+    assert.equal(store.events('W').length, 1);
+  } finally {
+    if (child.exitCode === null && child.signalCode === null) child.kill();
+    store.close();
     rmSync(state, { recursive: true, force: true });
   }
 });
