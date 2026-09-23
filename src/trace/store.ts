@@ -42,6 +42,7 @@ export type EventType =
   | 'evaluation.contract_recorded' | 'evaluation.run_recorded'
   | 'evaluation.verdict_recorded' | 'evaluation.completed'
   | 'critic.dispatch_reserved' | 'critic.dispatch_completed'
+  | 'retention.gc_applied'
   | 'usage.note';   // 人對結果的判讀 —— 機器不知道 evidence 判錯了，只有人知道
 
 export type VerifiedArtifact =
@@ -257,6 +258,10 @@ export class Store {
   }
 
   readVerifiedArtifact(id: string): VerifiedArtifact {
+    // Retention deleted the payload on purpose; the tombstone keeps hash/kind/time but never the bytes.
+    if (this.db.prepare('select 1 from artifact_tombstones where artifact_id = ?').get(id)) {
+      return { status: 'missing', id, reason: 'deleted_by_retention' };
+    }
     const row = this.db.prepare('select hash, path, bytes from artifacts where id = ?').get(id) as {
       hash: string; path: string; bytes: number;
     } | undefined;

@@ -1,6 +1,6 @@
 import type { DatabaseSync } from 'node:sqlite';
 
-export const CURRENT_SCHEMA_VERSION = 6;
+export const CURRENT_SCHEMA_VERSION = 7;
 
 const SCHEMA = `
 create table if not exists works(
@@ -98,6 +98,12 @@ create table if not exists critic_dispatches(
   trigger_type text not null, reservation_id text not null unique,
   status text not null, json text not null, created_at text not null,
   unique(work_id, trigger_key));
+create table if not exists gc_runs(
+  id text primary key, manifest_hash text not null unique, policy_version text not null,
+  manifest_json text not null, deleted_json text not null, applied_at text not null);
+create table if not exists artifact_tombstones(
+  artifact_id text primary key, hash text not null, kind text not null, bytes integer not null,
+  artifact_created_at text not null, deleted_at text not null, gc_run_id text not null, reason text not null);
 create index if not exists idx_attempts_work on attempts(work_id);
 create index if not exists idx_evidence_attempt on evidence(attempt_id);
 create index if not exists idx_outcomes_attempt on outcomes(attempt_id);
@@ -219,6 +225,13 @@ const REQUIRED_TABLES: Record<string, Record<string, ColumnRequirement>> = {
     trigger_key: TEXT, trigger_type: TEXT, reservation_id: TEXT,
     status: TEXT, json: TEXT, created_at: TEXT,
   },
+  gc_runs: {
+    id: PK_TEXT, manifest_hash: TEXT, policy_version: TEXT, manifest_json: TEXT, deleted_json: TEXT, applied_at: TEXT,
+  },
+  artifact_tombstones: {
+    artifact_id: PK_TEXT, hash: TEXT, kind: TEXT, bytes: INTEGER, artifact_created_at: TEXT,
+    deleted_at: TEXT, gc_run_id: TEXT, reason: TEXT,
+  },
 };
 
 const REQUIRED_INDEXES: Record<string, { table: string; columns: readonly string[] }> = {
@@ -336,6 +349,7 @@ export function validateSchema(db: DatabaseSync): void {
     || activeColumns !== 'work_id' || !/where\s+status\s*=\s*'ACTIVE'/i.test(activeSql)) {
     problems.push("idx_plans_one_active must uniquely index plans(work_id) where status = 'ACTIVE'");
   }
+  if (!hasUnique('gc_runs', 'manifest_hash')) problems.push('gc_runs must have unique(manifest_hash)');
   if (problems.length) throw new Error(`SCHEMA_INVALID: ${problems.join('; ')}`);
 }
 

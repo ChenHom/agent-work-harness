@@ -199,7 +199,7 @@ test('v2 migration preserves authoritative rows and adds P2 plan tables', () => 
 
   const migrated = new Store(state);
   try {
-    assert.equal(CURRENT_SCHEMA_VERSION, 6);
+    assert.equal(CURRENT_SCHEMA_VERSION, 7);
     assert.equal(migrated.getWork('W-v2')!.title, 'v2 row');
     assert.equal(migrated.events('W-v2')[0]!.type, 'v2.event');
     for (const table of ['plans', 'milestones', 'checkpoints']) {
@@ -230,7 +230,7 @@ test('v3 migration preserves authoritative rows and adds P3 operation and budget
 
   const migrated = new Store(state);
   try {
-    assert.equal(CURRENT_SCHEMA_VERSION, 6);
+    assert.equal(CURRENT_SCHEMA_VERSION, 7);
     assert.equal(migrated.getWork('W-v3')!.title, 'v3 row');
     assert.equal(migrated.events('W-v3')[0]!.type, 'v3.event');
     for (const table of [
@@ -261,7 +261,7 @@ test('v4 migration preserves authoritative rows and adds P5 evaluation ledger ta
 
   const migrated = new Store(state);
   try {
-    assert.equal(CURRENT_SCHEMA_VERSION, 6);
+    assert.equal(CURRENT_SCHEMA_VERSION, 7);
     assert.equal(migrated.getWork('W-v4')!.title, 'v4 row');
     assert.equal(migrated.events('W-v4')[0]!.type, 'v4.event');
     for (const table of [
@@ -288,7 +288,7 @@ test('v5 migration adds durable critic dispatch ownership without losing budgets
 
   const migrated = new Store(state);
   try {
-    assert.equal(CURRENT_SCHEMA_VERSION, 6);
+    assert.equal(CURRENT_SCHEMA_VERSION, 7);
     assert.equal(migrated.getWork('W-v5')!.title, 'v5 row');
     assert.ok(migrated.db.prepare("select name from sqlite_master where type='table' and name='critic_dispatches'").get());
     const columns = migrated.db.prepare('pragma table_info(budget_reservations)').all() as Array<{ name: string }>;
@@ -512,4 +512,31 @@ test('read-only open fails closed for a partial WAL sidecar set without creating
   assert.deepEqual(readdirSync(state).sort(), before);
   probe.close();
   rmSync(state, { recursive: true, force: true });
+});
+
+test('v6 migration adds retention tombstones and GC evidence without touching existing rows', () => {
+  const state = mkdtempSync(join(tmpdir(), 'harness-migration-'));
+  const seeded = new Store(state);
+  seeded.db.exec(`
+    insert into works values ('W-v6','v6 row','repo','/repo','DONE',1,2,'t0');
+    drop table gc_runs;
+    drop table artifact_tombstones;
+    pragma user_version = 6;
+  `);
+  seeded.close();
+
+  const migrated = new Store(state);
+  try {
+    assert.equal(CURRENT_SCHEMA_VERSION, 7);
+    assert.equal(migrated.getWork('W-v6')!.title, 'v6 row');
+    for (const table of ['gc_runs', 'artifact_tombstones']) {
+      assert.ok(migrated.db.prepare("select name from sqlite_master where type='table' and name=?").get(table), table);
+    }
+    assert.throws(() => migrated.db.exec(`
+      insert into gc_runs values ('GC-1','same','1','{}','[]','t1');
+      insert into gc_runs values ('GC-2','same','1','{}','[]','t2');`), /UNIQUE/);
+  } finally {
+    migrated.close();
+    rmSync(state, { recursive: true, force: true });
+  }
 });

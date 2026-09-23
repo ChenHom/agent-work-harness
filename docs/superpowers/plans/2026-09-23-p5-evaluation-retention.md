@@ -73,12 +73,12 @@ The completion authority must satisfy all of the following:
 
 **Files:** `src/trace/retention.ts`, `src/trace/store.ts`, `src/trace/migrations.ts`, `test/retention.test.ts`, `test/gc.test.ts`
 
-- [ ] Define versioned `active`, `resumable`, and `archived` retention classes and windows for DB records, artifacts, raw logs, receipts, idempotency keys, and tombstones.
-- [ ] Build a deterministic reachability graph rooted in active/resumable Work, checkpoints, current plans, evaluations, pending operations/compensations, reservations, receipts, and dedupe records.
-- [ ] Make GC dry-run the default. Emit a manifest with roots, references, candidates, reason, hash, policy version, and creation time before any deletion.
-- [ ] Require an explicit apply step against the unchanged manifest; recheck hashes/reachability transactionally and save deletion evidence. Stale manifests fail closed.
-- [ ] Never collect unresolved-effect evidence or keys before their completion/dedupe/recovery horizons. Mark expired recovery as unsafe/unavailable rather than silently continuing.
-- [ ] Run targeted retention/GC tests, one full `npm run check`, review that every resumable reference survives, and commit.
+- [x] Define versioned `active`, `resumable`, and `archived` retention classes and windows for DB records, artifacts, raw logs, receipts, idempotency keys, and tombstones.
+- [x] Build a deterministic reachability graph rooted in active/resumable Work, checkpoints, current plans, evaluations, pending operations/compensations, reservations, receipts, and dedupe records.
+- [x] Make GC dry-run the default. Emit a manifest with roots, references, candidates, reason, hash, policy version, and creation time before any deletion.
+- [x] Require an explicit apply step against the unchanged manifest; recheck hashes/reachability transactionally and save deletion evidence. Stale manifests fail closed.
+- [x] Never collect unresolved-effect evidence or keys before their completion/dedupe/recovery horizons. Mark expired recovery as unsafe/unavailable rather than silently continuing.
+- [x] Run targeted retention/GC tests, one full `npm run check`, review that every resumable reference survives, and commit.
 
 ## Task 6: Backup, restore, migration drill, and privacy-preserving traces
 
