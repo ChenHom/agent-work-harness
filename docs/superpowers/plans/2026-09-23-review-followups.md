@@ -70,7 +70,8 @@
 
 - [ ] 校準標註集 `2026-09-23.1` 由 fixture 作者（Claude Code session）手寫，尚未人工審閱；審閱後將 provenance 改為 `human-review`。
 - [x] Recovery benchmark 無法產生 `manually_resolved` run：已新增具 human-review authority、artifact 與預算原子結算的
-  `WAITING_USER` resolution API／CLI，benchmark 會走此路徑。
+  `WAITING_USER` resolution API／CLI，benchmark 會走此路徑。Security review 後將 authority 改為獨立呼叫參數；
+  resolution JSON 的 audit reference 不能自行把內容提升為 `human-review` authority。
 - [ ] 備份還原只做過同主機檔案層演練；異地備份、存取控管、排程未實作。
 
 ---

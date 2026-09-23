@@ -197,7 +197,9 @@ harness fake operation resolve OP-xxx resolution.json
 非空 `note` 與完整 receipt（含實際整數用量）；確認沒有副作用則用
 `outcome: "confirmed-no-effect"`。Harness 會保存 resolution artifact，並在同一交易中更新 operation
 與結算或釋放 reservation。原本 UNKNOWN 的 dispatch attempt 保持不變；不要用模型輸出、猜測或逾時
-當成人工證據，也不要直接改 SQLite。
+當成人工證據，也不要直接改 SQLite。`authorizationRef` 只是 audit reference，不會自行授予 authority；
+authority 來自 operator 主動執行這個受 execution ownership 保護的 CLI action，因此 state directory 的
+作業系統存取權限必須只開放給可信 operator。
 
 補償是另一個持久 workflow，有自己的 key、attempt、receipt 與 reservation：
 

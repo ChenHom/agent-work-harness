@@ -470,8 +470,15 @@ export async function main(
         return 0;
       }
       if (area === 'operation' && action === 'resolve' && id && extra) {
-        const resolution = readJson(extra) as Parameters<OperationGateway['resolveWaitingUser']>[1];
-        console.log(formatOperation(gateway.resolveWaitingUser(id, resolution)));
+        const input = readJson(extra) as Parameters<OperationGateway['resolveWaitingUser']>[1]
+          & { authorizationRef?: unknown };
+        if (typeof input.authorizationRef !== 'string' || !/^human-review:\S+$/.test(input.authorizationRef)) {
+          throw new Error('OPERATION_MANUAL_AUTHORITY_INVALID: expected human-review:<ref>');
+        }
+        const { authorizationRef, ...resolution } = input;
+        console.log(formatOperation(gateway.resolveWaitingUser(id, resolution, {
+          source: 'human-review', reference: authorizationRef.slice('human-review:'.length),
+        })));
         return 0;
       }
       if (area === 'operation' && (action === 'dispatch' || action === 'reconcile') && id) {

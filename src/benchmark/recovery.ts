@@ -237,9 +237,9 @@ export async function runRecoveryBenchmark(options: {
           if (receipt) {
             steps += 1;
             operation = gateway.resolveWaitingUser(operation.id, {
-              outcome: 'confirmed-success', authorizationRef: 'human-review:benchmark-oracle-v1',
+              outcome: 'confirmed-success',
               note: 'independent fake provider ledger confirms the exact effect', receipt,
-            });
+            }, { source: 'fixture-author', reference: 'benchmark-oracle-v1' });
             manuallyResolved = true;
           }
         }

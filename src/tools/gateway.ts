@@ -22,14 +22,17 @@ interface PrepareOperationInput {
 
 export type ManualOperationResolution = {
   outcome: 'confirmed-success';
-  authorizationRef: string;
   note: string;
   receipt: OperationReceipt;
 } | {
   outcome: 'confirmed-no-effect';
-  authorizationRef: string;
   note: string;
 };
+
+export interface ManualResolutionAuthority {
+  source: 'human-review' | 'fixture-author';
+  reference: string;
+}
 
 export class OperationGateway {
   private readonly store: Store;
@@ -208,7 +211,11 @@ export class OperationGateway {
     }
   }
 
-  resolveWaitingUser(operationId: string, resolution: ManualOperationResolution): Operation {
+  resolveWaitingUser(
+    operationId: string,
+    resolution: ManualOperationResolution,
+    authority?: ManualResolutionAuthority,
+  ): Operation {
     const current = this.requireOperation(operationId);
     if (current.status !== 'WAITING_USER') {
       throw new Error(`OPERATION_NOT_WAITING_USER: ${operationId} is ${current.status}`);
@@ -217,17 +224,19 @@ export class OperationGateway {
       || (resolution.outcome !== 'confirmed-success' && resolution.outcome !== 'confirmed-no-effect')) {
       throw new Error('OPERATION_MANUAL_OUTCOME_INVALID: expected confirmed-success or confirmed-no-effect');
     }
-    if (typeof resolution.authorizationRef !== 'string'
-      || !/^human-review:\S+$/.test(resolution.authorizationRef)) {
-      throw new Error('OPERATION_MANUAL_AUTHORITY_INVALID: expected human-review:<ref>');
+    if (!authority) throw new Error('OPERATION_MANUAL_AUTHORITY_REQUIRED: use a trusted caller authority');
+    if ((authority.source !== 'human-review' && authority.source !== 'fixture-author')
+      || typeof authority.reference !== 'string' || !authority.reference.trim()) {
+      throw new Error('OPERATION_MANUAL_AUTHORITY_INVALID: expected an independent source and reference');
     }
     if (typeof resolution.note !== 'string' || !resolution.note.trim()) {
       throw new Error('OPERATION_MANUAL_NOTE_REQUIRED: note is empty');
     }
     if (resolution.outcome === 'confirmed-success') this.validateManualReceipt(current, resolution.receipt);
 
+    const authorizationRef = `${authority.source}:${authority.reference}`;
     const artifact = this.store.putArtifact('operation-manual-resolution', canonicalJson({
-      schemaVersion: '1', source: 'human-review', ...resolution,
+      schemaVersion: '1', source: authority.source, authorizationRef, ...resolution,
     }), 'json');
     const resolved: Operation = {
       ...current,
@@ -244,7 +253,7 @@ export class OperationGateway {
         this.budget.releaseConfirmedUnusedInTransaction(this.requireReservation(current));
       }
       this.store.event('operation.manually_resolved', {
-        operationId, outcome: resolution.outcome, authorizationRef: resolution.authorizationRef,
+        operationId, outcome: resolution.outcome, authorizationRef,
         artifactId: artifact.id,
       }, current.workId);
     });

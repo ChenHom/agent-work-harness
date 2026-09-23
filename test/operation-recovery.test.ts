@@ -23,6 +23,8 @@ function owner(): ExecutionOwnership {
   };
 }
 
+const reviewer = (reference: string) => ({ source: 'human-review' as const, reference });
+
 function expiringOwner(validations: number): ExecutionOwnership {
   let active = false;
   let calls = 0;
@@ -350,36 +352,40 @@ test('human review resolves a waiting operation and settles its held budget exac
     assert.equal(waiting.status, 'WAITING_USER');
 
     assert.throws(() => h.gateway.resolveWaitingUser(operation.id, {
-      outcome: 'guessed-from-timeout', authorizationRef: 'human-review:TICKET-5', note: 'invalid',
-    } as never), /OPERATION_MANUAL_OUTCOME_INVALID/);
+      outcome: 'confirmed-no-effect', authorizationRef: 'human-review:SELF_ASSERTED',
+      note: 'content must not grant its own authority',
+    } as never), /OPERATION_MANUAL_AUTHORITY_REQUIRED/);
     assert.throws(() => h.gateway.resolveWaitingUser(operation.id, {
-      outcome: 'confirmed-no-effect', authorizationRef: 'model:critic', note: 'model says no effect',
-    }), /OPERATION_MANUAL_AUTHORITY_INVALID/);
+      outcome: 'guessed-from-timeout', note: 'invalid',
+    } as never, reviewer('TICKET-5')), /OPERATION_MANUAL_OUTCOME_INVALID/);
     assert.throws(() => h.gateway.resolveWaitingUser(operation.id, {
-      outcome: 'confirmed-success', authorizationRef: 'human-review:TICKET-5B', note: 'wrong resource',
+      outcome: 'confirmed-no-effect', note: 'model says no effect',
+    }, { source: 'model', reference: 'critic' } as never), /OPERATION_MANUAL_AUTHORITY_INVALID/);
+    assert.throws(() => h.gateway.resolveWaitingUser(operation.id, {
+      outcome: 'confirmed-success', note: 'wrong resource',
       receipt: {
         providerReceiptId: 'manual-receipt-5b', externalId: 'fake-other-customer',
         resourceVersion: 'fake-v1', ownershipRef: 'other-customer', actualUnits: 7,
       },
-    }), /OPERATION_MANUAL_RECEIPT_MISMATCH/);
+    }, reviewer('TICKET-5B')), /OPERATION_MANUAL_RECEIPT_MISMATCH/);
     assert.throws(() => h.gateway.resolveWaitingUser(operation.id, {
-      outcome: 'confirmed-success', authorizationRef: 'human-review:TICKET-6', note: 'over budget',
+      outcome: 'confirmed-success', note: 'over budget',
       receipt: {
         providerReceiptId: 'manual-receipt-6', externalId: 'fake-customer-7',
         resourceVersion: 'fake-v1', ownershipRef: 'customer-7', actualUnits: 11,
       },
-    }), /BUDGET_RECEIPT_EXCEEDS_RESERVATION/);
+    }, reviewer('TICKET-6')), /BUDGET_RECEIPT_EXCEEDS_RESERVATION/);
     assert.equal(h.store.getOperation(operation.id)?.status, 'WAITING_USER');
     assert.equal(h.store.getBudgetReservation(operation.reservationId!)?.status, 'UNKNOWN');
 
     const resolved = h.gateway.resolveWaitingUser(operation.id, {
-      outcome: 'confirmed-success', authorizationRef: 'human-review:TICKET-7',
+      outcome: 'confirmed-success',
       note: 'provider console confirms the exact owned resource',
       receipt: {
         providerReceiptId: 'manual-receipt-7', externalId: 'fake-customer-7',
         resourceVersion: 'fake-v1', ownershipRef: 'customer-7', actualUnits: 7,
       },
-    });
+    }, reviewer('TICKET-7'));
 
     assert.equal(resolved.status, 'SUCCEEDED');
     assert.equal(h.store.getBudgetReservation(operation.reservationId!)?.status, 'SETTLED');
@@ -397,8 +403,8 @@ test('human review resolves a waiting operation and settles its held budget exac
       schemaVersion: '1', source: 'human-review',
     });
     assert.throws(() => h.gateway.resolveWaitingUser(operation.id, {
-      outcome: 'confirmed-no-effect', authorizationRef: 'human-review:TICKET-8', note: 'conflict',
-    }), /OPERATION_NOT_WAITING_USER/);
+      outcome: 'confirmed-no-effect', note: 'conflict',
+    }, reviewer('TICKET-8')), /OPERATION_NOT_WAITING_USER/);
   } finally {
     h.store.close();
     rmSync(h.state, { recursive: true, force: true });
@@ -417,9 +423,9 @@ test('human review can confirm no effect and release a waiting operation reserva
     });
 
     const resolved = h.gateway.resolveWaitingUser(operation.id, {
-      outcome: 'confirmed-no-effect', authorizationRef: 'human-review:TICKET-9',
+      outcome: 'confirmed-no-effect',
       note: 'provider audit log has no matching request or resource',
-    });
+    }, reviewer('TICKET-9'));
 
     assert.equal(resolved.status, 'FAILED');
     assert.equal(h.store.getBudgetReservation(operation.reservationId!)?.status, 'RELEASED');
