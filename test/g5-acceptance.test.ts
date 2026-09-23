@@ -159,8 +159,10 @@ test('G5: completion authority, reachability-safe GC, fresh-target restore, and 
     const { report: recovery, runs } = await benchmarkRecoveryReport({ seed: 5, runs: 16 });
     const manual: RecoveryRunRecord = { ...runs[0]!, runId: 'manual', outcome: 'manually_resolved', manualInterventions: 1 };
     const withManual = summarizeRecoveryBenchmark(recovery.manifest, [...runs, manual]);
-    assert.ok(['failed', 'unknown', 'waiting_user', 'budget_blocked'].every((outcome) => recovery.runs.byOutcome[outcome as 'failed'] > 0));
-    assert.deepEqual([withManual.runs.total, withManual.runs.byOutcome.manually_resolved], [17, 1]);
+    assert.ok(['failed', 'unknown', 'budget_blocked', 'manually_resolved']
+      .every((outcome) => recovery.runs.byOutcome[outcome as 'failed'] > 0));
+    assert.equal(recovery.runs.byOutcome.waiting_user, 0);
+    assert.deepEqual([withManual.runs.total, withManual.runs.byOutcome.manually_resolved], [17, 5]);
     assert.ok(recovery.latencyMs.p99 !== null && recovery.unknown.ageMs.p95 !== null && recovery.recoverySuccess.denominator > 0);
     assert.deepEqual([recovery.manifest.taskSetVersion, recovery.manifest.benchmarkVersion, recovery.manifest.failureSeed], ['recovery-v1', '1', 5]);
     assert.ok(!Object.keys(recovery).some((key) => /score|average|composite/i.test(key)));

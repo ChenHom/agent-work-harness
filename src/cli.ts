@@ -64,6 +64,7 @@ P1–P3 local runtime:
   harness fake budget show <workId>      顯示 Work 預算與 reservation（唯讀）
   harness fake operation prepare <workId> <json-file>
   harness fake operation dispatch|reconcile <operationId>
+  harness fake operation resolve <operationId> <json-file>
   harness fake operation show <workId>   顯示 operation／compensation（唯讀）
   harness fake compensation prepare <operationId> <json-file>
   harness fake compensation dispatch|reconcile <compensationId>
@@ -468,6 +469,11 @@ export async function main(
         console.log(formatOperation(operation));
         return 0;
       }
+      if (area === 'operation' && action === 'resolve' && id && extra) {
+        const resolution = readJson(extra) as Parameters<OperationGateway['resolveWaitingUser']>[1];
+        console.log(formatOperation(gateway.resolveWaitingUser(id, resolution)));
+        return 0;
+      }
       if (area === 'operation' && (action === 'dispatch' || action === 'reconcile') && id) {
         const operation = action === 'dispatch'
           ? await gateway.dispatch(id, dispatchAuthority) : await gateway.reconcile(id, dispatchAuthority);
@@ -486,7 +492,7 @@ export async function main(
         console.log(formatCompensation(compensation));
         return 0;
       }
-      console.error('用法：harness fake budget configure|show | operation prepare|dispatch|reconcile|show | compensation prepare|dispatch|reconcile');
+      console.error('用法：harness fake budget configure|show | operation prepare|dispatch|reconcile|resolve|show | compensation prepare|dispatch|reconcile');
       return 1;
     }
 

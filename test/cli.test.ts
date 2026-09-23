@@ -356,11 +356,40 @@ test('P3 fake CLI reuses provider state across restarts and keeps display comman
     assert.match(await runCli(stateDir, ['fake', 'compensation', 'dispatch', compensationId]), /UNKNOWN/);
     assert.match(await runCli(stateDir, ['fake', 'compensation', 'reconcile', compensationId]), /SUCCEEDED/);
 
+    const manualOperationPath = join(base, 'manual-operation.json');
+    writeFileSync(manualOperationPath, JSON.stringify({
+      intentKey: 'create:manual', kind: 'fake.create', targetScope: 'customer-manual',
+      payload: {
+        businessId: 'customer-manual', value: 'enabled', behavior: 'lose-response-after-effect',
+        lookupMode: 'partial',
+      },
+      precondition: 'absent', reconciliationStrategy: 'lookup',
+      compensationPolicy: 'remove owned resource', authorizationRef: 'contract:C-P3',
+    }));
+    const manualPrepared = await runCli(stateDir, [
+      'fake', 'operation', 'prepare', seededWork.id, manualOperationPath,
+    ]);
+    const manualOperationId = manualPrepared.match(/(OP-[^\s]+)/)?.[1];
+    assert.ok(manualOperationId);
+    assert.match(await runCli(stateDir, ['fake', 'operation', 'dispatch', manualOperationId]), /UNKNOWN/);
+    assert.match(await runCli(stateDir, ['fake', 'operation', 'reconcile', manualOperationId]), /WAITING_USER/);
+    const resolutionPath = join(base, 'manual-resolution.json');
+    writeFileSync(resolutionPath, JSON.stringify({
+      outcome: 'confirmed-success', authorizationRef: 'human-review:TICKET-CLI',
+      note: 'provider console confirms the exact resource', receipt: {
+        providerReceiptId: 'manual-cli-receipt', externalId: 'fake-customer-manual',
+        resourceVersion: 'fake-v1', ownershipRef: 'customer-manual', actualUnits: 7,
+      },
+    }));
+    assert.match(await runCli(stateDir, [
+      'fake', 'operation', 'resolve', manualOperationId, resolutionPath,
+    ]), /SUCCEEDED/);
+
     const before = new Store(stateDir, { readOnly: true });
     const eventSeq = before.latestEventSeq();
     before.close();
     assert.match(await runCli(stateDir, ['fake', 'operation', 'show', seededWork.id]), /SUCCEEDED.*create:cli/);
-    assert.match(await runCli(stateDir, ['fake', 'budget', 'show', seededWork.id]), /spent=10 reserved=0/);
+    assert.match(await runCli(stateDir, ['fake', 'budget', 'show', seededWork.id]), /spent=17 reserved=0/);
     const after = new Store(stateDir, { readOnly: true });
     assert.equal(after.latestEventSeq(), eventSeq);
     after.close();

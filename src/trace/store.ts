@@ -36,7 +36,7 @@ export type EventType =
   | 'dependency.artifact_replaced' | 'milestone.completed' | 'milestone.stale'
   | 'operation.prepared' | 'operation.state_changed' | 'operation.attempt_recorded'
   | 'operation.attempt_state_changed'
-  | 'operation.reconciled'
+  | 'operation.reconciled' | 'operation.manually_resolved'
   | 'compensation.prepared' | 'compensation.state_changed' | 'compensation.attempt_recorded'
   | 'compensation.attempt_state_changed' | 'compensation.reconciled'
   | 'budget.limit_configured' | 'budget.reservation_recorded' | 'budget.ledger_recorded'

@@ -104,17 +104,17 @@ test('recovery-v1 runs every failure mode through the gateway and measures it ag
     'lost-before-effect': 2, 'never-visible': 2, 'offline-past-dedupe': 2, 'partial-effect': 2,
   });
   assert.deepEqual(report.runs.byOutcome, {
-    succeeded: 4, failed: 4, unknown: 2, waiting_user: 4, budget_blocked: 2, manually_resolved: 0,
+    succeeded: 4, failed: 4, unknown: 2, waiting_user: 0, budget_blocked: 2, manually_resolved: 4,
   });
-  assert.deepEqual(report.independentlyAccepted, { count: 4, denominator: 16, rate: 0.25 });
+  assert.deepEqual(report.independentlyAccepted, { count: 8, denominator: 16, rate: 0.5 });
   assert.deepEqual(report.cost, {
-    totalSpentUnits: 28, totalUnresolvedReservedUnits: 60,
-    perIndependentlyAcceptedWork: { spentUnits: 7, upperBoundUnits: 22 },
+    totalSpentUnits: 56, totalUnresolvedReservedUnits: 20,
+    perIndependentlyAcceptedWork: { spentUnits: 7, upperBoundUnits: 9.5 },
   });
   assert.deepEqual({ ...report.unknown, ageMs: undefined }, {
-    entered: 10, resolved: 4, unresolved: 6, withinSla: { count: 4, denominator: 10, rate: 0.4 }, ageMs: undefined,
+    entered: 10, resolved: 8, unresolved: 2, withinSla: { count: 6, denominator: 10, rate: 0.6 }, ageMs: undefined,
   });
-  assert.deepEqual(report.recoverySuccess, { count: 4, denominator: 10, rate: 0.4 });
+  assert.deepEqual(report.recoverySuccess, { count: 8, denominator: 10, rate: 0.8 });
   assert.deepEqual(report.duplicateEffects, { runs: 0, effects: 0 });
   assert.deepEqual(report.manualIntervention, { runs: 4, interventions: 4 });
   assert.deepEqual(report.constraintViolations, { runs: 0, byCode: {} });
@@ -123,11 +123,12 @@ test('recovery-v1 runs every failure mode through the gateway and measures it ag
     assert.equal(metric.samples, 16);
     assert.ok(metric.p50! <= metric.p95! && metric.p95! <= metric.p99!);
   }
-  assert.equal(report.recoveryMs.samples, 4);
+  assert.equal(report.recoveryMs.samples, 8);
   const of = (scenario: string) => runs.filter((record) => record.scenario === scenario);
   assert.ok(of('lost-before-effect').every((record) => record.outcome === 'failed' && record.unknownAgeMs === 5_000));
   assert.ok(of('never-visible').every((record) => record.outcome === 'unknown' && record.unknownAgeMs === 8_000 && record.steps === 10));
-  assert.ok(of('offline-past-dedupe').every((record) => record.outcome === 'waiting_user' && record.unknownAgeMs! > 86_400_000));
+  assert.ok(of('offline-past-dedupe').every((record) => record.outcome === 'manually_resolved' && record.unknownAgeMs! > 86_400_000));
+  assert.ok(of('partial-effect').every((record) => record.outcome === 'manually_resolved'));
   assert.ok(of('budget-exhausted').every((record) => record.steps === 1 && record.spentUnits === 0));
 });
 

@@ -161,14 +161,15 @@ G5 fixture 在同一個 store 內依序證明：critic 對另一個 artifact 的
 新目錄，audit replay 無問題、六個完成決策可重算，v6 備份還原時 migration 到 v7；校準報告依 task type
 給出誤收／誤拒與分母，recovery 報告保留 failed／unknown／waiting_user／budget_blocked 與人工解決的 run。
 
-限制：recovery-v1 是本機 fake provider 的故障注入，不代表真實 provider 的延遲或失效分布；runner
-沒有人工解決 operation 的 API，`manually_resolved` 只由 summary 處理。校準標註集 `2026-09-23.1`
+限制：recovery-v1 是本機 fake provider 的故障注入，不代表真實 provider 的延遲或失效分布；其中
+`manually_resolved` 由 fake provider ledger 模擬獨立人工查核。校準標註集 `2026-09-23.1`
 由 fixture 作者（Claude Code session）手寫，尚未經人工審閱。備份還原是同一主機的檔案層演練，
 不代表異地備份、權限控管或排程已在 production 就緒。
 
-量測（同一主機，2026-09-23）：recovery-v1 seed 1、64 runs，latency p50 6.75 ms／p99 31.76 ms、
-unknown age p50 5,000 ms／p95 86,401,001 ms（離線超過 dedupe 窗口）、SLA 內解決 16/40、重複效果 0、
-限制違反 0。2,000 Work／6,000 artifact 時 GC preview 89 ms、apply 3,000 筆刪除 132 ms；備份 143 ms、
+量測（同一主機，2026-09-23）：recovery-v1 seed 1、64 runs，latency p50 7.97 ms／p99 25.41 ms、
+unknown age p50 5,000 ms／p95 86,401,001 ms（離線超過 dedupe 窗口）、SLA 內解決 24/40、人工解決
+16 runs、未解 8、重複效果 0、限制違反 0；32/64 independently accepted，成本 224 spent／80 reserved units。
+2,000 Work／6,000 artifact 時 GC preview 89 ms、apply 3,000 筆刪除 132 ms；備份 143 ms、
 驗證 41 ms、還原 989 ms（修正前每個 Work 重掃全表為 42.2 s）。
 
 2026-09-23 驗收環境：Node v24.19.0、Linux 6.8.0-124-generic x86_64。主機環境執行 `npm run check`：

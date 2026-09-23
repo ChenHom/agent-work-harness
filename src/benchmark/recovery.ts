@@ -218,6 +218,7 @@ export async function runRecoveryBenchmark(options: {
       }
       let unknownSince: number | undefined;
       let unknownSinceWall: number | undefined;
+      let manuallyResolved = false;
       if (operation) {
         steps += 1;
         operation = await gateway.dispatch(operation.id, authority);
@@ -231,6 +232,17 @@ export async function runRecoveryBenchmark(options: {
           steps += 1;
           operation = await gateway.reconcile(operation.id, authority);
         }
+        if (operation.status === 'WAITING_USER') {
+          const receipt = provider.inspectReceipt(runId);
+          if (receipt) {
+            steps += 1;
+            operation = gateway.resolveWaitingUser(operation.id, {
+              outcome: 'confirmed-success', authorizationRef: 'human-review:benchmark-oracle-v1',
+              note: 'independent fake provider ledger confirms the exact effect', receipt,
+            });
+            manuallyResolved = true;
+          }
+        }
       }
       const finishedWall = performance.now();
       const effects = provider.effectCount() - effectsBefore;
@@ -239,14 +251,15 @@ export async function runRecoveryBenchmark(options: {
       const violations = oracleViolations(status, effects, summary);
       const unknownResolved = unknownSince !== undefined && (status === 'SUCCEEDED' || status === 'FAILED');
       records.push({
-        runId, scenario, outcome: status ? outcomeOf(status) : 'budget_blocked',
+        runId, scenario, outcome: manuallyResolved ? 'manually_resolved'
+          : status ? outcomeOf(status) : 'budget_blocked',
         latencyMs: finishedWall - started, steps,
         spentUnits: summary.spentUnits, unresolvedReservedUnits: summary.reservedUnits,
         enteredUnknown: unknownSince !== undefined, unknownResolved,
         unknownAgeMs: unknownSince === undefined ? null : now - unknownSince,
         recoveryMs: unknownResolved ? finishedWall - unknownSinceWall! : null,
         duplicateEffects: Math.max(0, effects - 1),
-        manualInterventions: status === 'WAITING_USER' ? 1 : 0,
+        manualInterventions: manuallyResolved || status === 'WAITING_USER' ? 1 : 0,
         constraintViolations: violations,
         independentlyAccepted: status === 'SUCCEEDED' && effects === 1 && violations.length === 0,
       });

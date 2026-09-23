@@ -20,6 +20,17 @@ interface PrepareOperationInput {
   authorizationRef: string;
 }
 
+export type ManualOperationResolution = {
+  outcome: 'confirmed-success';
+  authorizationRef: string;
+  note: string;
+  receipt: OperationReceipt;
+} | {
+  outcome: 'confirmed-no-effect';
+  authorizationRef: string;
+  note: string;
+};
+
 export class OperationGateway {
   private readonly store: Store;
   private readonly budget: BudgetLedger;
@@ -197,6 +208,49 @@ export class OperationGateway {
     }
   }
 
+  resolveWaitingUser(operationId: string, resolution: ManualOperationResolution): Operation {
+    const current = this.requireOperation(operationId);
+    if (current.status !== 'WAITING_USER') {
+      throw new Error(`OPERATION_NOT_WAITING_USER: ${operationId} is ${current.status}`);
+    }
+    if (!resolution || typeof resolution !== 'object'
+      || (resolution.outcome !== 'confirmed-success' && resolution.outcome !== 'confirmed-no-effect')) {
+      throw new Error('OPERATION_MANUAL_OUTCOME_INVALID: expected confirmed-success or confirmed-no-effect');
+    }
+    if (typeof resolution.authorizationRef !== 'string'
+      || !/^human-review:\S+$/.test(resolution.authorizationRef)) {
+      throw new Error('OPERATION_MANUAL_AUTHORITY_INVALID: expected human-review:<ref>');
+    }
+    if (typeof resolution.note !== 'string' || !resolution.note.trim()) {
+      throw new Error('OPERATION_MANUAL_NOTE_REQUIRED: note is empty');
+    }
+    if (resolution.outcome === 'confirmed-success') this.validateManualReceipt(resolution.receipt);
+
+    const artifact = this.store.putArtifact('operation-manual-resolution', canonicalJson({
+      schemaVersion: '1', source: 'human-review', ...resolution,
+    }), 'json');
+    const resolved: Operation = {
+      ...current,
+      status: resolution.outcome === 'confirmed-success' ? 'SUCCEEDED' : 'FAILED',
+      lastReconciliationArtifactId: artifact.id,
+      manualReason: undefined,
+      updatedAt: this.nowIso(),
+    };
+    this.store.withTransaction(() => {
+      this.store.updateOperation(resolved, current.status);
+      if (resolution.outcome === 'confirmed-success') {
+        this.budget.settleInTransaction(this.requireReservation(current), resolution.receipt.actualUnits);
+      } else {
+        this.budget.releaseConfirmedUnusedInTransaction(this.requireReservation(current));
+      }
+      this.store.event('operation.manually_resolved', {
+        operationId, outcome: resolution.outcome, authorizationRef: resolution.authorizationRef,
+        artifactId: artifact.id,
+      }, current.workId);
+    });
+    return resolved;
+  }
+
   private recordSuccess(operation: Operation, attempt: OperationAttempt, receipt: OperationReceipt): Operation {
     const artifact = this.store.putArtifact('operation-receipt', canonicalJson(receipt), 'json');
     const at = this.nowIso();
@@ -267,6 +321,16 @@ export class OperationGateway {
   }
 
   private nowIso(): string { return new Date(this.clock()).toISOString(); }
+
+  private validateManualReceipt(receipt: OperationReceipt): void {
+    if (!receipt || typeof receipt.providerReceiptId !== 'string' || !receipt.providerReceiptId.trim()
+      || typeof receipt.externalId !== 'string' || !receipt.externalId.trim()
+      || typeof receipt.resourceVersion !== 'string' || !receipt.resourceVersion.trim()
+      || typeof receipt.ownershipRef !== 'string' || !receipt.ownershipRef.trim()
+      || !Number.isSafeInteger(receipt.actualUnits) || receipt.actualUnits < 0) {
+      throw new Error('OPERATION_MANUAL_RECEIPT_INVALID: receipt fields and actualUnits are required');
+    }
+  }
 
   private requireOperation(id: string): Operation {
     const operation = this.store.getOperation(id);

@@ -335,6 +335,93 @@ test('partial and unsupported lookup outcomes require manual handling without re
   }
 });
 
+test('human review resolves a waiting operation and settles its held budget exactly once', async () => {
+  const h = fixture();
+  try {
+    const operation = h.gateway.prepare({
+      ...prepareInput('lose-response-after-effect'),
+      payload: {
+        businessId: 'customer-7', value: 'enabled', behavior: 'lose-response-after-effect' as const,
+        lookupMode: 'partial' as const,
+      },
+    });
+    await h.gateway.dispatch(operation.id, owner());
+    const waiting = await h.gateway.reconcile(operation.id, owner());
+    assert.equal(waiting.status, 'WAITING_USER');
+
+    assert.throws(() => h.gateway.resolveWaitingUser(operation.id, {
+      outcome: 'guessed-from-timeout', authorizationRef: 'human-review:TICKET-5', note: 'invalid',
+    } as never), /OPERATION_MANUAL_OUTCOME_INVALID/);
+    assert.throws(() => h.gateway.resolveWaitingUser(operation.id, {
+      outcome: 'confirmed-no-effect', authorizationRef: 'model:critic', note: 'model says no effect',
+    }), /OPERATION_MANUAL_AUTHORITY_INVALID/);
+    assert.throws(() => h.gateway.resolveWaitingUser(operation.id, {
+      outcome: 'confirmed-success', authorizationRef: 'human-review:TICKET-6', note: 'over budget',
+      receipt: {
+        providerReceiptId: 'manual-receipt-6', externalId: 'fake-customer-7',
+        resourceVersion: 'fake-v1', ownershipRef: 'customer-7', actualUnits: 11,
+      },
+    }), /BUDGET_RECEIPT_EXCEEDS_RESERVATION/);
+    assert.equal(h.store.getOperation(operation.id)?.status, 'WAITING_USER');
+    assert.equal(h.store.getBudgetReservation(operation.reservationId!)?.status, 'UNKNOWN');
+
+    const resolved = h.gateway.resolveWaitingUser(operation.id, {
+      outcome: 'confirmed-success', authorizationRef: 'human-review:TICKET-7',
+      note: 'provider console confirms the exact owned resource',
+      receipt: {
+        providerReceiptId: 'manual-receipt-7', externalId: 'fake-customer-7',
+        resourceVersion: 'fake-v1', ownershipRef: 'customer-7', actualUnits: 7,
+      },
+    });
+
+    assert.equal(resolved.status, 'SUCCEEDED');
+    assert.equal(h.store.getBudgetReservation(operation.reservationId!)?.status, 'SETTLED');
+    assert.equal(h.store.getBudgetReservation(operation.reservationId!)?.settledUnits, 7);
+    assert.equal(h.store.listOperationAttempts(operation.id)[0]?.status, 'UNKNOWN');
+    const artifact = h.store.readVerifiedArtifact(resolved.lastReconciliationArtifactId!);
+    assert.equal(artifact.status, 'verified');
+    if (artifact.status !== 'verified') throw new Error('manual resolution artifact unavailable');
+    assert.deepEqual(JSON.parse(artifact.content.toString('utf8')), {
+      authorizationRef: 'human-review:TICKET-7', note: 'provider console confirms the exact owned resource',
+      outcome: 'confirmed-success', receipt: {
+        actualUnits: 7, externalId: 'fake-customer-7', ownershipRef: 'customer-7',
+        providerReceiptId: 'manual-receipt-7', resourceVersion: 'fake-v1',
+      },
+      schemaVersion: '1', source: 'human-review',
+    });
+    assert.throws(() => h.gateway.resolveWaitingUser(operation.id, {
+      outcome: 'confirmed-no-effect', authorizationRef: 'human-review:TICKET-8', note: 'conflict',
+    }), /OPERATION_NOT_WAITING_USER/);
+  } finally {
+    h.store.close();
+    rmSync(h.state, { recursive: true, force: true });
+  }
+});
+
+test('human review can confirm no effect and release a waiting operation reservation', async () => {
+  const h = fixture();
+  try {
+    const operation = h.gateway.prepare(prepareInput('lose-response-before-effect'));
+    h.store.withTransaction(() => {
+      h.store.updateOperation({
+        ...operation, status: 'WAITING_USER', manualReason: 'provider audit required',
+      }, 'PREPARED');
+      h.budget.markUnknownInTransaction(operation.reservationId!);
+    });
+
+    const resolved = h.gateway.resolveWaitingUser(operation.id, {
+      outcome: 'confirmed-no-effect', authorizationRef: 'human-review:TICKET-9',
+      note: 'provider audit log has no matching request or resource',
+    });
+
+    assert.equal(resolved.status, 'FAILED');
+    assert.equal(h.store.getBudgetReservation(operation.reservationId!)?.status, 'RELEASED');
+  } finally {
+    h.store.close();
+    rmSync(h.state, { recursive: true, force: true });
+  }
+});
+
 test('fake provider persists dedupe identity and rejects payload conflicts', async () => {
   const state = mkdtempSync(join(tmpdir(), 'harness-fake-provider-'));
   const path = join(state, 'ledger.json');

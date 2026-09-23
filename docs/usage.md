@@ -187,6 +187,18 @@ confirmed no-effect 才會 `FAILED` 並釋放額度。Partial、unsupported 或 
 `WAITING_USER`。這套 hard cap 只適用 adapter 能提供可信 upper bound 與 receipt 的資源；Codex
 token／費用目前維持 unknown 或 estimated，不能用 prompt 字元數冒充 token 或金額。
 
+人工從 provider 的獨立 audit／console 建立真相後，將 resolution 寫成 JSON，再解決 `WAITING_USER`：
+
+```bash
+harness fake operation resolve OP-xxx resolution.json
+```
+
+成功 resolution 必須含 `outcome: "confirmed-success"`、`authorizationRef: "human-review:<ref>"`、
+非空 `note` 與完整 receipt（含實際整數用量）；確認沒有副作用則用
+`outcome: "confirmed-no-effect"`。Harness 會保存 resolution artifact，並在同一交易中更新 operation
+與結算或釋放 reservation。原本 UNKNOWN 的 dispatch attempt 保持不變；不要用模型輸出、猜測或逾時
+當成人工證據，也不要直接改 SQLite。
+
 補償是另一個持久 workflow，有自己的 key、attempt、receipt 與 reservation：
 
 ```bash

@@ -195,6 +195,12 @@ export class FakeProvider implements OperationAdapter {
 
   compensationEffectCount(): number { return this.readLedger().compensations.length; }
 
+  /** Independent provider-console view used to simulate a human recovery review. */
+  inspectReceipt(businessId: string): OperationReceipt | null {
+    const effect = this.readLedger().effects.find((candidate) => candidate.businessId === businessId && !candidate.removed);
+    return effect ? structuredClone(effect.receipt) : null;
+  }
+
   private payload(value: unknown): FakePayload {
     const payload = value as Partial<FakePayload>;
     if (!payload || typeof payload.businessId !== 'string' || typeof payload.value !== 'string') {
