@@ -11,6 +11,7 @@
   },
   "scripts": {
     "harness": "node src/cli.ts",
+    "benchmark:recovery": "node scripts/benchmark-recovery.ts",
     "test": "node --test test/*.test.ts",
     "test:temporal-selection": "node --test test/temporal-selection.test.ts",
     "typecheck": "tsc --noEmit",
