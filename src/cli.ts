@@ -114,6 +114,7 @@ const MUTATING_COMMANDS = new Set([
   'init', 'new', 'run', 'retry', 'recover', 'answer', 'amend', 'plan', 'checkpoint', 'note', 'doctor', 'fake',
   'gc', 'redact',
 ]);
+const DURABLE_MUTATING_ACTIONS = new Set(['start', 'callback', 'cancel', 'rollover']);
 
 function isReadOnlyCommand(cmd: string | undefined, rest: string[]): boolean {
   return Boolean(cmd && (READ_ONLY_COMMANDS.has(cmd)
@@ -131,7 +132,9 @@ export async function main(
   let ownership: ExecutionOwnership | undefined;
   try {
     const readOnlyCommand = isReadOnlyCommand(cmd, rest);
-    if ((cmd && MUTATING_COMMANDS.has(cmd) && !readOnlyCommand) || (cmd === 'skills' && rest[0] === 'approve')) {
+    if ((cmd && MUTATING_COMMANDS.has(cmd) && !readOnlyCommand)
+      || (cmd === 'durable' && DURABLE_MUTATING_ACTIONS.has(rest[0] ?? ''))
+      || (cmd === 'skills' && rest[0] === 'approve')) {
       ownership = acquireExecutionOwnership(policy.stateDir);
     }
     if (cmd && STORE_COMMANDS.has(cmd)) {
