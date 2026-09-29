@@ -49,6 +49,48 @@ async function runCli(
   return `${lines.join('\n')}\n`;
 }
 
+test('durable mutations require execution ownership while inspect remains available', async () => {
+  const base = mkdtempSync(join(tmpdir(), 'harness-cli-durable-owner-'));
+  const stateDir = join(base, 'state');
+  const callbackPath = join(base, 'callback.json');
+  const inputPath = join(base, 'workflow.json');
+  writeFileSync(inputPath, JSON.stringify({
+    workId: 'W-owner', epoch: 1, businessId: 'customer-owner', value: 'enabled',
+    generatedText: 'output', callbackTimeoutMs: 5_000,
+  }));
+  writeFileSync(callbackPath, JSON.stringify({
+    eventId: 'event-owner', sourceVersion: 1, sequence: 1,
+    operationId: 'OP-owner', receiptRef: 'provider:owner',
+  }));
+  const calls: string[] = [];
+  const durable: DurableCommandService = {
+    start: async () => { calls.push('start'); return { workflowId: 'WF-owner', runId: 'RUN-owner' }; },
+    inspect: async () => { calls.push('inspect'); return { status: 'WAITING_EXTERNAL', epoch: 1 }; },
+    callback: async () => { calls.push('callback'); },
+    cancel: async () => { calls.push('cancel'); },
+    rollover: async () => { calls.push('rollover'); },
+    runWorker: async () => { calls.push('worker'); },
+  };
+  const policy = { ...DEFAULT_POLICY, stateDir };
+  const held = acquireExecutionOwnership(stateDir);
+  try {
+    for (const args of [
+      ['durable', 'start', 'WF-owner', inputPath],
+      ['durable', 'callback', 'WF-owner', callbackPath],
+      ['durable', 'cancel', 'WF-owner'],
+      ['durable', 'rollover', 'WF-owner'],
+    ]) {
+      await assert.rejects(main(args, policy, durable), /OWNER_ACTIVE/);
+    }
+    assert.deepEqual(calls, []);
+    assert.equal(await main(['durable', 'inspect', 'WF-owner'], policy, durable), 0);
+    assert.deepEqual(calls, ['inspect']);
+  } finally {
+    held.release();
+    rmSync(base, { recursive: true, force: true });
+  }
+});
+
 test('P4 durable CLI keeps Temporal commands explicit and separate from local fake commands', async () => {
   const base = mkdtempSync(join(tmpdir(), 'harness-cli-p4-'));
   const stateDir = join(base, 'state');
