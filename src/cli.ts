@@ -115,11 +115,13 @@ const MUTATING_COMMANDS = new Set([
   'gc', 'redact',
 ]);
 const DURABLE_MUTATING_ACTIONS = new Set(['start', 'callback', 'cancel', 'rollover']);
+const BACKUP_MUTATING_ACTIONS = new Set(['create', 'restore']);
 
 function isReadOnlyCommand(cmd: string | undefined, rest: string[]): boolean {
   return Boolean(cmd && (READ_ONLY_COMMANDS.has(cmd)
     || (cmd === 'fake' && rest[1] === 'show')
-    || (cmd === 'gc' && rest[0] === 'preview')));
+    || (cmd === 'gc' && rest[0] === 'preview')
+    || (cmd === 'backup' && rest[0] === 'verify')));
 }
 
 export async function main(
@@ -134,6 +136,7 @@ export async function main(
     const readOnlyCommand = isReadOnlyCommand(cmd, rest);
     if ((cmd && MUTATING_COMMANDS.has(cmd) && !readOnlyCommand)
       || (cmd === 'durable' && DURABLE_MUTATING_ACTIONS.has(rest[0] ?? ''))
+      || (cmd === 'backup' && BACKUP_MUTATING_ACTIONS.has(rest[0] ?? ''))
       || (cmd === 'skills' && rest[0] === 'approve')) {
       ownership = acquireExecutionOwnership(policy.stateDir);
     }
