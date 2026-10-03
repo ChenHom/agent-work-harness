@@ -175,3 +175,33 @@ unknown age p50 5,000 ms／p95 86,401,001 ms（離線超過 dedupe 窗口）、S
 2026-09-23 驗收環境：Node v24.19.0、Linux 6.8.0-124-generic x86_64。主機環境執行 `npm run check`：
 exit 0，407 pass、0 fail、0 skip、0 cancelled，lint/typecheck/Knip 全部通過；
 `npm audit --audit-level=moderate` 為 0 vulnerabilities。
+
+## 2026-09-29 至 2026-10-03：三次限時人工試行
+
+此輪是人工、evidence-driven 的三個新案例，不重跑 `docs/dogfood.md` 或既有 watch list。每次僅使用
+隔離 worktree、去敏 fixture 或 `/tmp` state；不呼叫 `npm run sim`、Temporal/provider、正式 CI／部署或
+production credential。原始重現、RED／GREEN 與 owner 的合併紀錄保存在 task-tracker meta task
+`1da3a07c-e0ef-44a6-abf3-013a042c487b` 及下列來源 task，而不是由本文件取代。
+
+| Trial | 真實來源與失敗邊界 | 隔離與 authority 邊界 | RED → GREEN／正式驗證 | 結果與回退品質 |
+|---|---|---|---|---|
+| 1 | `abef94d5-9b19-4db3-a424-588927d97bf9`：既有 `execution.lock` 時，`durable cancel` 仍呼叫 fake service。影響 `start/callback/cancel/rollover` 的單一 owner 序列化。 | `sim/user03`，基準 `3746a26`；只改 `src/cli.ts`、`test/cli.test.ts`。不連 Temporal；fake service 是唯一 signal sink。`inspect` 保持唯讀，`worker` 保持不取 CLI lock 以維持 takeover 分工。 | 新增 lock-active 測試在舊碼失敗 `Missing expected rejection`；最小修正將四個 durable mutation 納入 ownership。targeted CLI 16/16、G4 1/1、migration 22/22、typecheck 通過；合併 `25411c38035a5656e95eda3f9fa0a314d53cf6ab` 後完整測試 408 pass／0 fail／0 skip。 | 成功。拒絕路徑驗證 fake calls=0；無需回退。 |
+| 2 | `83f901b9-489a-47ff-a219-5c67a9417a0e`：既有 lock 時，`backup create` 仍寫 `backup-manifest.json`。 | 全新 `sim/user04`，基準 trial 1 merge；只改 `src/cli.ts`、`test/cli.test.ts`。create／restore 必須取 ownership，verify 保持唯讀；只用空的 `/tmp` state/target。 | 舊碼 lock-active 測試 RED 為 `Missing expected rejection`；最小修正加入 `BACKUP_MUTATING_ACTIONS`。targeted 17/17、typecheck、npm test 409/409 皆通過。首次整合的 migration cleanup 410/1 紅燈先撤回；在隔離 state 重新判定後，合併 `6746325f7f201fbe93f4ee4e324b8f8e46e1a357`，整合 gate 410/410。 | 成功。cookie jar 被 preflight 擋下，先移出 worktree 才允許 gate；非本題 migration 紅燈未以擴張程式範圍處理。 |
+| 3 | `b628e324-7810-4e86-a66a-04f7cb92106c`：四個已保存 `PROTOCOL_FAILED` attempt 在 final `RuntimeResult` 前因 runner 401 或 quota 中止，通用 parser 訊息遮蔽可操作原因。 | `sim/user03`；只改 `src/evidence/outcome.ts`、`src/orchestrator.ts`、`test/attempt-flow.test.ts`。只用去敏 stderr fixture；不得登入、刷新 token、耗用 quota、增加 retry 或放寬 protocol。 | 401／quota fixture 在舊碼只得到通用 protocol 訊息而 RED；最小修正只在 protocol failure 窄比對，輸出 `RUNNER_AUTH_UNAUTHORIZED` 或 `RUNNER_QUOTA_EXHAUSTED`。targeted 78/78、typecheck、npm test 410/410 通過；最終 merge `d960e9c24e4cdd934355083da64d5a656c715875` 的整合 gate 412/412。 | 成功。attempt 仍為 `PROTOCOL_FAILED`，不回顯 stderr／credential。兩次因不可寫預設 stateDir 的 EROFS 合併撤回；在可寫的同命令環境重跑後才保留 merge。 |
+
+### 比較結論
+
+- 成功率為 3/3；三題都先以兩次或保存 evidence 建立可重現的 false-block／authority 缺口，再以最小
+  修改與回歸測試修正。沒有把 DECISIONS watch list 或已完成 dogfood 案例升格湊數。
+- 診斷與回退品質優於僅靠人工流程：lock-active 負向測試證明未送出 signal／未寫 backup；trial 3 保持
+  fail-closed，卻把 auth／quota 與 parser 格式錯誤區分。兩次整合 gate 出現非範圍紅燈或 EROFS 時皆撤回，
+  直到隔離／可寫環境的完整 gate 有實證才合併。
+- 安全與 redaction review：trial 1/2 不連真實 external service；trial 3 fixture 僅保留錯誤類別，對外
+  只輸出固定 code 與建議，沒有回顯 runtime stderr、token 或原始 log。cookie jar 必須在 worktree 外，
+  preflight 把違反者擋下是有效的治理證據。
+- 本輪沒有以 harness 執行模型工作，因此模型成本為 0；人工時間沒有按 trial 一致記錄，不能據此推導
+  人工成本比較。若再做人工試行，必須在開始與結束時記錄 wall time、操作次數與模型／工具成本。
+- 不建立固定排程。三例證明小範圍、隔離、evidence-first 的手動試行有價值，但樣本只有三個同類型
+  Harness 內部邊界問題，尚不足以宣稱比一般人工流程在不同 repo／UI／外部副作用上的穩定優勢。保留
+  一份問題清單：整合 gate 必須使用可寫且隔離的 stateDir，且 preflight 應持續拒絕 worktree 內 credential
+  artifact；只有出現新的真實 failure 再增量執行，避免固定節奏為了湊樣本重跑。
