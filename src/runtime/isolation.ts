@@ -1,4 +1,13 @@
-import { mkdirSync, writeFileSync, copyFileSync, existsSync } from 'node:fs';
+import {
+  chmodSync,
+  copyFileSync,
+  existsSync,
+  mkdirSync,
+  renameSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
+import { randomUUID } from 'node:crypto';
 import { join, dirname } from 'node:path';
 import { homedir } from 'node:os';
 import type { GlobalPolicy } from '../types.ts';
@@ -24,16 +33,29 @@ const CODEX_CONFIG = (model: string | undefined, skillMainFiles: readonly string
 ].filter(Boolean).join('\n');
 
 /** 建立 production 專用 HOME / CODEX_HOME（§21）。CODEX_HOME 不可放在 /tmp：codex 會拒絕建立 helper binaries。 */
-export function ensureRuntimeDirs(policy: GlobalPolicy, skillMainFiles: readonly string[] = []): void {
+export function ensureRuntimeDirs(
+  policy: GlobalPolicy,
+  skillMainFiles: readonly string[] = [],
+  operatorCodexHome = join(homedir(), '.codex'),
+): void {
   for (const d of [policy.stateDir, policy.agentHome, policy.codexHome, policy.verificationHome, policy.skillsDir]) {
     mkdirSync(d, { recursive: true });
   }
   writeFileSync(join(policy.codexHome, 'config.toml'), CODEX_CONFIG(policy.codexModel, skillMainFiles));
-  const operatorAuth = join(homedir(), '.codex', 'auth.json');
+  const operatorAuth = join(operatorCodexHome, 'auth.json');
   const runtimeAuth = join(policy.codexHome, 'auth.json');
   // 已知取捨（DECISIONS D-08）：codex 需要自己的憑證，因此 agent 仍可讀到這一份，
   // 但操作者的其他 credentials（~/.ssh、~/.secrets…）已被隔離的 HOME 擋掉。
-  if (!existsSync(runtimeAuth) && existsSync(operatorAuth)) copyFileSync(operatorAuth, runtimeAuth);
+  if (existsSync(operatorAuth)) {
+    const temporaryAuth = join(policy.codexHome, `.auth-${randomUUID()}.tmp`);
+    try {
+      copyFileSync(operatorAuth, temporaryAuth);
+      chmodSync(temporaryAuth, 0o600);
+      renameSync(temporaryAuth, runtimeAuth);
+    } finally {
+      rmSync(temporaryAuth, { force: true });
+    }
+  }
 }
 
 /** 給 codex 子行程的環境：最小 env，隔離 HOME，指向 production CODEX_HOME。 */
