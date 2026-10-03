@@ -519,6 +519,7 @@ export class Orchestrator {
       runtimeResult: parsed.ok ? parsed.result : undefined,
       evidence, retryBudgetRemaining,
       runtimeCrashed: run.timedOut,
+      runtimeStderr: run.stderr,
     });
 
     attempt.status = parsed.ok ? 'COMPLETED' : 'PROTOCOL_FAILED';

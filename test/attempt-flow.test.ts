@@ -56,7 +56,7 @@ const completed = (workId: string, attemptId: string, paths: string[] = ['src/a.
 
 /** driver 回傳什麼由測試決定：一段文字（模擬 runtime 輸出）或一個產生器。 */
 function fakeDriver(reply: (ids: { workId: string; attemptId: string }) => string,
-                    opts?: { timedOut?: boolean }): RuntimeDriver & { calls: number } {
+                    opts?: { timedOut?: boolean; stderr?: string }): RuntimeDriver & { calls: number } {
   const d = {
     calls: 0,
     prepare(input: { attemptId: string }) {
@@ -71,7 +71,7 @@ function fakeDriver(reply: (ids: { workId: string; attemptId: string }) => strin
       onState?.({ phase: 'stopped', child, quiesced: true });
       return {
         exitCode: 0, signal: null, timedOut: opts?.timedOut ?? false,
-        stdout: '', stderr: '', durationMs: 1,
+        stdout: '', stderr: opts?.stderr ?? '', durationMs: 1,
         lastMessage: reply({ workId: '', attemptId }),
       };
     },
@@ -442,6 +442,34 @@ test('protocol 反向：runtime 回傳非 JSON → 不得進成功路徑，attem
   const r = await s.orch.runAttempt(s.work.id);
   assert.equal(r.decision.outcome, 'FAILED');
   assert.match(r.decision.reasons.join(), /RuntimeResult|JSON/);
+  assert.equal(s.store.listAttempts(s.work.id)[0]!.status, 'PROTOCOL_FAILED');
+  s.cleanup();
+});
+
+test('protocol 反向：去敏 runner 401 在 final RuntimeResult 前中止時，保留可操作的 auth 診斷碼', async () => {
+  const s = setup({
+    retryBudget: 0,
+    driver: fakeDriver(() => '', {
+      stderr: 'workspace routing discovery unauthorized (401); invalid_refresh_token',
+    }),
+    evidence: fakeEvidence({ changedPaths: ['src/a.ts'] }),
+  });
+  const r = await s.orch.runAttempt(s.work.id);
+  assert.equal(r.decision.outcome, 'FAILED');
+  assert.match(r.decision.reasons.join(), /RUNNER_AUTH_UNAUTHORIZED/);
+  assert.equal(s.store.listAttempts(s.work.id)[0]!.status, 'PROTOCOL_FAILED');
+  s.cleanup();
+});
+
+test('protocol 反向：去敏 runner quota 在 final RuntimeResult 前中止時，保留可操作的 quota 診斷碼', async () => {
+  const s = setup({
+    retryBudget: 0,
+    driver: fakeDriver(() => '', { stderr: 'You’ve hit your usage limit' }),
+    evidence: fakeEvidence({ changedPaths: ['src/a.ts'] }),
+  });
+  const r = await s.orch.runAttempt(s.work.id);
+  assert.equal(r.decision.outcome, 'FAILED');
+  assert.match(r.decision.reasons.join(), /RUNNER_QUOTA_EXHAUSTED/);
   assert.equal(s.store.listAttempts(s.work.id)[0]!.status, 'PROTOCOL_FAILED');
   s.cleanup();
 });

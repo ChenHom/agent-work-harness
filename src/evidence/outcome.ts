@@ -11,6 +11,18 @@ export interface OutcomeInput {
   evidence: readonly EvidenceRecord[];
   retryBudgetRemaining: number;
   runtimeCrashed?: boolean;
+  runtimeStderr?: string;
+}
+
+function runnerProtocolFailure(stderr: string | undefined): string | undefined {
+  if (!stderr) return undefined;
+  if (/invalid_refresh_token|unauthorized\s*\(401\)|routing.*\b401\b/i.test(stderr)) {
+    return 'RUNNER_AUTH_UNAUTHORIZED: Codex runner 在輸出最終 RuntimeResult 前遭授權拒絕；請檢查登入憑證與模型路由權限';
+  }
+  if (/hit your usage limit|usage[ _-]?limit/i.test(stderr)) {
+    return 'RUNNER_QUOTA_EXHAUSTED: Codex runner 在輸出最終 RuntimeResult 前達到用量限制；請確認帳戶配額後再建立新 attempt';
+  }
+  return undefined;
 }
 
 export function decideOutcome(i: OutcomeInput): OutcomeDecision {
@@ -37,7 +49,10 @@ export function decideOutcome(i: OutcomeInput): OutcomeDecision {
 
   // 4. Protocol 失敗 → 可重試
   if (!i.protocolOk) {
-    const r = `runtime 輸出不符 RuntimeResult v1：${i.protocolError ?? 'unknown'}`;
+    const diagnosis = runnerProtocolFailure(i.runtimeStderr);
+    const r = diagnosis
+      ? `${diagnosis}（RuntimeResult v1：${i.protocolError ?? 'unknown'}）`
+      : `runtime 輸出不符 RuntimeResult v1：${i.protocolError ?? 'unknown'}`;
     return i.retryBudgetRemaining > 0 ? push('RETRYABLE_FAILURE', r) : push('FAILED', r);
   }
 
