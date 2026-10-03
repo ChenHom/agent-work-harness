@@ -505,6 +505,35 @@ test('P5 CLI inspects evaluations and replay, runs reports, previews/applies GC,
   }
 });
 
+test('backup writes require execution ownership while verify remains available', async () => {
+  const h = await richHistory();
+  const dir = mkdtempSync(join(tmpdir(), 'harness-cli-backup-owner-'));
+  const backupDir = join(dir, 'backup');
+  const restoreDir = join(dir, 'restored');
+  try {
+    const created = await runCli(h.state, ['backup', 'create', backupDir]);
+    const held = acquireExecutionOwnership(h.state);
+    try {
+      await assert.rejects(
+        main(['backup', 'create', join(dir, 'blocked-backup')], { ...DEFAULT_POLICY, stateDir: h.state }),
+        /OWNER_ACTIVE/,
+      );
+      await assert.rejects(
+        main(['backup', 'restore', backupDir, restoreDir], { ...DEFAULT_POLICY, stateDir: h.state }),
+        /OWNER_ACTIVE/,
+      );
+      assert.equal(existsSync(join(dir, 'blocked-backup')), false);
+      assert.equal(existsSync(restoreDir), false);
+      assert.equal(await runCli(h.state, ['backup', 'verify', backupDir]), `backup ${created.match(/backup ([0-9a-f]{64})/)?.[1]} verified\n`);
+    } finally {
+      held.release();
+    }
+  } finally {
+    h.cleanup();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('read-only commands work on a pre-v7 database without migrating the file', async () => {
   const state = mkdtempSync(join(tmpdir(), 'harness-cli-legacy-'));
   try {
