@@ -351,3 +351,158 @@ E 型依賴（Internet）           需要什麼 capability
 
 - **Evidence E3 provenance / E4 sufficiency**：仍是後續候選，見 `docs/evidence-model.md`。
   E3 要等到出現真實的 false positive 案例才做。
+
+## 待決草案（2026-10-03 外部評論核對）
+
+來源：一份外部產品／架構評論，逐條對照程式碼與文件，再經獨立審查與實跑探測後整理。以下各條**尚未採納**，
+標 **[草案]**。採納時改成正式標記並移到對應章節；不採納的改標 **[不採納]** 並留下理由（同 D-19 被取代仍保留的慣例）。
+D-41 是已用實跑重現的缺陷，排在最前面。
+
+### D-41 [草案] 越界後再 `run`，會直接採用 agent 改過的 contract（master 實跑重現）
+重現：attempt 1 的 agent 把 `.harness/config.json` 改成 `checks: []` 並 commit → `POLICY_VIOLATION`、Work `BLOCKED`；
+之後直接再 `run`（agent 只改 README）→ `SUCCESS`、Work `DONE`，理由只有「沒有 required verification check」警告。
+原因：`runAttempt` 沒有 work state guard；每次 attempt 依 §34.1.1 從 workspace 重新 load contract，
+base 取當下 HEAD，前一個 attempt 已 commit 的改動因此成了新 authority。只有 recovery 會比對 hash。
+這違反「authority 不來自內容」。
+
+提案：前一個 attempt 是 `POLICY_VIOLATION`，且本次 contract hash 和該 attempt 的 `contractSnapshotHash` 不同時，
+不執行，要求使用者明確確認新 contract。直接擋會和 §34.1.1「使用者可以合法改 config」衝突，所以採「問」不採「擋」。
+待決：確認的形式（新 CLI 旗標，或沿用 `answer`）。
+
+### D-35 [草案] 驗證控制面：先補一條 fail-closed 規則，再加標註
+verification 在 agent 改過的 workspace 跑凍結的 argv。在單一 attempt 內，contract 與 `.harness/**` 受保護；
+argv 背後的 script、runner、測試內容沒有。`init` 預設產生 `npm test`（`src/repo/contract.ts:112`），
+所以 `package.json` scripts 就是預設的驗證控制面。baseline 只比執行數與 skip 數，而且 post 輸出解析不出
+completeness 時整段跳過（`src/evidence/verification.ts:65`）。
+
+現行門檻「出現真實 false positive 才做 E3」要靠有人注意到，但 Cross-Repo #1 B1 已記下「Harness 目前沒有任何機制
+讓使用者注意到」（`docs/cross-repo-validation.md:163`），門檻可能永遠不會觸發。採納本條等於修改 watch list 的 E3 列、
+「已排除的方向」的 E3 條件，以及 `docs/evidence-model.md` 的方向三與觸發條件表，要一起改。
+
+提案分兩步：
+1. **fail-closed 規則**：baseline 解析得出 completeness、post 卻解析不出時，判 `INCONCLUSIVE`，不再跳過。
+   這直接擋住「把 runner 換成解析不出的輸出」，符合規則 1；D-25 處理的是兩邊都解析不出的情況，不衝突。
+2. **標註**：變更路徑碰到驗證定義（script、runner、測試設定，不含測試檔內容）時，在 evidence 與回應中列出，
+   並提示用 `harness note` 記錄 false-accept／false-block，這是既有的回饋管道。標註只是提示，
+   不影響 `decideOutcome`。清單必須在 attempt 開始時隨 contract 凍結。
+
+不涵蓋：改弱測試檔裡的斷言。這要區分既存測試與 agent 新增或修改的測試（E3 分類），仍然延後；
+把測試檔納入標註會讓幾乎每個 attempt 都被標，變成噪音。
+
+已知限制：變更路徑來自 `git status`／`git diff`。實測 `git update-index --skip-worktree` 與 `.git/info/exclude`
+能讓兩者都看不到變更，path policy 與標註都可被繞過。現行 Codex sandbox 能不能寫 `.git`，未查證。
+
+待決：
+- 被 agent 改過的 runner 算不算規則 1 所說的「替換的 evidence」。若算，第 2 步就必須擋，不能只標註。
+- 清單放 repository contract 還是 global policy。
+
+### D-36 [草案] `SUCCESS` 的對外語意：只改回應標題不夠
+Outcome `SUCCESS` 在回應中顯示為「已完成」（`src/response.ts:7`）。其他出口也都把它當完成：
+- Work state 是 `DONE`，事件是 `work.completed`。
+- `list` 印出 `DONE … outcome=SUCCESS`。
+- `run` 回傳 exit 0。
+- `scripts/dogfood.sh` 看到 `SUCCESS` 就自動 commit。
+
+write attempt 沒有任何 required check 時也是 `SUCCESS`，只多一條警告。
+
+P5 的 criterion 規則能讓 semantic `unknown` 擋住 `DONE`，但 `src/` 裡沒有任何地方呼叫 `insertEvaluationContract`，
+一般 CLI 流程不會出現「語意未驗證」。`docs/evidence-model.md:420` 把改名評為「純命名，隨時可做」，低估了成本：
+outcome 以文字存在 `outcomes.outcome`，`store.ts` 也比對 `'SUCCESS'`，改名需要 migration 和舊 trace 相容。
+
+選項：
+- (a) 只改回應與 `list` 的顯示字，並在回應中說明「設定的檢查通過、變更沒有越界，不代表需求已解決」；
+  沒有 required check 時改成明說「沒有任何驗證」。
+- (b) enum 改名並附 migration。
+
+採納後要同步修改 `evidence-model.md:420` 的評估。待決：選 (a) 或 (b)，以及用字。
+
+### D-37 [草案] 外部 agent 的 begin → verify：定位翻轉，先不決定；進行中的 `verify` 分支不能照現狀合併
+現行設計由 Harness 啟動 agent：§2.1「User 只操作 Harness」、§21 Driver 啟動 Codex、§36.1 Gate 1 路徑。
+外部 agent 動手前已 dirty 的檔案歸為 preExisting，不算本次成果。
+
+評論主張改成 provider-neutral：`begin` 凍結 contract、base revision、dirty 狀態、驗證定義，外部 agent 自由工作，
+`verify` 產出 evidence 與 outcome。評論沒算到的代價：
+- network deny 與 HOME 隔離由 Driver 施加（D-04、D-05）。外部 agent 跑時，Harness 只能證明結果，
+  不能證明過程邊界，§20.4 的 enforcement evidence 會退回成 claim。
+- skill admission（`admitSkills`）與 `--ignore-rules` 失效。外部 agent 會把 repo 的 `AGENTS.md`／`.rules`
+  當成 authority（D-09）。
+- D-15「read attempt 出現任何變更即 sandbox 失效」不再成立。
+- 外部 agent 有完整的 `.git` 存取權，可以用 D-35 所列的方式遮蔽變更。
+- 用 MCP 包裝現行流程（`new`／`run`／`show`）不需要翻轉，但常駐 server 和 D-33 單一 execution token
+  的互動要另外設計。用 hook 強制「改檔前先 begin」接近 §2.2「不攔截每一個 tool call」，要另述理由。
+
+`feature/verify-existing-artifacts` 名義上是額度用完後續辦，實質上就是「外部做完 → verify」。實跑探測結果：
+- 外部 commit 把 checks 清空、再 commit 一個 protected 路徑的檔案 → `SUCCESS`、Work `DONE`。同樣改動不 commit → `POLICY_VIOLATION`。
+- 什麼都沒改、checks 通過 → `SUCCESS`、Work `DONE`。這正是該分支 spec 自己否決的方案 A，也違背 D-16。
+- verify 不帶 baseline，D-25 在這條路徑不存在。
+- state guard 只擋 `DONE`／`RUNNING`／`VERIFYING`，所以 `POLICY_VIOLATION` 的 Work 能經由 verify 變成 `DONE`。
+
+原因：contract 在驗證當下從 workspace 載入，base 取當下 HEAD，路徑檢查只看 dirty 檔。
+這和該分支 spec 寫的「凍結的 snapshot」不符，也違反設計 §34「不得在執行後重新讀取 config 作為新的驗收規則」。
+
+草案方向：先不翻轉，等 D-38 的結果。分支合併前至少要做到：
+- contract 取前一個 attempt 凍結的 snapshot；
+- git 從前一個 attempt 的 base 開始觀察；
+- 沒有成果不算 `SUCCESS`；
+- 帶 baseline。
+
+若之後採納翻轉，外部模式的 outcome 必須標明「過程邊界未經 Harness 施加」，不能沿用同一個 `SUCCESS`。
+
+### D-38 [草案] 擴張前先做有／無 Harness 的成對試行
+文件中沒有任何對照。dogfood 與 cross-repo 共 20 個真實 Work 屬定性驗證；其中唯一一次 false accept 是 Harness 誤收、
+由人發現，因此有了 D-25。`harness note/stats` 有 false-accept／false-block／friction 類別，但預設 state DB 一筆都沒有。
+
+提案：同一題分兩組，A 由 agent 直接做加既有 CI，B 由同一個 agent 經 Harness 做。
+這個試行只回答「Harness 在 agent＋CI 之外多抓到什麼、代價多少」：
+- 回答不了 P3／P4，coding 題目用不到它們。
+- 要回答 D-37，得加 C 組（外部 agent＋verify），而且要先修好 D-37 列出的缺口。
+
+設計限制：
+- false accept 的基率約 1/20，小樣本只分得出很大的差異。要嘛接受這點，要嘛加入刻意設計的題目
+  （容易誘使 agent 改弱驗證的題）。
+- D-27 的環境差異是干擾變因。
+- 評判者不能知道組別，而且必須是獨立來源（`human-review`／`fixture-author`）。
+- 要先估額度成本。
+- 指標定義沿用 v2 spec 的 `false_accept_rate` 等（該表原本用於比較架構版本）。
+
+待決：題數、題目來源、誰當評判者。
+
+### D-39 [草案] Temporal 依賴：D-01 與 `AGENTS.md` 的敘述已不成立
+`package.json` 有 4 個 `@temporalio/*` runtime 依賴（共 176M，含原生 core-bridge）。ADR 0001 已記錄
+「P4 code and deployment now depend on Temporal」，但 D-01 與 `AGENTS.md`「零 runtime 依賴」沒有跟著改。
+另外 ADR 0001 寫測試第一次跑可能下載 pinned 依賴，和 `AGENTS.md`「`npm test` 不需要網路」也不一致。
+
+`src/cli.ts` 靜態 import `durable/client.ts`（後者靜態 import `@temporalio/client`、`@temporalio/worker`），
+所以每個 CLI 指令都會載入 Temporal SDK。實測 import 時間：`durable/client.ts` 0.24s、`orchestrator.ts` 0.07s，
+等於每個指令多約 0.17s（各 3 次）。
+
+提案：先把 D-01 與 `AGENTS.md` 改成符合現況：「P1–P3 核心無 runtime 依賴；P4 依賴 Temporal（ADR 0001），
+目前所有 CLI 指令都會載入」。只有改成 dynamic import 之後，才能寫「Temporal 只屬 durable 子指令」。
+待決：0.17s 值不值得改 dynamic import。
+
+### D-40 [草案] v2（P3／P4）擴張與 §2.2、§35 的關係
+§35 寫「只有觀察到需求才擴充」。v2 的動機來自外部「Long-Running AI Agent Architecture Review Draft」（v2 spec 第 16 行），
+沒有找到由真實 Work 觸發的紀錄。v2 的 Gateway 也已越過 §2.2「不做完整 Tool Pipeline」（v2 spec 第 20 行自己承認）。
+實際範圍有限：P3 只接本機 fake provider，P4 只整合一個 fake workflow、不遷移 CLI orchestrator。
+
+提案：明記 §2.2 是 MVP 範圍，已被 v2 局部取代，不再當成永久排除。之後 durable／gateway 的擴張
+（接真實 provider、把 orchestrator 遷到 Temporal）一律要有 §35 所說的觀察到的需求，外部審查不能單獨構成動機。
+這是新增的規則，不是補記：本檔「升級為實作項目的條件」原本只管 watch list。同一原則也適用 D-37。
+D-35 屬 watch list 項目，所以它要明確改寫該項的門檻。
+
+### 評論中不需新決定的部分
+- ClaudeDriver、RAG、多 runtime：§2.2 列為 MVP 不做；§35 允許在有真實 use case 時重新設計。
+  Planner：§2.2 沒有列，設計只寫「不做通用 Evidence Planner」，v2 plan 寫「不為拆計畫強制新增 Planner LLM」。
+- 「規劃歸呼叫者、驗證歸 Harness」：就是現況。plan 由 `harness plan propose <json>` 提交，Harness 只做決定性檢查；
+  有 active plan 時不指定 milestone 會報 `PLAN_MILESTONE_REQUIRED`。
+- CLI 數量：27 個頂層指令、49 個 action。USAGE 已經分組，但是按 P1–P5 階段分，10 個 `fake` action 混在
+  「P1–P3 local runtime」裡。要處理的是分組依據，改成日常／協定驗證／維運，不刪指令。
+- Prompt／Context／Skill security 搬出核心：取決於 D-37。只要 Harness 還啟動 Codex 就需要。
+
+### 文件修正（不需決策，可直接做）
+- `docs/evidence-model.md:57`「agent 改不了自己的驗收規則」：在單一 attempt 內只保護 contract 與 `.harness/**`。
+  argv 背後的 script／runner 可以被改；跨 attempt（D-41）與 verify 分支連 contract 都可以被改。
+- 狀態過期或互相矛盾：v2 spec 第 5 行 vs `README.md:190`；`README.md:199` vs `docs/evidence-model.md:3`；
+  `docs/e2e-scenarios.md:44`。
+- 本檔「已排除的方向」標題與內文「後續候選」不一致。
+- `README.md` 沒有 non-goals 段落（設計 §2.2 有）。
