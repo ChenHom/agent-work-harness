@@ -8,6 +8,22 @@ export function formatWorkListRow(work: Work, outcome: Outcome | null): string {
   return `${work.id}  ${work.state.padEnd(12)} ${work.repositoryId.padEnd(16)} ${work.title}  outcome=${outcome ?? '-'}`;
 }
 
+// list --json：給外部輪詢（例如 UI pane）用。outcome 只在屬於最新 attempt 時輸出，
+// retry 進行中時上一輪的 outcome 不能被讀成現況。
+export function workListEntry(
+  work: Work, attempt: Attempt | null, last: { outcome: Outcome; reasons: string[]; attemptId: string } | null,
+) {
+  return {
+    id: work.id, title: work.title, repositoryId: work.repositoryId, state: work.state, createdAt: work.createdAt,
+    attempt: attempt && {
+      id: attempt.id, number: attempt.number, status: attempt.status, phase: attempt.phase ?? null,
+      startedAt: attempt.startedAt, endedAt: attempt.endedAt ?? null,
+      runtimeState: attempt.runtimeDispatch?.state ?? null, childPid: attempt.runtimeDispatch?.child?.pid ?? null,
+    },
+    outcome: last && attempt && last.attemptId === attempt.id ? { outcome: last.outcome, reasons: last.reasons } : null,
+  };
+}
+
 export function formatPreExistingDirty(attempt: Attempt): string {
   const dirty = attempt.preExistingDirty ?? [];
   if (!dirty.length) return '    preExistingDirty: -';

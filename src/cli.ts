@@ -19,7 +19,7 @@ import { runIsolated } from './evidence/exec.ts';
 import {
   formatContextDropped, formatPreExistingDirty, formatRecoverySession, formatWorkListRow,
   formatBudget, formatCheckpoint, formatCompensation, formatMilestone, formatOperation, formatPlan,
-  formatDurableSnapshot,
+  formatDurableSnapshot, workListEntry,
 } from './cli-format.ts';
 import { formatPromptChars } from './response.ts';
 import type { CriterionVerdictRecord, GlobalPolicy, ValidatorIdentity } from './types.ts';
@@ -52,7 +52,7 @@ P1–P3 local runtime:
   harness checkpoint create <workId> <json-file>
   harness checkpoint resume <checkpointId>
   harness recover <workId>              重新收集中斷 attempt 的 evidence
-  harness list                          列出所有 work
+  harness list [--json]                 列出所有 work（--json：含最新 attempt 階段，供輪詢）
   harness show <workId>                 contract / decisions / attempts / evidence
   harness trace <workId>                append-only 事件流
   harness prompt <attemptId>            印出該 attempt 實際送出的 prompt
@@ -271,6 +271,12 @@ export async function main(
 
     case 'list': {
       const works = store!.listWorks();
+      if (rest.includes('--json')) {
+        // ponytail: 每個 work 讀全部 attempts 取最後一筆；歷史大到輪詢變慢再加 latest-attempt 查詢
+        console.log(JSON.stringify(works.map((w) =>
+          workListEntry(w, store!.listAttempts(w.id).at(-1) ?? null, store!.lastOutcome(w.id)))));
+        return 0;
+      }
       if (!works.length) console.log('(沒有 work)');
       for (const w of works) {
         console.log(formatWorkListRow(w, store!.lastOutcome(w.id)?.outcome ?? null));
@@ -647,7 +653,7 @@ export async function main(
   }
   } catch (error) {
     if (error instanceof StoreOpenError && error.code === 'NO_STATE' && cmd && isReadOnlyCommand(cmd, rest)) {
-      if (cmd === 'list') console.log('(沒有 work)');
+      if (cmd === 'list') console.log(rest.includes('--json') ? '[]' : '(沒有 work)');
       else if (cmd === 'notes') console.log('(還沒有任何記錄)');
       else if (cmd === 'stats') console.log('works: 0   attempts: 0   retries: 0\n\noutcome 分佈\n  (無)');
       else if (cmd === 'fake') console.log('(沒有 operation/budget state)');
