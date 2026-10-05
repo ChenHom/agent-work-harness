@@ -1,11 +1,13 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import { existsSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { DatabaseSync } from 'node:sqlite';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import {
-  formatContextDropped, formatPreExistingDirty, formatRecoverySession, formatWorkListRow,
+  formatContextDropped, formatPreExistingDirty, formatRecoverySession, formatWorkListRow, workListEntry,
   formatBudget, formatCompensation, formatDurableSnapshot, formatOperation,
 } from '../src/cli-format.ts';
 import { main } from '../src/cli.ts';
@@ -198,6 +200,34 @@ const attempt: Attempt = {
   runtime: 'codex', status: 'COMPLETED', startedAt: '2026-08-21T00:00:00.000Z',
 };
 
+test('list --json entry hides the previous attempt outcome while a retry runs', () => {
+  const retry: Attempt = {
+    ...attempt, id: 'A-124', number: 2, status: 'RUNNING', phase: 'executing', retryOf: 'A-123',
+    startedAt: '2026-08-21T01:00:00.000Z',
+    runtimeDispatch: { intentAt: '2026-08-21T01:00:01.000Z', ownershipToken: 'tok', state: 'running', child: { pid: 4242, processStart: '1' } },
+  };
+  assert.deepEqual(workListEntry({ ...work, state: 'RUNNING' }, retry, { outcome: 'FAILED', reasons: ['tests failed'], attemptId: 'A-123' }), {
+    id: 'W-123', title: '顯示結果', repositoryId: 'harness', state: 'RUNNING', createdAt: '2026-08-21T00:00:00.000Z',
+    attempt: {
+      id: 'A-124', number: 2, status: 'RUNNING', phase: 'executing', startedAt: '2026-08-21T01:00:00.000Z',
+      endedAt: null, runtimeState: 'running', childPid: 4242,
+    },
+    outcome: null,
+  });
+});
+
+test('list --json entry shows the outcome of the latest attempt and nulls for missing fields', () => {
+  const done = workListEntry(work, { ...attempt, endedAt: '2026-08-21T00:05:00.000Z' }, { outcome: 'SUCCESS', reasons: [], attemptId: 'A-123' });
+  assert.deepEqual(done.outcome, { outcome: 'SUCCESS', reasons: [] });
+  assert.deepEqual(done.attempt, {
+    id: 'A-123', number: 1, status: 'COMPLETED', phase: null, startedAt: '2026-08-21T00:00:00.000Z',
+    endedAt: '2026-08-21T00:05:00.000Z', runtimeState: null, childPid: null,
+  });
+  const fresh = workListEntry(work, null, null);
+  assert.equal(fresh.attempt, null);
+  assert.equal(fresh.outcome, null);
+});
+
 test('show attempt formatting includes pre-existing dirty paths and hashes', () => {
   assert.equal(
     formatPreExistingDirty({
@@ -255,6 +285,19 @@ test('P3 operation, compensation, and budget rows expose durable identities and 
   assert.match(formatCompensation(compensation), /COMP-1 PREPARED.*fake-customer-1/);
   assert.equal(formatBudget(limit, [{} as BudgetReservation], 7, 10),
     '- fake_write/unit limit=30 spent=7 reserved=10 available=13 reservations=1 pricing=fake-v1');
+});
+
+test('cli runs when invoked through a symlink, as the npm bin link does', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'harness-cli-link-'));
+  try {
+    const link = join(dir, 'harness');
+    symlinkSync(fileURLToPath(new URL('../src/cli.ts', import.meta.url)), link);
+    const run = spawnSync(process.execPath, [link], { encoding: 'utf8' });
+    assert.equal(run.status, 0);
+    assert.match(run.stdout, /harness list \[--json\]/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 test('read-only CLI commands show empty state without creating it', async () => {
@@ -531,6 +574,31 @@ test('backup writes require execution ownership while verify remains available',
   } finally {
     h.cleanup();
     rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('list --json prints machine-readable works with their latest attempt', async () => {
+  const state = mkdtempSync(join(tmpdir(), 'harness-cli-list-json-'));
+  try {
+    assert.deepEqual(JSON.parse(await runCli(join(state, 'missing'), ['list', '--json'])), []);
+    const seed = new Store(state);
+    seed.insertWork({ id: 'W-JSON', title: 'json work', repositoryId: 'repo', workspace: state, state: 'RUNNING',
+      currentContractVersion: 1, retryBudget: 1, createdAt: '2026-09-20T00:00:00.000Z' });
+    seed.insertAttempt({ ...attempt, id: 'A-J1', workId: 'W-JSON', status: 'COMPLETED', phase: 'terminal' });
+    seed.insertOutcome('W-JSON', 'A-J1', 'FAILED', ['tests failed']);
+    seed.insertAttempt({ ...attempt, id: 'A-J2', workId: 'W-JSON', number: 2, status: 'RUNNING', phase: 'collecting' });
+    seed.close();
+
+    const entries = JSON.parse(await runCli(state, ['list', '--json'])) as Array<ReturnType<typeof workListEntry>>;
+    assert.equal(entries.length, 1);
+    const entry = entries[0]!;
+    assert.equal(entry.id, 'W-JSON');
+    assert.equal(entry.state, 'RUNNING');
+    assert.equal(entry.attempt?.id, 'A-J2');
+    assert.equal(entry.attempt?.phase, 'collecting');
+    assert.equal(entry.outcome, null);
+  } finally {
+    rmSync(state, { recursive: true, force: true });
   }
 });
 

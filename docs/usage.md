@@ -424,9 +424,12 @@ harness stats
 
 ```bash
 harness list                          # 所有 work
+harness list --json                   # 同上，JSON；含最新 attempt 的 status/phase/child pid，供外部輪詢
 harness skills approve <id> <dir>     # 核准 skill（hash 改變即失效，不會自動更新）
 harness skills list                   # 含當下的 admission 結果
 ```
+
+`list --json` 的 `outcome` 只在它屬於最新 attempt 時才有值；retry 進行中為 `null`，不會把上一輪結果當成現況。
 
 - 設計文件：`agent-work-harness-design.md`
 - 實作決策與已知限制：`DECISIONS.md`
