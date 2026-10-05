@@ -2,7 +2,7 @@
 import { parseArgs } from 'node:util';
 import { resolve, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { writeFileSync, mkdirSync, existsSync, readFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import { loadPolicy } from './policy.ts';
 import { Store, StoreOpenError } from './trace/store.ts';
 import { Orchestrator } from './orchestrator.ts';
@@ -675,7 +675,8 @@ function readJson(path: string): unknown {
   return JSON.parse(readFileSync(resolve(path), 'utf8')) as unknown;
 }
 
-if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+// npm 的 bin 是 symlink；Node 會把 import.meta.url 解析成真實路徑，argv[1] 不會，所以兩邊都要 realpath。
+if (process.argv[1] && realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url))) {
   main(process.argv.slice(2))
     .then((code) => process.exit(code))
     .catch((e: unknown) => { console.error(`error: ${(e as Error).message}\n${(e as Error).stack ?? ''}`); process.exit(1); });

@@ -1,9 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import { existsSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { DatabaseSync } from 'node:sqlite';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import {
   formatContextDropped, formatPreExistingDirty, formatRecoverySession, formatWorkListRow, workListEntry,
   formatBudget, formatCompensation, formatDurableSnapshot, formatOperation,
@@ -283,6 +285,19 @@ test('P3 operation, compensation, and budget rows expose durable identities and 
   assert.match(formatCompensation(compensation), /COMP-1 PREPARED.*fake-customer-1/);
   assert.equal(formatBudget(limit, [{} as BudgetReservation], 7, 10),
     '- fake_write/unit limit=30 spent=7 reserved=10 available=13 reservations=1 pricing=fake-v1');
+});
+
+test('cli runs when invoked through a symlink, as the npm bin link does', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'harness-cli-link-'));
+  try {
+    const link = join(dir, 'harness');
+    symlinkSync(fileURLToPath(new URL('../src/cli.ts', import.meta.url)), link);
+    const run = spawnSync(process.execPath, [link], { encoding: 'utf8' });
+    assert.equal(run.status, 0);
+    assert.match(run.stdout, /harness list \[--json\]/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 test('read-only CLI commands show empty state without creating it', async () => {
