@@ -115,7 +115,8 @@ harness show W-xxx                        # [review] 段落：最新一次審查
 4. Reviewer：先 `docker image inspect` 取得 image ID 與 revision label，之後只用 image ID 執行。
    `--network none`、`--read-only`、候選副本唯讀掛載、不傳任何 `ANTHROPIC_*`、不加 `--ai`。
 5. 驗證報表：審查的必須正是 `baseRevision..sha`，計數一致，`ai` 為 `null`，每個檔案的 `needsHuman` 與它的
-   decision 一致（離線時 `needsHuman` 就是 decision 為 `HUMAN_REVIEW_REQUIRED`）。審查期間 Attempt 與
+   decision 一致（離線時 `needsHuman` 就是 decision 為 `HUMAN_REVIEW_REQUIRED`），而且列出的檔案正是 Harness
+   在 `repo/` 以 Reviewer 同一組 git 旗標（`git diff --raw -z --no-abbrev -M`，rename 取新路徑）算出的變更。審查期間 Attempt 與
    contract 都沒有變化，才把原始報表與 envelope 存成 artifact，並記一筆 `review.completed`。
 
 `resultTree` 是 Attempt 結束時工作樹的完整內容（含 untracked、binary、mode、symlink；不含被 ignore 的
@@ -156,7 +157,7 @@ Harness 以 uid 0 執行時，拒絕啟動 Reviewer。
 | `VERIFICATION_FAILED` | 3 | 乾淨副本上 required check 未通過、path policy 越界，或凍結的 contract 快照不可用 |
 | `REVIEW_RUNNER_FAILED` | 3 | 未設定 image、image 不存在或缺 revision label、uid 0、docker 失敗、container exit 非 0 |
 | `REVIEW_TIMEOUT` | 3 | 超過 `reviewTimeoutMs` |
-| `REVIEW_REPORT_INVALID` | 3 | 報表不存在、過大、不是一般檔案（例如 symlink）、不是 JSON，或內容不一致 |
+| `REVIEW_REPORT_INVALID` | 3 | 報表不存在、過大、不是一般檔案（例如 symlink）、不是 JSON、內容不一致，或列出的檔案與 `baseRevision..sha` 的變更不符 |
 | `REVIEW_STALE` | 3 | 審查期間 Attempt、outcome、`resultTree` 或 Work Contract 版本有變化 |
 
 失敗時不保存任何 review artifact，只記一筆 `review.failed`（含 code）。

@@ -14,7 +14,7 @@ import type {
 import { prepareReviewer, runReviewer } from './docker-runner.ts';
 import {
   buildReviewEnvelope, reviewExitCode, validateReviewerReport,
-  type ReviewEnvelope, type ReviewStatus, type ReviewVerificationSummary,
+  type ReviewEnvelope, type ReviewStatus, type ReviewVerificationSummary, type ValidatedReport,
 } from './report.ts';
 
 // HR-01 定案 A2／A3（M1）：人 commit 的 candidate 必須正是某個 SUCCESS Attempt 的結果（tree 相同、
@@ -201,6 +201,41 @@ async function verifyCandidate(
   return { revision: ids.candidate, contractHash: snapshot.hash, changedPaths: changed.length, checks };
 }
 
+/**
+ * Harness 自己算出 Reviewer 應該列出的檔案：與 Reviewer 的 diffEntries 同一組 git 旗標
+ * （`diff --raw -z --no-abbrev -M --no-ext-diff <mergeBase> <head>`，mergeBase 已確認等於 baseRevision），
+ * 路徑取 `newPath ?? oldPath`（rename 是新路徑、刪除是舊路徑）。
+ */
+async function reviewedPaths(policy: GlobalPolicy, repo: string, base: string, candidate: string): Promise<string[]> {
+  const diff = await git(policy, repo, ['diff', '--raw', '-z', '--no-abbrev', '-M', '--no-ext-diff', base, candidate]);
+  if (!ok(diff)) throw failed('VERIFICATION_FAILED', `git diff --raw: ${runDetail(diff)}`);
+  const fields = diff.stdout.split('\0');
+  const paths: string[] = [];
+  for (let index = 0; index < fields.length;) {
+    const header = fields[index]!;
+    if (header === '') { index++; continue; }
+    const match = /^:\d{6} \d{6} [0-9a-f]+ [0-9a-f]+ ([A-Z])\d*$/.exec(header);
+    const twoPaths = match?.[1] === 'R' || match?.[1] === 'C';
+    const path = fields[index + (twoPaths ? 2 : 1)];
+    if (!match || !path) throw failed('VERIFICATION_FAILED', `git diff --raw: unparsable entry ${JSON.stringify(header)}`);
+    paths.push(path);
+    index += twoPaths ? 3 : 2;
+  }
+  return paths;
+}
+
+/** 報表列出的檔案集合必須正是 base..candidate 的變更（也就保證 files 為空若且唯若沒有任何變更）。 */
+function checkReportedPaths(report: ValidatedReport, changed: readonly string[]): void {
+  const listed = [...report.humanReview, ...report.notSelected].map((file) => file.path);
+  const expected = new Set(changed);
+  const missing = [...expected].filter((path) => !listed.includes(path));
+  const unexpected = listed.filter((path) => !expected.has(path));
+  if (missing.length || unexpected.length) {
+    throw failed('REVIEW_REPORT_INVALID', `report files do not match base..candidate: `
+      + `missing ${JSON.stringify(missing)}, unexpected ${JSON.stringify(unexpected)}`);
+  }
+}
+
 /** container 可以在 rw 的 /output 裡放 symlink 指向 Host 檔案：不跟隨 symlink，只讀一般檔案，且有大小上限。 */
 function readReport(outputDir: string, maxBytes: number): Buffer {
   const invalid = (why: string): ReviewStop => failed('REVIEW_REPORT_INVALID', why);
@@ -256,6 +291,7 @@ export async function reviewAttempt(
       const verification = await verifyCandidate(policy, frozen, verifyRepo, ids, attempt.baseline, log);
       // checks 可以改寫自己的副本（例如 git replace）；交給 Reviewer 的副本在 checks 跑完之後才重新 clone，從未暴露給 checks。
       const repo = await cloneCandidate(policy, work.workspace, join(root, 'repo'), lineage);
+      const changed = await reviewedPaths(policy, repo, attempt.baseRevision, input.candidate);
 
       log(`review: reviewer ${prepared.value.imageId} (revision ${prepared.value.revision})`);
       const run = await runReviewer(prepared.value, {
@@ -268,6 +304,7 @@ export async function reviewAttempt(
         baseRevision: attempt.baseRevision, candidate: input.candidate,
       });
       if (!validation.ok) throw failed('REVIEW_REPORT_INVALID', validation.reason);
+      checkReportedPaths(validation.report, changed);
 
       // 審查期間 attempt、outcome、resultTree 或 Work Contract 版本有任何變化，結果就不再對應原來的前提。
       const now = store.getAttempt(attempt.id);

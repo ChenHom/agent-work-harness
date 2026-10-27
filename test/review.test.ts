@@ -6,7 +6,7 @@ import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import {
-  existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync,
+  existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -18,7 +18,7 @@ import type { ReviewEnvelope } from '../src/review/report.ts';
 import { Store } from '../src/trace/store.ts';
 import type { GlobalPolicy, Outcome } from '../src/types.ts';
 import { installDockerStub, STUB_IMAGE_ID, STUB_REVISION } from './helpers/docker-stub.ts';
-import { reviewerReport, type ReportKind } from './helpers/review.ts';
+import { reviewerReport, reviewerReportFor, type ReportKind } from './helpers/review.ts';
 import { skipWithoutSandbox as skip } from './sandbox-probe.ts';
 
 const ROOT = mkdtempSync(join(tmpdir(), 'harness-review-'));
@@ -602,4 +602,42 @@ test('M1：使用者 repo 的 grafts 讓非後代看起來從 baseRevision 長�
     rmSync(join(c.repo, '.git/info/grafts'));
     git(c.repo, 'branch', '-D', 'orphan');
   }
+});
+
+test('M3：報表列出的檔案必須正是 base..candidate 的變更；NO_CHANGES、少列、多列都是 REVIEW_REPORT_INVALID', { skip }, async () => {
+  const c = await committedCase();
+  const ids = { base: '__BASE__', head: '__HEAD__' };
+  const file = (path: string) => ({ path, human: true, reasons: ['X'] });
+  for (const specs of [
+    [],                                                                  // 有變更卻說 NO_CHANGES
+    [file('src/a.txt')],                                                 // 少列 src/new.txt
+    [file('src/a.txt'), file('src/new.txt'), file('src/other.txt')],    // 多列
+    [file('src/a.txt'), file('README.md')],                              // 數量對、內容錯
+  ]) {
+    docker.configure({ run: 'report', reportText: JSON.stringify(reviewerReportFor(specs, ids)) });
+    const result = await review(c, c.head);
+    assertFailed(c, result, 3, 'REVIEW_REPORT_INVALID');
+    assert.match(result.stderr, /report files do not match base\.\.candidate/);
+  }
+});
+
+test('M3：rename 用與 Reviewer 相同的語意（-M，取新路徑）', { skip }, async () => {
+  const c = await attempt({ agent: (repo) => {
+    writeFileSync(join(repo, 'src/a.txt'), 'ok\n');
+    mkdirSync(join(repo, 'docs'));
+    renameSync(join(repo, 'README.md'), join(repo, 'docs/README.md'));
+  } });
+  assert.equal(c.outcome, 'SUCCESS');
+  const head = commit(c.repo);
+  docker.configure({ run: 'derive' });
+  const derived = await review(c, head, ['--json']);
+  assert.equal(derived.code, 5, derived.stderr);
+  assert.deepEqual(humanPaths(derived.stdout), ['docs/README.md', 'src/a.txt']);
+
+  // 不偵測 rename 的清單（舊路徑也列入）不是 Reviewer 會產生的報表
+  const noRenames = ['README.md', 'docs/README.md', 'src/a.txt'].map((path) => ({ path, human: true, reasons: ['X'] }));
+  docker.configure({ run: 'report', reportText: JSON.stringify(reviewerReportFor(noRenames, { base: '__BASE__', head: '__HEAD__' })) });
+  const result = await review(c, head);
+  assert.equal(result.code, 3, result.stderr);
+  assert.match(result.stderr, /^REVIEW_REPORT_INVALID: report files do not match base\.\.candidate/m);
 });
