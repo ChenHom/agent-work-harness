@@ -78,7 +78,7 @@ export interface Attempt {
   contractVersion: number;
   contractSnapshotHash: string;  // §34.1.1 RepositoryContractSnapshot hash
   baseRevision: string;          // §36.2 C2
-  preExistingDirty?: Array<{ path: string; hash: string | null }>;  // attempt 開始前就髒的檔案
+  preExistingDirty?: Array<{ path: string; hash: string | null; error?: string }>;  // attempt 開始前就髒的檔案；error 為快照失敗的標記
   baseline?: VerificationBaseline[];                                 // pre-flight baseline（write attempt）
   contextDropped?: Array<{ priority: number; count: number }>;      // prompt budget 裁切統計
   promptArtifactId: string;
@@ -632,4 +632,8 @@ export interface GlobalPolicy {
   verificationTimeoutMs: number;
   maxOutputBytes: number;
   promptBudgetChars: number;
+  /** `harness review` 用的 Reviewer Docker image（tag 或 ID）；未設定時審查一律 REVIEW_RUNNER_FAILED。 */
+  reviewerImage?: string;
+  reviewTimeoutMs: number;
+  maxReviewReportBytes: number;
 }

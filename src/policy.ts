@@ -24,6 +24,9 @@ export const DEFAULT_POLICY: GlobalPolicy = {
   verificationTimeoutMs: 10 * 60_000,
   maxOutputBytes: 2_000_000,
   promptBudgetChars: 24_000,
+  reviewerImage: process.env.HARNESS_REVIEWER_IMAGE,
+  reviewTimeoutMs: 10 * 60_000,
+  maxReviewReportBytes: 5 * 1024 * 1024,
 };
 
 export function loadPolicy(): GlobalPolicy {

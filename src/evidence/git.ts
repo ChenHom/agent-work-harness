@@ -2,19 +2,47 @@ import { readFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { createHash } from 'node:crypto';
 import { newId, nowIso } from '../ids.ts';
-import { runIsolated, tail, type IsolatedRun } from './exec.ts';
+import { runIsolated, tail, type IsolatedRun, type RunOptions } from './exec.ts';
 import { checkPaths, type PathPolicy } from '../repo/paths.ts';
-import type { EvidenceRecord, GlobalPolicy } from '../types.ts';
+import type { EvidenceRecord, GlobalPolicy, RepositoryContractSnapshot, WorkContract } from '../types.ts';
 
 // §23.1：Harness 自己觀察 git 狀態，不採信 agent 的 declaredChangedPaths。
 
+/**
+ * Harness 自己發出的每個 git 呼叫都用這組環境。verification HOME 是共用且可寫的（任何 Work 的 check 都能在裡面放
+ * .gitconfig 與 hook），使用者 repo 的 .git/config 也可能被 agent 改過：所以不讀全域與 system 設定、不採用 replace refs，
+ * 並以 command-line 層級（與 `git -c` 相同，優先於 repo 設定）把 core.hooksPath 指到 /dev/null、關掉 core.fsmonitor。
+ * 用 GIT_CONFIG_COUNT 而不是 argv 的 -c，resultTree 腳本裡的每個 git 才會一併套用。
+ * XDG_CONFIG_HOME 指到不存在的路徑：git 不經過任何設定檔就會讀 $XDG_CONFIG_HOME/git/{ignore,attributes}
+ *（未設定時是 $HOME/.config），GIT_CONFIG_GLOBAL 擋不住這兩個預設檔。
+ */
+const HARDENED_GIT_ENV: Readonly<Record<string, string>> = {
+  GIT_CONFIG_GLOBAL: '/dev/null',
+  GIT_CONFIG_NOSYSTEM: '1',
+  XDG_CONFIG_HOME: '/nonexistent',
+  GIT_NO_REPLACE_OBJECTS: '1',
+  GIT_CONFIG_COUNT: '2',
+  GIT_CONFIG_KEY_0: 'core.hooksPath', GIT_CONFIG_VALUE_0: '/dev/null',
+  GIT_CONFIG_KEY_1: 'core.fsmonitor', GIT_CONFIG_VALUE_1: 'false',
+};
+
+/** 在沙箱內以強化後的環境執行 git。 */
+export function runGit(policy: GlobalPolicy, args: readonly string[], opts: Omit<RunOptions, 'env'>): Promise<IsolatedRun> {
+  return runIsolated(policy, ['git', ...args], { ...opts, env: HARDENED_GIT_ENV });
+}
+
 export async function baseRevision(policy: GlobalPolicy, workspace: string): Promise<string> {
-  const r = await runIsolated(policy, ['git', 'rev-parse', 'HEAD'], { workspace, timeoutMs: 30_000 });
+  const r = await runGit(policy, ['rev-parse', 'HEAD'], { workspace, timeoutMs: 30_000 });
   const revision = r.exitCode === 0 ? r.stdout.trim() : 'UNKNOWN';
   return revision || 'UNKNOWN';
 }
 
-export interface DirtyEntry { path: string; hash: string | null }
+export interface DirtyEntry {
+  path: string;
+  hash: string | null;
+  /** 快照本身失敗（git status 錯誤、逾時、輸出截斷）時的唯一一筆標記：path 為空字串，hash 為 null。 */
+  error?: string;
+}
 
 function probeError(label: string, run: IsolatedRun): string | undefined {
   if (run.timedOut) return `${label}: timeout`;
@@ -41,11 +69,14 @@ function contentHash(workspace: string, rel: string): string | null {
  */
 export async function snapshotDirty(policy: GlobalPolicy, workspace: string): Promise<DirtyEntry[]> {
   const status = await statusPaths(policy, workspace);
+  // 不知道開始前髒不髒，就不能當成乾淨：留下標記，review 視同 PRE_EXISTING_DIRTY（fail closed）。
+  // 標記的空 path 不會等於任何 git 回報的路徑，不影響 observeGit 對既有修改的扣除。
+  if (status.error) return [{ path: '', hash: null, error: status.error }];
   return status.paths.map((p) => ({ path: p, hash: contentHash(workspace, p) }));
 }
 
 async function statusPaths(policy: GlobalPolicy, workspace: string): Promise<{ paths: string[]; error?: string }> {
-  const status = await runIsolated(policy, ['git', 'status', '--porcelain=v1', '--untracked-files=all'], { workspace, timeoutMs: 60_000 });
+  const status = await runGit(policy, ['status', '--porcelain=v1', '--untracked-files=all'], { workspace, timeoutMs: 60_000 });
   const error = probeError('git status', status);
   if (error) return { paths: [], error };
   const paths = status.stdout.split('\n')
@@ -67,8 +98,35 @@ export interface GitObservation {
   baseRevision: string;
   head: string;
   clean: boolean;
+  /** 工作樹內容（含 untracked、binary、mode、symlink）對應的 tree SHA；算不出來時為 undefined。 */
+  resultTree?: string;
   /** git observation 不完整時的原因；空陣列代表所有 probes 成功。 */
   probeErrors?: string[];
+  /**
+   * resultTree 算不出來的原因（也列在 probeErrors）。它只是 `harness review` 的前提，不是 Attempt 的變更觀察：
+   * 不讓 git_diff evidence 變成 INCONCLUSIVE，之後的 review 回 ATTEMPT_RESULT_UNRECORDED（fail closed）。
+   */
+  resultTreeError?: string;
+}
+
+// 人 `git add -A && git commit` 會得到的 tree。暫存 index 從 HEAD 開始（保留已追蹤但符合 ignore 的檔案），
+// 新 object 寫進沙箱自己的 /tmp，原 repo 只當 alternates 讀取 —— 不碰使用者的 index、refs 與 object DB。
+// 固定常數：不接受任何外部輸入。實測見 DECISIONS D-42。
+const RESULT_TREE_SCRIPT = `set -eu
+objects=$(git rev-parse --path-format=absolute --git-path objects)
+tmp=$(mktemp -d)
+mkdir "$tmp/objects"
+export GIT_INDEX_FILE="$tmp/index" GIT_OBJECT_DIRECTORY="$tmp/objects" GIT_ALTERNATE_OBJECT_DIRECTORIES="$objects"
+git read-tree HEAD
+git add -A
+git write-tree`;
+
+async function resultTree(policy: GlobalPolicy, workspace: string): Promise<{ tree?: string; error?: string }> {
+  const run = await runIsolated(policy, ['sh', '-c', RESULT_TREE_SCRIPT], { workspace, timeoutMs: 120_000, env: HARDENED_GIT_ENV });
+  const error = probeError('git write-tree', run);
+  if (error) return { error };
+  const tree = run.stdout.trim();
+  return /^[0-9a-f]{40}$/.test(tree) ? { tree } : { error: 'git write-tree: unexpected output' };
 }
 
 /** 觀察 worktree 相對 baseRevision 的實際變更（含 untracked）。 */
@@ -81,7 +139,7 @@ export async function observeGit(
   const worktreePaths = status.paths;
   if (base === 'UNKNOWN') probeErrors.push('git base revision unavailable');
 
-  const headRes = await runIsolated(policy, ['git', 'rev-parse', 'HEAD'], { workspace, timeoutMs: 30_000 });
+  const headRes = await runGit(policy, ['rev-parse', 'HEAD'], { workspace, timeoutMs: 30_000 });
   const headError = probeError('git rev-parse HEAD', headRes);
   if (headError) probeErrors.push(headError);
   const head = headRes.exitCode === 0 ? headRes.stdout.trim() || 'UNKNOWN' : 'UNKNOWN';
@@ -90,15 +148,17 @@ export async function observeGit(
   // base 之後若有 commit，也要算進變更（agent 可能自行 commit）
   let committed: string[] = [];
   if (base !== 'UNKNOWN' && head !== 'UNKNOWN' && head !== base) {
-    const r = await runIsolated(policy, ['git', 'diff', '--no-ext-diff', '--no-textconv', '--name-only', `${base}..${head}`], { workspace, timeoutMs: 60_000 });
+    const r = await runGit(policy, ['diff', '--no-ext-diff', '--no-textconv', '--name-only', `${base}..${head}`], { workspace, timeoutMs: 60_000 });
     const error = probeError('git diff --name-only', r);
     if (error) probeErrors.push(error);
     else committed = r.stdout.split('\n').map((s) => s.trim()).filter(Boolean);
   }
 
-  const diffRes = await runIsolated(policy, ['git', 'diff', '--no-ext-diff', '--no-textconv', base === 'UNKNOWN' ? 'HEAD' : base], { workspace, timeoutMs: 120_000 });
+  const diffRes = await runGit(policy, ['diff', '--no-ext-diff', '--no-textconv', base === 'UNKNOWN' ? 'HEAD' : base], { workspace, timeoutMs: 120_000 });
   const diffError = probeError('git diff', diffRes);
   if (diffError) probeErrors.push(diffError);
+  const tree = await resultTree(policy, workspace);
+  if (tree.error) probeErrors.push(tree.error);
   const all = [...new Set([...worktreePaths, ...committed])].sort();
 
   // attempt 開始前就髒、且內容至今未再變動的檔案，不算這次 attempt 的變更
@@ -113,22 +173,35 @@ export async function observeGit(
 
   return {
     changedPaths, preExistingUnchanged, diff: diffRes.stdout,
-    baseRevision: base, head, clean: changedPaths.length === 0, probeErrors,
+    baseRevision: base, head, clean: changedPaths.length === 0, resultTree: tree.tree, probeErrors,
+    ...(tree.error ? { resultTreeError: tree.error } : {}),
   };
 }
 
 export function gitDiffEvidence(workId: string, attemptId: string, obs: GitObservation, diffArtifactId: string): EvidenceRecord {
   const probeErrors = obs.probeErrors ?? [];
+  const observationErrors = probeErrors.filter((error) => error !== obs.resultTreeError);
   return {
     id: newId('EV'), workId, attemptId, type: 'git_diff', label: 'git diff',
-    status: probeErrors.length ? 'INCONCLUSIVE' : 'PASS',
+    status: observationErrors.length ? 'INCONCLUSIVE' : 'PASS',
     data: {
       changedPaths: obs.changedPaths, preExistingUnchanged: obs.preExistingUnchanged,
       baseRevision: obs.baseRevision, head: obs.head,
+      ...(obs.resultTree ? { resultTree: obs.resultTree } : {}),
       diffArtifactId, diffPreview: tail(obs.diff, 20), probeErrors,
     },
     observedAt: nowIso(),
   };
+}
+
+/** Attempt 的 path policy：read attempt 任何變更都算越界；write attempt 為 denied ∪ protected，加上明確的 allowlist。 */
+export function attemptPathPolicy(contract: WorkContract, snapshot: RepositoryContractSnapshot): PathPolicy {
+  return contract.mode === 'read'
+    ? { deniedPaths: ['**'] }
+    : {
+        deniedPaths: [...new Set([...contract.deniedPaths, ...snapshot.contract.filesystem.protectedPaths])],
+        allowedPaths: contract.allowedPaths,
+      };
 }
 
 /** §24：denied / protected path 被改動 → POLICY_VIOLATION 的來源證據。 */

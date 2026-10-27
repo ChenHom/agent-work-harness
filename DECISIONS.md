@@ -56,6 +56,56 @@ repo 若能指定要 bind 進沙箱的路徑，等於能自行擴大讀取面（
 ### D-11 [取捨] Repository Contract 的 `verification.checks[].argv[0]` 禁止絕對路徑
 避免 repo 指向 worktree 外的執行檔。相對路徑（`vendor/bin/phpstan`）與 PATH 名稱（`npm`）都允許。
 
+### D-42 [實測／取捨] 審查交接：`resultTree` 證明 candidate，Docker runner 是第三個外部程序例外
+**`resultTree`（實測）。** HR-01 A2 由人 commit candidate，Harness 必須證明那個 commit 正是某個 Attempt 的結果。
+Attempt 記錄的 diff 做不到：untracked 只有路徑、沒有 `--binary`、既有修改混在一起。所以 `observeGit` 結束時
+多算一個 tree：在 `runIsolated`（workspace 唯讀）內執行固定的 sh 腳本，用暫存 index（從 `HEAD` 開始，保留
+已追蹤但符合 ignore 的檔案）與沙箱 `/tmp` 裡的暫存 object 目錄（原 repo 只當 alternates），跑
+`git read-tree HEAD`、`git add -A`、`git write-tree`。
+
+- M1 spike 在 bwrap 內 13/13：結果等於人 `git add -A && git commit` 的 `HEAD^{tree}`（修改、untracked、binary、
+  mode、symlink、刪除、`.gitignore`）；原 repo 的 object 數、index、status 不變。`test/result-tree.test.ts`
+  重現這些性質。
+- `skip-worktree` 隱藏的修改會算進 tree，但 `git status` 看不到，所以 Attempt 的 path policy 也看不到。
+  `harness review` 在 `base..candidate` 上重新評估 path policy，補上這個洞（`test/review.test.ts`）。
+- 只接受 40 位 hex。算不出來時不寫 `resultTree` 並加入 `probeErrors`，但 git_diff evidence 的 status 不因此變成
+  `INCONCLUSIVE`：`resultTree` 只是 review 的前提，不是 Attempt 的變更觀察，否則 SHA-256 repo 的 Attempt 永遠不會是
+  `SUCCESS`（第一輪審查 L5，regression）。review 那一側仍 fail closed：沒有 `resultTree` 就是 `ATTEMPT_RESULT_UNRECORDED`。
+- 不採用 `git stash create`（不含 untracked，而且會寫入使用者的 object DB），也不採用 `commit-tree`
+  （等於由 Harness 產生 commit）。
+
+**Docker runner（取捨）。** Reviewer 以 container 執行，而 Docker 無法在 bwrap 內啟動。
+`src/review/docker-runner.ts` 因此成為第三個可以 import `node:child_process` 的檔案（`eslint.config.js` 的例外）。
+限制：只執行 `docker`，argv 全部由程式固定組裝，`shell: false`；先 `image inspect` 取 image ID 與 revision label，
+之後只用 image ID 執行；`--network none`、`--read-only`、`--cap-drop ALL`、非 root 的 `--user`、
+候選副本以 `--mount type=bind,…,readonly` 唯讀掛載（不用 `-v`：來源不存在時 `-v` 會自動建立空目錄，`--mount` 直接報錯）；
+docker CLI 只拿到白名單環境變數（不含任何 API key）；deadline 時先 `docker kill`、再 best-effort `docker rm -f`，最後收掉 CLI，
+輸出只保留結尾而不因輸出過多殺掉 CLI（否則 `--rm` 的 container 會留在背景）。git 與 verification 仍然只走
+`runIsolated`，Docker socket 與 API key 不進 verification／agent 沙箱。
+
+- 乾淨副本用 `git clone --no-local --no-checkout`。`runIsolated` 新增 `RunOptions.readOnlyBinds`，讓來源 repo
+  唯讀可見、目的地可寫。不用 `--shared`（alternates 指向 Host 路徑，container 內讀不到），也不用
+  `git worktree add`（會改使用者 repo 的 metadata）。
+- 兩份副本（第一輪審查 H1）：required checks 可以改寫自己跑的副本（實測：`git replace` 把 candidate 換成 base 的 tree，
+  Reviewer 就回 `NO_CHANGES`、exit 0）。所以 checks 用 `verify/`，checks 跑完才重新 clone `repo/` 給 Reviewer。
+  container 另加 `GIT_NO_REPLACE_OBJECTS=1`、`GIT_CONFIG_NOSYSTEM=1`、`GIT_CONFIG_GLOBAL=/dev/null`。
+- 強化的 git 環境（H2）：verification HOME 由同一個 state dir 的所有 Work 共用且可寫，某個 Work 的 check 寫入的
+  `.gitconfig`／hook 會影響之後 Harness 的 git 呼叫。Harness 自己的 git 一律帶 `GIT_CONFIG_GLOBAL=/dev/null`、
+  `GIT_CONFIG_NOSYSTEM=1`、`GIT_NO_REPLACE_OBJECTS=1`、`XDG_CONFIG_HOME=/nonexistent`（git 讀
+  `$HOME/.config/git/{ignore,attributes}` 不經過任何設定檔，第二輪審查實測可讓受保護路徑的新檔從 path policy 消失），
+  並以 command-line 層級設定 `core.hooksPath=/dev/null`、
+  `core.fsmonitor=false`（用 `GIT_CONFIG_COUNT`，`resultTree` 腳本裡的 git 也一併套用；`RunOptions.env` 只合併、
+  不取代 verification 的環境白名單）。
+- 不做 schema migration：`resultTree` 放在既有 git_diff evidence 的 data JSON；原始報表與 envelope 是 artifact
+  （kind `review_report`、`review_envelope`）；結果是 `review.completed`／`review.failed` 事件。
+- 本機 snap 版 Docker 29.8.0 實測：`--security-opt no-new-privileges` 讓 `reviewer:m1-2d84ad6` 的 entrypoint
+  無法 exec（`operation not permitted`，加 `apparmor=unconfined` 也一樣）。去掉這個旗標、保留 `--read-only`、
+  `--cap-drop ALL`、`--user` 時，同一個 image 能啟動，並對以 stdin 傳入的 fixture repo 產生報表，該報表通過
+  `validateReviewerReport`（未經 Harness 的 `-v` 掛載路徑）。
+  決定（2026-10-27）：argv 不加 `no-new-privileges`。它是 M1 規格自己加的強化項目，不在交接計畫定案的要求內；
+  `--cap-drop ALL` 加非 root 的 `--user` 已讓 container 內的 setuid 程式拿不到 capability。若之後改用支援這個旗標的
+  Docker，再評估加回。
+
 ## 契約與語意
 
 ### D-12 [取捨] 「可以改 X」不產生 `allowedPaths`，「只改 X」才會

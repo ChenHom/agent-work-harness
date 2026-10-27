@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from 'node:fs';
+import { existsSync, mkdtempSync, rmSync, writeFileSync, mkdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
@@ -82,5 +82,96 @@ test('git diff 觀測不受 repository textconv 影響', { skip }, async () => {
 
   assert.match(obs.diff, /-before/);
   assert.match(obs.diff, /\+after/);
+  rmSync(join(r, '..'), { recursive: true, force: true });
+});
+
+test('H2：git evidence 不採用共用 verification HOME 的全域設定，也不執行 repo 設定的 fsmonitor', { skip }, async () => {
+  const r = repo();
+  const home = mkdtempSync(join(tmpdir(), 'harness-git-home-'));
+  const policy = { ...DEFAULT_POLICY, verificationHome: home };
+  // 之前某個 check 寫進共用 HOME 的設定：把新檔排除在 git status 與 git add -A 之外
+  writeFileSync(join(home, 'ignore'), 'new.txt\n');
+  writeFileSync(join(home, '.gitconfig'), `[core]\n\texcludesFile = ${join(home, 'ignore')}\n`);
+  // agent 可寫的 .git/config：fsmonitor 是一支會被 git status 執行的程式
+  writeFileSync(join(home, 'fsmonitor.sh'), `#!/bin/sh\necho ran >> ${join(home, 'fsmonitor-ran')}\nexit 1\n`, { mode: 0o755 });
+  execFileSync('git', ['config', 'core.fsmonitor', join(home, 'fsmonitor.sh')], { cwd: r });
+
+  const base = await baseRevision(policy, r);
+  writeFileSync(join(r, 'new.txt'), 'untracked\n');
+  writeFileSync(join(r, 'src/a.ts'), 'export const a = 2;\n');
+  const dirty = await snapshotDirty(policy, r);
+  const obs = await observeGit(policy, r, base, []);
+  assert.deepEqual(dirty.map((d) => d.path).sort(), ['new.txt', 'src/a.ts']);
+  assert.deepEqual(obs.changedPaths, ['new.txt', 'src/a.ts']);
+  assert.deepEqual(obs.probeErrors, []);
+  assert.equal(existsSync(join(home, 'fsmonitor-ran')), false, 'Harness 的 git 不得執行 core.fsmonitor');
+
+  const neutral = ['-c', 'core.excludesFile=/dev/null', '-c', 'core.fsmonitor=false'];
+  execFileSync('git', [...neutral, 'add', '-A'], { cwd: r });
+  execFileSync('git', [...neutral, '-c', 'user.email=t@t', '-c', 'user.name=t', 'commit', '-qm', 'human'], { cwd: r });
+  assert.equal(obs.resultTree, execFileSync('git', ['rev-parse', 'HEAD^{tree}'], { cwd: r, encoding: 'utf8' }).trim(),
+    'resultTree 必須含 new.txt');
+  rmSync(join(r, '..'), { recursive: true, force: true });
+  rmSync(home, { recursive: true, force: true });
+});
+
+test('H2：git evidence 也不採用共用 HOME 底下 XDG 預設位置的 ignore 與 attributes', { skip }, async () => {
+  const r = repo();
+  const home = mkdtempSync(join(tmpdir(), 'harness-git-home-'));
+  const policy = { ...DEFAULT_POLICY, verificationHome: home };
+  // git 讀 $HOME/.config/git/{ignore,attributes} 不經過任何設定檔，GIT_CONFIG_GLOBAL=/dev/null 擋不住
+  mkdirSync(join(home, '.config', 'git'), { recursive: true });
+  writeFileSync(join(home, '.config', 'git', 'ignore'), 'new.txt\n');
+  writeFileSync(join(home, '.config', 'git', 'attributes'), '* text eol=crlf\n');
+
+  const base = await baseRevision(policy, r);
+  writeFileSync(join(r, 'new.txt'), 'untracked\n');
+  writeFileSync(join(r, 'src/a.ts'), 'export const a = 2;\n');
+  // 植入的 `* text` 會讓 git add 把 CRLF 正規化成 LF；沒有它時 tree 原樣保存 CRLF
+  writeFileSync(join(r, 'src/crlf.txt'), 'one\r\ntwo\r\n');
+  const dirty = await snapshotDirty(policy, r);
+  const obs = await observeGit(policy, r, base, []);
+  assert.deepEqual(dirty.map((d) => d.path).sort(), ['new.txt', 'src/a.ts', 'src/crlf.txt']);
+  assert.deepEqual(obs.changedPaths, ['new.txt', 'src/a.ts', 'src/crlf.txt']);
+  assert.deepEqual(obs.probeErrors, []);
+
+  const neutral = ['-c', 'core.excludesFile=/dev/null', '-c', 'core.attributesFile=/dev/null', '-c', 'core.fsmonitor=false'];
+  execFileSync('git', [...neutral, 'add', '-A'], { cwd: r });
+  execFileSync('git', [...neutral, '-c', 'user.email=t@t', '-c', 'user.name=t', 'commit', '-qm', 'human'], { cwd: r });
+  assert.equal(obs.resultTree, execFileSync('git', ['rev-parse', 'HEAD^{tree}'], { cwd: r, encoding: 'utf8' }).trim(),
+    'resultTree 必須含 new.txt，且 src/crlf.txt 不被植入的 attributes 正規化');
+  rmSync(join(r, '..'), { recursive: true, force: true });
+  rmSync(home, { recursive: true, force: true });
+});
+
+test('L3：dirty 快照本身失敗時留下標記（不是空清單），讓 review fail closed', { skip }, async () => {
+  const base = mkdtempSync(join(tmpdir(), 'harness-git-nonrepo-'));
+  const dirty = await snapshotDirty(DEFAULT_POLICY, base);
+  assert.equal(dirty.length, 1);
+  assert.deepEqual([dirty[0]?.path, dirty[0]?.hash], ['', null]);
+  assert.match(dirty[0]?.error ?? '', /^git status: exit 128/);
+  rmSync(base, { recursive: true, force: true });
+});
+
+test('H2：agent 用 replace ref 把自己的 commit 換成 base，git evidence 仍看得到被 commit 的變更', { skip }, async () => {
+  const r = repo();
+  const git = (...args: string[]): string =>
+    execFileSync('git', ['-c', 'user.email=t@t', '-c', 'user.name=t', ...args], { cwd: r, encoding: 'utf8' }).trim();
+  const base = await baseRevision(DEFAULT_POLICY, r);
+  mkdirSync(join(r, 'secret'));
+  writeFileSync(join(r, 'secret/key.txt'), 'k\n');
+  git('add', '-A');
+  git('commit', '-qm', 'agent commit');
+  const head = git('rev-parse', 'HEAD');
+  // HEAD 換成 base；index 與工作樹也回到 base。採用 replace refs 時 git status 與 base..HEAD 都是空的
+  git('replace', head, base);
+  git('read-tree', 'HEAD');
+  rmSync(join(r, 'secret'), { recursive: true });
+  assert.equal(git('status', '--porcelain'), '', '採用 replace refs 的 git 看不到這個 commit');
+
+  const obs = await observeGit(DEFAULT_POLICY, r, base, []);
+  assert.equal(obs.head, head);
+  assert.deepEqual(obs.changedPaths, ['secret/key.txt']);
+  assert.deepEqual(obs.probeErrors, []);
   rmSync(join(r, '..'), { recursive: true, force: true });
 });

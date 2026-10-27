@@ -25,6 +25,10 @@ export interface RunOptions {
   workspace: string;
   writable?: boolean;
   timeoutMs?: number;
+  /** workspace 以外還需要唯讀可見的路徑（例如 clone 的來源 repo）。 */
+  readOnlyBinds?: readonly string[];
+  /** 加在 verificationEnv 白名單之上的變數（只合併，不取代白名單），例如 git 的強化設定。 */
+  env?: Readonly<Record<string, string>>;
 }
 
 export function runIsolated(policy: GlobalPolicy, argv: readonly string[], opts: RunOptions): Promise<IsolatedRun> {
@@ -32,7 +36,7 @@ export function runIsolated(policy: GlobalPolicy, argv: readonly string[], opts:
     ...bwrapArgv({
       workspace: opts.workspace,
       home: policy.verificationHome,
-      readOnlyBinds: policy.readOnlyBinds,
+      readOnlyBinds: [...policy.readOnlyBinds, ...(opts.readOnlyBinds ?? [])],
       writable: opts.writable ?? false,
     }),
     '--',
@@ -44,7 +48,7 @@ export function runIsolated(policy: GlobalPolicy, argv: readonly string[], opts:
   return new Promise((resolve) => {
     let timedOut = false;
     const child = execFile('bwrap', wrapped, {
-      env: verificationEnv(policy),
+      env: { ...verificationEnv(policy), ...opts.env },
       shell: false,
       maxBuffer: policy.maxOutputBytes,
       killSignal: 'SIGKILL',

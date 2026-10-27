@@ -45,6 +45,7 @@ export type EventType =
   | 'evaluation.verdict_recorded' | 'evaluation.completed'
   | 'critic.dispatch_reserved' | 'critic.dispatch_completed'
   | 'retention.gc_applied' | 'artifact.redacted'
+  | 'review.completed' | 'review.failed'
   | 'usage.note';   // 人對結果的判讀 —— 機器不知道 evidence 判錯了，只有人知道
 
 export type VerifiedArtifact =
@@ -1170,6 +1171,12 @@ export class Store {
     this.db.prepare('insert into outcomes(id,work_id,attempt_id,outcome,reasons,evidence_ids,created_at) values (?,?,?,?,?,?,?)')
       .run(newId('O'), workId, attemptId, outcome, JSON.stringify(reasons), '[]', nowIso());
     this.event('outcome.decided', { outcome, reasons }, workId, attemptId);
+  }
+
+  /** 某個 attempt 的所有 outcome（正常只有一筆 finalization）；呼叫端要求每一筆都符合才算數。 */
+  attemptOutcomes(attemptId: string): Outcome[] {
+    return (this.db.prepare('select outcome from outcomes where attempt_id = ? order by created_at, id')
+      .all(attemptId) as Array<{ outcome: Outcome }>).map((row) => row.outcome);
   }
 
   lastOutcome(workId: string): { outcome: Outcome; reasons: string[]; attemptId: string; evidenceIds: string[] } | null {
