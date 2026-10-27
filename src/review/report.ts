@@ -84,6 +84,12 @@ export function validateReviewerReport(
   if (human.required !== (human.files > 0)) return fail('human.required does not match human.files > 0');
 
   if (!('ai' in raw) || raw.ai !== null) return fail('ai must be null for an offline review');
+  // 離線（ai === null）時，Reviewer 的 needsHuman 就是 decision === HUMAN_REVIEW_REQUIRED；兩者不一致的報表不可信。
+  const mismatch = files.findIndex((file: Obj) => file.needsHuman !== (file.decision === HUMAN));
+  if (mismatch >= 0) return fail(`files[${mismatch}].needsHuman does not match its decision for an offline review`);
+  if ((decision.status === HUMAN) !== human.required) {
+    return fail('decision.status must be HUMAN_REVIEW_REQUIRED exactly when human.required');
+  }
   if (files.length === 0 && !decision.reasons.includes('NO_CHANGES')) {
     return fail('decision.reasons lacks NO_CHANGES for an empty file list');
   }

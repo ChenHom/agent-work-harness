@@ -82,6 +82,17 @@ const MUTATIONS: Mutation[] = [
   ['human.required 與 human.files 矛盾', (r) => { r.human.required = false; }, /human\.required/],
   ['ai 不是 null', (r) => { r.ai = { model: 'x' }; }, /ai must be null/],
   ['缺 ai（不得以預設值補齊）', (r) => { drop(r, 'ai'); }, /ai must be null/],
+  // 第一輪審查 M2（V1）：Reviewer 機械選入（decision HUMAN、full 1、status HUMAN），卻標 needsHuman false、human.required false
+  ['選入人工的檔案 needsHuman 為 false', (r) => {
+    r.files = [r.files[0]!];
+    r.files[0]!.needsHuman = false;
+    r.decision = { ...r.decision, files: 1, notSelected: 0, full: 1 };
+    r.human = { required: false, files: 0, findings: 0, pendingFixes: 0 };
+  }, /files\[0\]\.needsHuman does not match its decision/],
+  ['未選入的檔案 needsHuman 為 true', (r) => {
+    r.files[1]!.needsHuman = true;
+    r.human.files = 2;
+  }, /files\[1\]\.needsHuman does not match its decision/],
 ];
 
 for (const [name, mutate, reason] of MUTATIONS) {
@@ -93,6 +104,15 @@ for (const [name, mutate, reason] of MUTATIONS) {
     assert.match(result.ok ? '' : result.reason, reason);
   });
 }
+
+test('報表反例：decision.status 是 NOT_SELECTED，檔案卻標 needsHuman、human.required 為 true（M2 V2）→ 不通過', () => {
+  const report = reviewerReport('not-selected', { base: BASE, head: HEAD });
+  report.files[0]!.needsHuman = true;
+  report.human = { required: true, files: 1, findings: 0, pendingFixes: 0 };
+  const result = validateReviewerReport(text(report), expected);
+  assert.equal(result.ok, false);
+  assert.match(result.ok ? '' : result.reason, /files\[0\]\.needsHuman does not match its decision/);
+});
 
 test('報表反例：沒有檔案卻沒有 NO_CHANGES → 不通過', () => {
   const report = reviewerReport('no-changes', { base: BASE, head: HEAD });

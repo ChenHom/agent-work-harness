@@ -114,7 +114,8 @@ harness show W-xxx                        # [review] 段落：最新一次審查
    replace refs、不執行 hook 與 fsmonitor：verification HOME 是共用且可寫的，checks 可以在裡面放 `.gitconfig`。
 4. Reviewer：先 `docker image inspect` 取得 image ID 與 revision label，之後只用 image ID 執行。
    `--network none`、`--read-only`、候選副本唯讀掛載、不傳任何 `ANTHROPIC_*`、不加 `--ai`。
-5. 驗證報表：審查的必須正是 `baseRevision..sha`，計數一致，`ai` 為 `null`。審查期間 Attempt 與
+5. 驗證報表：審查的必須正是 `baseRevision..sha`，計數一致，`ai` 為 `null`，每個檔案的 `needsHuman` 與它的
+   decision 一致（離線時 `needsHuman` 就是 decision 為 `HUMAN_REVIEW_REQUIRED`）。審查期間 Attempt 與
    contract 都沒有變化，才把原始報表與 envelope 存成 artifact，並記一筆 `review.completed`。
 
 `resultTree` 是 Attempt 結束時工作樹的完整內容（含 untracked、binary、mode、symlink；不含被 ignore 的
