@@ -11,7 +11,7 @@ export const DEV01_LIMITATION = 'DEV-01: Reviewer fact layer is not wired; '
 
 export type ReviewStatus = 'NO_CHANGES' | 'NO_HUMAN_REVIEW' | 'HUMAN_REVIEW_REQUIRED';
 
-interface ReviewedFile { path: string; reasons: string[] }
+export interface ReviewedFile { path: string; reasons: string[] }
 
 export interface ValidatedReport {
   status: ReviewStatus;
@@ -92,7 +92,7 @@ export function validateReviewerReport(
   return { ok: true, report: { status, mergeBase: raw.mergeBase, humanReview, notSelected } };
 }
 
-interface ReviewVerificationSummary {
+export interface ReviewVerificationSummary {
   /** 在哪個 revision 的乾淨副本上重跑。 */
   revision: string;
   /** Attempt 凍結的 Repository Contract 快照 hash。 */

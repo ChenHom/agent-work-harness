@@ -19,8 +19,9 @@ import { runIsolated } from './evidence/exec.ts';
 import {
   formatContextDropped, formatPreExistingDirty, formatRecoverySession, formatWorkListRow,
   formatBudget, formatCheckpoint, formatCompensation, formatMilestone, formatOperation, formatPlan,
-  formatDurableSnapshot, workListEntry,
+  formatDurableSnapshot, formatReview, workListEntry,
 } from './cli-format.ts';
+import { latestReview, reviewAttempt } from './review/review.ts';
 import { formatPromptChars } from './response.ts';
 import type { CriterionVerdictRecord, GlobalPolicy, ValidatorIdentity } from './types.ts';
 import { benchmarkRecoveryReport } from './benchmark/recovery.ts';
@@ -52,6 +53,9 @@ P1–P3 local runtime:
   harness checkpoint create <workId> <json-file>
   harness checkpoint resume <checkpointId>
   harness recover <workId>              重新收集中斷 attempt 的 evidence
+  harness review <workId> --attempt <attemptId> --head <40 位 commit SHA> [--json]
+                                        確認人 commit 的 candidate 就是該 attempt 的結果，在乾淨副本重跑
+                                        required checks，以離線 Docker 執行 Reviewer（exit 0／5／2／3／1）
   harness list [--json]                 列出所有 work（--json：含最新 attempt 階段，供輪詢）
   harness show <workId>                 contract / decisions / attempts / evidence
   harness trace <workId>                append-only 事件流
@@ -106,12 +110,12 @@ note 的 kind 對應 DECISIONS.md 的升級判準：
 const NOTE_KINDS = ['false-accept', 'false-block', 'retry-churn', 'blocked-work', 'friction', 'other'];
 
 const STORE_COMMANDS = new Set([
-  'new', 'run', 'retry', 'recover', 'answer', 'amend', 'plan', 'checkpoint',
+  'new', 'run', 'retry', 'recover', 'review', 'answer', 'amend', 'plan', 'checkpoint',
   'list', 'show', 'trace', 'prompt', 'note', 'notes', 'stats', 'fake', 'eval', 'gc', 'redact', 'replay',
 ]);
 const READ_ONLY_COMMANDS = new Set(['list', 'show', 'trace', 'prompt', 'notes', 'stats', 'eval', 'replay']);
 const MUTATING_COMMANDS = new Set([
-  'init', 'new', 'run', 'retry', 'recover', 'answer', 'amend', 'plan', 'checkpoint', 'note', 'doctor', 'fake',
+  'init', 'new', 'run', 'retry', 'recover', 'review', 'answer', 'amend', 'plan', 'checkpoint', 'note', 'doctor', 'fake',
   'gc', 'redact',
 ]);
 const DURABLE_MUTATING_ACTIONS = new Set(['start', 'callback', 'cancel', 'rollover']);
@@ -197,6 +201,29 @@ export async function main(
         : await orch!.recover(workId, ownership);
       console.log(`\n${report.response}\n`);
       return report.decision.outcome === 'SUCCESS' ? 0 : 3;
+    }
+
+    case 'review': {
+      const usage = '用法：harness review <workId> --attempt <attemptId> --head <40 位 commit SHA> [--json]';
+      let parsed: { values: { attempt?: string; head?: string; json?: boolean }; positionals: string[] };
+      try {
+        parsed = parseArgs({
+          args: rest, allowPositionals: true, strict: true,
+          options: { attempt: { type: 'string' }, head: { type: 'string' }, json: { type: 'boolean' } },
+        });
+      } catch (e) { console.error(`${(e as Error).message}\n${usage}`); return 1; }
+      const { values, positionals } = parsed;
+      const [workId] = positionals;
+      if (positionals.length !== 1 || !workId || !values.attempt || values.head === undefined) { console.error(usage); return 1; }
+      const result = await reviewAttempt(policy, store!, { workId, attemptId: values.attempt, candidate: values.head },
+        { ownership, log });
+      if (!('envelope' in result)) {
+        console.error(`${result.exitCode === 2 ? 'BLOCKED ' : ''}${result.code}: ${result.detail}`);
+        return result.exitCode;
+      }
+      if (values.json) console.log(result.envelopeText);
+      else for (const line of formatReview(result.envelope, result)) console.log(line);
+      return result.exitCode;
     }
 
     case 'answer': {
@@ -325,6 +352,11 @@ export async function main(
         console.log('\n[recovery sessions]');
         for (const session of recoverySessions) console.log(formatRecoverySession(session));
       }
+      console.log('\n[review]');
+      const review = latestReview(store!, work.id);
+      if (review.status === 'none') console.log('(none)');
+      else if (review.status === 'invalid') console.log(`REVIEW_ARTIFACT_INVALID: ${review.reason}`);
+      else for (const line of formatReview(review.envelope, review)) console.log(line);
       return 0;
     }
 

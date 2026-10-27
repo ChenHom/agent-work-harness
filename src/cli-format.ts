@@ -3,6 +3,7 @@ import type {
   Outcome, PlanMilestone, RecoverySession, Work, WorkPlan,
 } from './types.ts';
 import type { DurableWorkflowSnapshot } from './durable/contracts.ts';
+import type { ReviewEnvelope, ReviewedFile } from './review/report.ts';
 
 export function formatWorkListRow(work: Work, outcome: Outcome | null): string {
   return `${work.id}  ${work.state.padEnd(12)} ${work.repositoryId.padEnd(16)} ${work.title}  outcome=${outcome ?? '-'}`;
@@ -82,4 +83,24 @@ export function formatDurableSnapshot(snapshot: DurableWorkflowSnapshot): string
     + ` operation=${snapshot.operationId ?? '-'}`
     + ` callbacks=${snapshot.acceptedCallbackCount ?? 0}/${snapshot.ignoredCallbackCount ?? 0}`
     + (snapshot.compatibilityReason ? ` reason=${snapshot.compatibilityReason}` : '');
+}
+
+const reviewedFile = (file: ReviewedFile): string => `- ${file.path}${file.reasons.length ? `: ${file.reasons.join(', ')}` : ''}`;
+
+/** `harness review` 與 `show` 共用。未選入的檔案一律帶 DEV-01 標示，不寫成已驗證安全（C7）。 */
+export function formatReview(envelope: ReviewEnvelope, hashes: { envelopeSha256: string; reportSha256: string }): string[] {
+  const checks = envelope.verification.checks.map((check) => `${check.checkId}=${check.status}`).join(', ') || '(no checks)';
+  return [
+    `status: ${envelope.status}`,
+    `candidate: ${envelope.candidate}  attempt: ${envelope.attemptId}`,
+    `base: ${envelope.baseRevision}  resultTree: ${envelope.resultTree}`,
+    `envelope sha256: ${hashes.envelopeSha256}`,
+    `report sha256: ${hashes.reportSha256}`,
+    `reviewer: ${envelope.reviewer.imageId} revision=${envelope.reviewer.revision}`,
+    `verification (clean copy of ${envelope.verification.revision}): ${checks}; changed paths ${envelope.verification.changedPaths}`,
+    '人工待辦（Reviewer 選入）:',
+    ...(envelope.humanReview.length ? envelope.humanReview.map(reviewedFile) : ['(none)']),
+    '機械審查未選入，fact layer 尚未接入（DEV-01）；不代表已驗證安全:',
+    ...(envelope.notSelected.length ? envelope.notSelected.map(reviewedFile) : ['(none)']),
+  ];
 }

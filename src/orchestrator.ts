@@ -16,7 +16,7 @@ import {
   OwnershipError,
 } from './runtime/ownership.ts';
 import { parseRuntimeResult, type ParseOutcome } from './runtime/result.ts';
-import { baseRevision, snapshotDirty, observeGit, gitDiffEvidence, pathPolicyEvidence,
+import { attemptPathPolicy, baseRevision, snapshotDirty, observeGit, gitDiffEvidence, pathPolicyEvidence,
   type DirtyEntry, type GitObservation } from './evidence/git.ts';
 import { runVerification, collectBaseline, type VerificationOutcome } from './evidence/verification.ts';
 import { decideOutcome } from './evidence/outcome.ts';
@@ -554,13 +554,7 @@ export class Orchestrator {
     this.store.insertEvidence(gitEv);
 
     // read attempt：任何變更都代表 enforcement 失效
-    const pathPolicy = contract.mode === 'read'
-      ? { deniedPaths: ['**'] }
-      : {
-          deniedPaths: [...new Set([...contract.deniedPaths, ...snapshot.contract.filesystem.protectedPaths])],
-          allowedPaths: contract.allowedPaths,
-        };
-    const pathEv = pathPolicyEvidence(work.id, attempt.id, obs.changedPaths, pathPolicy);
+    const pathEv = pathPolicyEvidence(work.id, attempt.id, obs.changedPaths, attemptPathPolicy(contract, snapshot));
     evidence.push(pathEv);
     this.store.insertEvidence(pathEv);
 

@@ -632,4 +632,8 @@ export interface GlobalPolicy {
   verificationTimeoutMs: number;
   maxOutputBytes: number;
   promptBudgetChars: number;
+  /** `harness review` 用的 Reviewer Docker image（tag 或 ID）；未設定時審查一律 REVIEW_RUNNER_FAILED。 */
+  reviewerImage?: string;
+  reviewTimeoutMs: number;
+  maxReviewReportBytes: number;
 }

@@ -4,7 +4,7 @@ import { createHash } from 'node:crypto';
 import { newId, nowIso } from '../ids.ts';
 import { runIsolated, tail, type IsolatedRun } from './exec.ts';
 import { checkPaths, type PathPolicy } from '../repo/paths.ts';
-import type { EvidenceRecord, GlobalPolicy } from '../types.ts';
+import type { EvidenceRecord, GlobalPolicy, RepositoryContractSnapshot, WorkContract } from '../types.ts';
 
 // §23.1：Harness 自己觀察 git 狀態，不採信 agent 的 declaredChangedPaths。
 
@@ -154,6 +154,16 @@ export function gitDiffEvidence(workId: string, attemptId: string, obs: GitObser
     },
     observedAt: nowIso(),
   };
+}
+
+/** Attempt 的 path policy：read attempt 任何變更都算越界；write attempt 為 denied ∪ protected，加上明確的 allowlist。 */
+export function attemptPathPolicy(contract: WorkContract, snapshot: RepositoryContractSnapshot): PathPolicy {
+  return contract.mode === 'read'
+    ? { deniedPaths: ['**'] }
+    : {
+        deniedPaths: [...new Set([...contract.deniedPaths, ...snapshot.contract.filesystem.protectedPaths])],
+        allowedPaths: contract.allowedPaths,
+      };
 }
 
 /** §24：denied / protected path 被改動 → POLICY_VIOLATION 的來源證據。 */
