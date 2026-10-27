@@ -109,7 +109,8 @@ harness show W-xxx                        # [review] 段落：最新一次審查
    以 Attempt 開始時凍結的 Repository Contract，對 `baseRevision..sha` 的變更路徑重新評估 path policy，
    並重跑 checks。checks 跑完之後，才從 workspace 重新 clone 一份 `repo/` 交給 Reviewer；這份副本從未暴露給 checks。
    兩份副本裡都再檢查一次第 2 步的 tree 與 merge-base（副本的 refs 由 Harness 建立，沒有 replace refs 或 grafts）。
-   暫存目錄結束時一律刪除。
+   暫存目錄結束時一律刪除（checks 留下沒有寫入權限的目錄時先補上擁有者權限；真的刪不掉只在 stderr 印
+   `warning: review-work cleanup failed: …`，不改變 exit code）。
    Harness 自己的 git 呼叫（含 Attempt 的 git evidence 與 `resultTree`）一律不讀全域與 system 設定、不採用
    replace refs、不執行 hook 與 fsmonitor：verification HOME 是共用且可寫的，checks 可以在裡面放 `.gitconfig`。
 4. Reviewer：先 `docker image inspect` 取得 image ID 與 revision label，之後只用 image ID 執行。
@@ -159,6 +160,7 @@ Harness 以 uid 0 執行時，拒絕啟動 Reviewer。
 | `REVIEW_TIMEOUT` | 3 | 超過 `reviewTimeoutMs` |
 | `REVIEW_REPORT_INVALID` | 3 | 報表不存在、過大、不是一般檔案（例如 symlink）、不是 JSON、內容不一致，或列出的檔案與 `baseRevision..sha` 的變更不符 |
 | `REVIEW_STALE` | 3 | 審查期間 Attempt、outcome、`resultTree` 或 Work Contract 版本有變化 |
+| `REVIEW_INTERNAL_ERROR` | 3 | 審查流程中非預期的例外（例如 state dir 的檔案系統錯誤）；不保存成功結果，留下 `review.failed` |
 
 失敗時不保存任何 review artifact，只記一筆 `review.failed`（含 code）。
 

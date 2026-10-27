@@ -20,6 +20,8 @@ export interface DockerStubConfig {
   stderr?: string;
   /** run 期間對 Harness DB 執行的 SQL，用來製造審查期間的變化（REVIEW_STALE）。 */
   sql?: { db: string; statement: string };
+  /** run 期間把 review-work 目錄設成唯讀，讓暫存目錄刪不掉（清理失敗只能是警告）。 */
+  lockReviewWork?: boolean;
 }
 
 export interface DockerCall { argv: string[]; envKeys: string[] }
@@ -90,6 +92,7 @@ if (argv[0] === 'kill') {
 if (argv[0] === 'run') {
   fs.writeFileSync(path.join(dir, 'run-' + after('--name') + '.pid'), String(process.pid));
   const out = path.join(mountSource('/output'), 'report.json');
+  if (cfg.lockReviewWork) fs.chmodSync(path.dirname(path.dirname(mountSource('/output'))), 0o500);
   if (cfg.sql) {
     const { DatabaseSync } = require('node:sqlite');
     const db = new DatabaseSync(cfg.sql.db);

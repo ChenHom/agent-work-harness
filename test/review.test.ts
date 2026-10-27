@@ -6,7 +6,7 @@ import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import {
-  existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync,
+  chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -640,4 +640,65 @@ test('M3：rename 用與 Reviewer 相同的語意（-M，取新路徑）', { ski
   const result = await review(c, head);
   assert.equal(result.code, 3, result.stderr);
   assert.match(result.stderr, /^REVIEW_REPORT_INVALID: report files do not match base\.\.candidate/m);
+});
+
+// 只在 review 的乾淨副本（detached HEAD）留下刪不掉的目錄：500 刪不掉裡面的檔案，000 連列出內容都不行
+const LOCK_CLONE = `grep -q ok src/a.txt || exit 1
+if ! git symbolic-ref -q HEAD >/dev/null; then
+  mkdir -p lock/d lock/e && touch lock/d/f && chmod 500 lock/d && chmod 000 lock/e
+fi
+`;
+
+test('M5：check 在副本留下沒有寫入權限的目錄，清理不得蓋掉結果（成功與失敗兩條路徑）', { skip }, async () => {
+  const c = await attempt({ checks: [SCRIPT_CHECK], files: { 'check.sh': 'grep -q ok src/a.txt\n' }, agent: agentWithCheck(LOCK_CLONE) });
+  assert.equal(c.outcome, 'SUCCESS');
+  const head = commit(c.repo);
+
+  docker.configure({ run: 'derive' });
+  const success = await review(c, head);
+  assert.equal(success.code, 5, success.stderr);
+  assert.doesNotMatch(success.stderr, /warning/);
+  assert.deepEqual(reviewWork(c), [], '補上寫入權限後暫存目錄刪得掉');
+  assert.equal(reviewEvents(c, 'review.completed').length, 1);
+
+  docker.configure({ run: 'report', reportText: '{' });
+  const failure = await review(c, head);
+  assert.equal(failure.code, 3, failure.stderr);
+  assert.match(failure.stderr, /^REVIEW_REPORT_INVALID: /m);
+  assert.deepEqual(reviewWork(c), []);
+  assert.equal(reviewEvents(c, 'review.failed').at(-1)?.code, 'REVIEW_REPORT_INVALID');
+});
+
+test('M5：暫存目錄真的刪不掉時只寫 stderr 警告，exit code 與 review.completed 不變', { skip }, async () => {
+  const c = await attempt();
+  const head = commit(c.repo);
+  docker.configure({ run: 'report', reportText: reportText('human'), lockReviewWork: true });
+  const dir = join(c.policy.stateDir, 'review-work');
+  try {
+    const result = await review(c, head);
+    assert.equal(result.code, 5, result.stderr);
+    assert.match(result.stderr, /^warning: review-work cleanup failed: /m);
+    assert.deepEqual(reviewEvents(c, 'review.completed').map((event) => event.status), ['HUMAN_REVIEW_REQUIRED']);
+    assert.deepEqual(reviewEvents(c, 'review.failed'), []);
+  } finally {
+    chmodSync(dir, 0o700);
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('M5：非預期的例外 → exit 3 REVIEW_INTERNAL_ERROR，並記錄 review.failed', { skip }, async () => {
+  const c = await committedCase();
+  const dir = join(c.policy.stateDir, 'review-work');
+  assert.deepEqual(reviewWork(c), []);
+  rmSync(dir, { recursive: true, force: true });
+  writeFileSync(dir, 'not a directory');
+  try {
+    const result = await review(c, c.head);
+    assert.equal(result.code, 3, result.stderr);
+    assert.match(result.stderr, /^REVIEW_INTERNAL_ERROR: .*ENOTDIR/m);
+    assert.equal(reviewEvents(c, 'review.failed').at(-1)?.code, 'REVIEW_INTERNAL_ERROR');
+    assert.deepEqual(reviewEvents(c, 'review.completed'), []);
+  } finally {
+    rmSync(dir);
+  }
 });

@@ -1,4 +1,6 @@
-import { closeSync, constants, fstatSync, mkdirSync, openSync, readFileSync, realpathSync, rmSync } from 'node:fs';
+import {
+  chmodSync, closeSync, constants, fstatSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, realpathSync, rmSync,
+} from 'node:fs';
 import { createHash, randomUUID } from 'node:crypto';
 import { join } from 'node:path';
 import { nowIso } from '../ids.ts';
@@ -258,6 +260,25 @@ function readReport(outputDir: string, maxBytes: number): Buffer {
   }
 }
 
+/**
+ * checks 可以在副本裡留下沒有寫入權限的目錄：先遞迴補上擁有者的權限（只 chmod lstat 是目錄的路徑，不跟隨 symlink），
+ * 再刪。清理失敗只寫 stderr 警告 —— 結果已經決定，不能讓清理的例外蓋掉 exit code 或事件。
+ */
+function removeReviewWork(root: string): void {
+  const grant = (path: string): void => {
+    const stat = lstatSync(path);
+    if (!stat.isDirectory()) return;
+    chmodSync(path, (stat.mode & 0o7777) | 0o700);
+    for (const name of readdirSync(path)) grant(join(path, name));
+  };
+  try {
+    grant(root);
+    rmSync(root, { recursive: true, force: true });
+  } catch (error) {
+    process.stderr.write(`warning: review-work cleanup failed: ${root}: ${(error as Error).message}\n`);
+  }
+}
+
 function currentUser(): { uid: number; gid: number } | undefined {
   const uid = process.getuid?.();
   const gid = process.getgid?.();
@@ -337,16 +358,18 @@ export async function reviewAttempt(
         envelopeSha256: stored.hash, reportSha256: raw.hash,
       };
     } finally {
-      rmSync(root, { recursive: true, force: true });
+      removeReviewWork(root);
     }
   } catch (error) {
-    if (!(error instanceof ReviewStop)) throw error;
+    // 不是 ReviewStop 的例外（檔案系統、DB 等）也是「執行了但結果不可用」，一律 3，並留下 review.failed。
+    const stop = error instanceof ReviewStop ? error
+      : failed('REVIEW_INTERNAL_ERROR', error instanceof Error ? error.message : String(error));
     if (store.getWork(input.workId)) {
       store.event('review.failed', {
-        attemptId: input.attemptId, candidate: input.candidate, code: error.code, detail: error.detail, exitCode: error.exitCode,
+        attemptId: input.attemptId, candidate: input.candidate, code: stop.code, detail: stop.detail, exitCode: stop.exitCode,
       }, input.workId);
     }
-    return { exitCode: error.exitCode, code: error.code, detail: error.detail };
+    return { exitCode: stop.exitCode, code: stop.code, detail: stop.detail };
   }
 }
 
