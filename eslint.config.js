@@ -18,21 +18,23 @@ export default tseslint.config({
     '@typescript-eslint/require-await': 'off',
   },
 }, {
-  // 架構界線一：外部程序只能從兩個地方啟動。
+  // 架構界線一：外部程序只能從三個地方啟動。
   // 其他地方要跑東西一律走 evidence/exec.ts 的 runIsolated —— 否則就是繞過沙箱。
+  // review/docker-runner.ts 是 Reviewer 的受信任 runner：Docker 無法在 bwrap 內啟動，
+  // 所以它只能執行 `docker`、argv 由程式固定組裝、shell: false（DECISIONS D-42）。
   files: ['src/**/*.ts'],
-  ignores: ['src/evidence/exec.ts', 'src/runtime/codex-driver.ts'],
+  ignores: ['src/evidence/exec.ts', 'src/runtime/codex-driver.ts', 'src/review/docker-runner.ts'],
   rules: {
     'no-restricted-imports': ['error', {
       paths: [{
         name: 'node:child_process',
-        message: '外部程序只能由 evidence/exec.ts 或 runtime/codex-driver.ts 啟動；其他地方請用 runIsolated()。',
+        message: '外部程序只能由 evidence/exec.ts、runtime/codex-driver.ts 或 review/docker-runner.ts 啟動；其他地方請用 runIsolated()。',
       }],
     }],
   },
 }, {
   // 架構界線二：orchestrator 是最上層，下層模組不得回頭 import 它。
-  files: ['src/context/**', 'src/evidence/**', 'src/prompt/**', 'src/repo/**',
+  files: ['src/context/**', 'src/evidence/**', 'src/prompt/**', 'src/repo/**', 'src/review/**',
           'src/runtime/**', 'src/security/**', 'src/trace/**', 'src/work/**'],
   rules: {
     'no-restricted-imports': ['error', {
