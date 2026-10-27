@@ -170,6 +170,26 @@ sha256、Reviewer image ID 與 revision、人工待辦清單，以及未選入�
   不加 `--security-opt no-new-privileges`，因為本機 snap 版 Docker 29.8.0 加了它就無法 exec image 的 entrypoint（D-42）。
   snap 的 `/tmp` 是私有的：state dir 放在 `/tmp` 底下時，container 看到的是空目錄，請使用預設的 state dir。
 
+端到端驗證（M1 的完成證據）：`scripts/review-e2e.sh` 以真實的 git、bwrap、Docker 與 Reviewer image
+從零跑一遍 `harness review`，不呼叫真實的 codex 或任何 AI（腳本自己寫兩支假 codex：一支改檔、一支不改）。
+
+```bash
+HARNESS_REVIEWER_IMAGE=reviewer:m1-2d84ad6 bash scripts/review-e2e.sh
+```
+
+- 前提：`git`、`bwrap`、`docker`、Node 24+，以及本機已有 `HARNESS_REVIEWER_IMAGE` 指定的 image。
+  缺任何一項就 exit 1；腳本不 build、不 pull。
+- 工作目錄 `OUT` 預設為 `${XDG_CACHE_HOME:-$HOME/.cache}/harness-review-e2e/<時間戳記>`，可用 `HARNESS_E2E_OUT` 覆寫。
+  不要放在 `/tmp` 底下（snap 版 Docker 看不到）。每個情境有自己的 state dir（`$OUT/state-<情境>`）與 fixture repo
+  （`$OUT/repos/<情境>`），各指令的輸出在 `$OUT/<情境>.*`。
+- 情境：S1 改檔後人 commit → exit 5 `HUMAN_REVIEW_REQUIRED`，`show` 的 sha256 與人工待辦一致，
+  review 前後 repo 的 HEAD、refs、status、`.git/index`、object 數都不變；S2 唯讀、以 base commit 審查 → exit 0 `NO_CHANGES`；
+  反例 `CANDIDATE_TREE_MISMATCH`、`PRE_EXISTING_DIRTY`、`CANDIDATE_NOT_SHA`（`HEAD` 與 7 位縮寫）、
+  `REVIEW_RUNNER_FAILED`（不存在的 image）。
+- 每個情境印 `PASS <情境>` 或 `FAIL <情境>: <期望> vs <實際>`，最後印 `total=<n> fail=<n>` 與 `OUT`；
+  有任何 FAIL 就 exit 1。`OUT` 保留供查看，但結束時會刪掉其中的 `codex-home`
+  （Harness 會把操作者的 `~/.codex/auth.json` 複製進去）。
+
 ### 受控 Plan 與 Logical Checkpoint（P2）
 
 使用者要改原始目標時，用 `amend` 建立新版 immutable WorkContract。舊版本保留，既有
