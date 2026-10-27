@@ -2,14 +2,34 @@ import { readFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { createHash } from 'node:crypto';
 import { newId, nowIso } from '../ids.ts';
-import { runIsolated, tail, type IsolatedRun } from './exec.ts';
+import { runIsolated, tail, type IsolatedRun, type RunOptions } from './exec.ts';
 import { checkPaths, type PathPolicy } from '../repo/paths.ts';
 import type { EvidenceRecord, GlobalPolicy, RepositoryContractSnapshot, WorkContract } from '../types.ts';
 
 // §23.1：Harness 自己觀察 git 狀態，不採信 agent 的 declaredChangedPaths。
 
+/**
+ * Harness 自己發出的每個 git 呼叫都用這組環境。verification HOME 是共用且可寫的（任何 Work 的 check 都能在裡面放
+ * .gitconfig 與 hook），使用者 repo 的 .git/config 也可能被 agent 改過：所以不讀全域與 system 設定、不採用 replace refs，
+ * 並以 command-line 層級（與 `git -c` 相同，優先於 repo 設定）把 core.hooksPath 指到 /dev/null、關掉 core.fsmonitor。
+ * 用 GIT_CONFIG_COUNT 而不是 argv 的 -c，resultTree 腳本裡的每個 git 才會一併套用。
+ */
+const HARDENED_GIT_ENV: Readonly<Record<string, string>> = {
+  GIT_CONFIG_GLOBAL: '/dev/null',
+  GIT_CONFIG_NOSYSTEM: '1',
+  GIT_NO_REPLACE_OBJECTS: '1',
+  GIT_CONFIG_COUNT: '2',
+  GIT_CONFIG_KEY_0: 'core.hooksPath', GIT_CONFIG_VALUE_0: '/dev/null',
+  GIT_CONFIG_KEY_1: 'core.fsmonitor', GIT_CONFIG_VALUE_1: 'false',
+};
+
+/** 在沙箱內以強化後的環境執行 git。 */
+export function runGit(policy: GlobalPolicy, args: readonly string[], opts: Omit<RunOptions, 'env'>): Promise<IsolatedRun> {
+  return runIsolated(policy, ['git', ...args], { ...opts, env: HARDENED_GIT_ENV });
+}
+
 export async function baseRevision(policy: GlobalPolicy, workspace: string): Promise<string> {
-  const r = await runIsolated(policy, ['git', 'rev-parse', 'HEAD'], { workspace, timeoutMs: 30_000 });
+  const r = await runGit(policy, ['rev-parse', 'HEAD'], { workspace, timeoutMs: 30_000 });
   const revision = r.exitCode === 0 ? r.stdout.trim() : 'UNKNOWN';
   return revision || 'UNKNOWN';
 }
@@ -45,7 +65,7 @@ export async function snapshotDirty(policy: GlobalPolicy, workspace: string): Pr
 }
 
 async function statusPaths(policy: GlobalPolicy, workspace: string): Promise<{ paths: string[]; error?: string }> {
-  const status = await runIsolated(policy, ['git', 'status', '--porcelain=v1', '--untracked-files=all'], { workspace, timeoutMs: 60_000 });
+  const status = await runGit(policy, ['status', '--porcelain=v1', '--untracked-files=all'], { workspace, timeoutMs: 60_000 });
   const error = probeError('git status', status);
   if (error) return { paths: [], error };
   const paths = status.stdout.split('\n')
@@ -86,7 +106,7 @@ git add -A
 git write-tree`;
 
 async function resultTree(policy: GlobalPolicy, workspace: string): Promise<{ tree?: string; error?: string }> {
-  const run = await runIsolated(policy, ['sh', '-c', RESULT_TREE_SCRIPT], { workspace, timeoutMs: 120_000 });
+  const run = await runIsolated(policy, ['sh', '-c', RESULT_TREE_SCRIPT], { workspace, timeoutMs: 120_000, env: HARDENED_GIT_ENV });
   const error = probeError('git write-tree', run);
   if (error) return { error };
   const tree = run.stdout.trim();
@@ -103,7 +123,7 @@ export async function observeGit(
   const worktreePaths = status.paths;
   if (base === 'UNKNOWN') probeErrors.push('git base revision unavailable');
 
-  const headRes = await runIsolated(policy, ['git', 'rev-parse', 'HEAD'], { workspace, timeoutMs: 30_000 });
+  const headRes = await runGit(policy, ['rev-parse', 'HEAD'], { workspace, timeoutMs: 30_000 });
   const headError = probeError('git rev-parse HEAD', headRes);
   if (headError) probeErrors.push(headError);
   const head = headRes.exitCode === 0 ? headRes.stdout.trim() || 'UNKNOWN' : 'UNKNOWN';
@@ -112,13 +132,13 @@ export async function observeGit(
   // base 之後若有 commit，也要算進變更（agent 可能自行 commit）
   let committed: string[] = [];
   if (base !== 'UNKNOWN' && head !== 'UNKNOWN' && head !== base) {
-    const r = await runIsolated(policy, ['git', 'diff', '--no-ext-diff', '--no-textconv', '--name-only', `${base}..${head}`], { workspace, timeoutMs: 60_000 });
+    const r = await runGit(policy, ['diff', '--no-ext-diff', '--no-textconv', '--name-only', `${base}..${head}`], { workspace, timeoutMs: 60_000 });
     const error = probeError('git diff --name-only', r);
     if (error) probeErrors.push(error);
     else committed = r.stdout.split('\n').map((s) => s.trim()).filter(Boolean);
   }
 
-  const diffRes = await runIsolated(policy, ['git', 'diff', '--no-ext-diff', '--no-textconv', base === 'UNKNOWN' ? 'HEAD' : base], { workspace, timeoutMs: 120_000 });
+  const diffRes = await runGit(policy, ['diff', '--no-ext-diff', '--no-textconv', base === 'UNKNOWN' ? 'HEAD' : base], { workspace, timeoutMs: 120_000 });
   const diffError = probeError('git diff', diffRes);
   if (diffError) probeErrors.push(diffError);
   const tree = await resultTree(policy, workspace);

@@ -9,8 +9,12 @@ export const STUB_REVISION = '2d84ad61ec635db110bd5d1fe16fdce7cac3d64f';
 
 export interface DockerStubConfig {
   inspect?: 'ok' | 'fail' | 'no-label';
-  /** report：寫入 reportText（__BASE__／__HEAD__ 換成 argv 的值）；symlink：report.json 指向 /output 外的合法報表；hang：等到被 kill。 */
-  run?: 'report' | 'exit' | 'hang' | 'no-report' | 'symlink';
+  /**
+   * report：寫入 reportText（__BASE__／__HEAD__ 換成 argv 的值）；symlink：report.json 指向 /output 外的合法報表；hang：等到被 kill；
+   * derive：扮演 Reviewer 看到的變更 —— 以 container 收到的 `-e` 環境，在 /target 對應的 Host 路徑上執行 Reviewer 同一組
+   * `git merge-base` 與 `git diff --raw -z --no-abbrev -M`，每個變更都列為需要人工（離線、沒有 fact layer 時的 FULL）。
+   */
+  run?: 'report' | 'exit' | 'hang' | 'no-report' | 'symlink' | 'derive';
   reportText?: string;
   exitCode?: number;
   stderr?: string;
@@ -23,11 +27,56 @@ export interface DockerCall { argv: string[]; envKeys: string[] }
 const STUB = `#!${process.execPath}
 const fs = require('node:fs');
 const path = require('node:path');
+const cp = require('node:child_process');
 const dir = path.dirname(process.argv[1]);
 const cfg = JSON.parse(fs.readFileSync(path.join(dir, 'config.json'), 'utf8'));
 const argv = process.argv.slice(2);
 fs.appendFileSync(path.join(dir, 'calls.jsonl'), JSON.stringify({ argv, envKeys: Object.keys(process.env) }) + '\\n');
 const after = (flag) => argv[argv.indexOf(flag) + 1];
+// 掛載的 Host 路徑：支援 -v src:dst:mode 與 --mount type=bind,src=…,dst=…[,readonly]
+const mountSource = (dst) => {
+  for (let i = 0; i < argv.length - 1; i++) {
+    if (argv[i] === '-v' && argv[i + 1].split(':')[1] === dst) return argv[i + 1].split(':')[0];
+    if (argv[i] === '--mount') {
+      const fields = Object.fromEntries(argv[i + 1].split(',').map((field) => field.split('=')));
+      if (fields.dst === dst) return fields.src;
+    }
+  }
+  throw new Error('stub docker: no mount for ' + dst);
+};
+function derivedReport() {
+  const env = { PATH: process.env.PATH, HOME: fs.mkdtempSync(path.join(dir, 'home-')) };
+  argv.forEach((arg, i) => { if (argv[i - 1] === '-e') env[arg.slice(0, arg.indexOf('='))] = arg.slice(arg.indexOf('=') + 1); });
+  const git = (...args) => cp.execFileSync('git', ['-C', mountSource('/target'), ...args], { env, encoding: 'utf8' });
+  const base = after('--base');
+  const head = after('--head');
+  const mergeBase = git('merge-base', base, head).trim();
+  const fields = git('diff', '--raw', '-z', '--no-abbrev', '-M', '--no-ext-diff', mergeBase, head).split('\\0');
+  const paths = [];
+  for (let i = 0; i < fields.length;) {
+    if (!fields[i]) { i++; continue; }
+    const two = / [RC]\\d*$/.test(fields[i]);
+    paths.push(fields[i + (two ? 2 : 1)]);
+    i += two ? 3 : 2;
+  }
+  fs.writeFileSync(path.join(dir, 'derived.json'), JSON.stringify(paths));
+  const files = paths.map((p) => ({
+    path: p, status: 'M', contentHash: 'git:' + '0'.repeat(40), analyzed: true, decision: 'HUMAN_REVIEW_REQUIRED',
+    fallback: 'FULL', reasons: ['FILE_CHANGED'], facts: [], changedLines: [], track: 'ESCALATED', oneWayDoors: [],
+    findings: [], needsHuman: true,
+  }));
+  const n = files.length;
+  return JSON.stringify({
+    repository: 'repo', base: { ref: base, sha: base }, head: { ref: head, sha: head }, mergeBase,
+    config: { path: '.reviewer.json', commit: mergeBase, status: 'MISSING', errors: [], digest: 'd'.repeat(64) },
+    decision: {
+      status: n ? 'HUMAN_REVIEW_REQUIRED' : 'NOT_SELECTED_FOR_HUMAN_REVIEW', reasons: n ? ['FILE_CHANGED'] : ['NO_CHANGES'],
+      files: n, notSelected: 0, targeted: 0, full: n,
+    },
+    routing: { track: n ? 'ESCALATED' : 'AUTO_PASS', autoPass: 0, aiTrack: 0, escalated: n },
+    ai: null, human: { required: n > 0, files: n, findings: 0, pendingFixes: 0 }, files,
+  });
+}
 if (argv[0] === 'image' && argv[1] === 'inspect') {
   if (cfg.inspect === 'fail') { process.stderr.write('Error: No such image: ' + argv.at(-1) + '\\n'); process.exit(1); }
   process.stdout.write(${JSON.stringify(STUB_IMAGE_ID)} + '|' + (cfg.inspect === 'no-label' ? '<no value>' : ${JSON.stringify(STUB_REVISION)}) + '\\n');
@@ -40,8 +89,7 @@ if (argv[0] === 'kill') {
 }
 if (argv[0] === 'run') {
   fs.writeFileSync(path.join(dir, 'run-' + after('--name') + '.pid'), String(process.pid));
-  const volume = argv.find((arg) => arg.endsWith(':/output:rw'));
-  const out = path.join(volume.slice(0, -':/output:rw'.length), 'report.json');
+  const out = path.join(mountSource('/output'), 'report.json');
   if (cfg.sql) {
     const { DatabaseSync } = require('node:sqlite');
     const db = new DatabaseSync(cfg.sql.db);
@@ -60,6 +108,7 @@ if (argv[0] === 'run') {
     process.exit(0);
   }
   if (mode === 'report') fs.writeFileSync(out, text());
+  if (mode === 'derive') fs.writeFileSync(out, derivedReport());
   process.stdout.write('review done\\n');
   process.exit(0);
 }

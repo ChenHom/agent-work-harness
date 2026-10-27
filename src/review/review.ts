@@ -2,8 +2,8 @@ import { closeSync, constants, fstatSync, mkdirSync, openSync, readFileSync, rea
 import { createHash, randomUUID } from 'node:crypto';
 import { join } from 'node:path';
 import { nowIso } from '../ids.ts';
-import { runIsolated, tail, type IsolatedRun } from '../evidence/exec.ts';
-import { attemptPathPolicy } from '../evidence/git.ts';
+import { tail, type IsolatedRun } from '../evidence/exec.ts';
+import { attemptPathPolicy, runGit } from '../evidence/git.ts';
 import { runVerification } from '../evidence/verification.ts';
 import { checkPaths } from '../repo/paths.ts';
 import type { ExecutionOwnership } from '../runtime/ownership.ts';
@@ -55,8 +55,9 @@ function runDetail(run: IsolatedRun): string {
 
 const ok = (run: IsolatedRun): boolean => run.exitCode === 0 && !run.timedOut && !run.outputTruncated;
 
+/** 一律以強化後的 git 環境（不讀共用 HOME 的設定、不採用 replace refs、不跑 hook／fsmonitor）在沙箱內執行。 */
 function git(policy: GlobalPolicy, workspace: string, args: string[], writable = false): Promise<IsolatedRun> {
-  return runIsolated(policy, ['git', ...args], { workspace, writable, timeoutMs: 60_000 });
+  return runGit(policy, args, { workspace, writable, timeoutMs: 60_000 });
 }
 
 /** Attempt 結束時記錄的 resultTree；必須恰好一筆 git_diff evidence 帶著合法的值。 */
@@ -141,7 +142,7 @@ function frozenInput(store: Store, work: Work, attempt: Attempt): AttemptInputSn
 /** 乾淨副本：--no-local 只帶 ref 可達的 objects；不用 --shared（container 讀不到 Host 的 alternates）、不用 worktree add。 */
 async function cloneCandidate(policy: GlobalPolicy, workspace: string, root: string, candidate: string): Promise<string> {
   const repo = join(root, 'repo');
-  const clone = await runIsolated(policy, ['git', 'clone', '--no-local', '--no-checkout', '--quiet', workspace, repo], {
+  const clone = await runGit(policy, ['clone', '--no-local', '--no-checkout', '--quiet', workspace, repo], {
     workspace: root, writable: true, readOnlyBinds: [workspace], timeoutMs: policy.verificationTimeoutMs,
   });
   if (!ok(clone)) throw failed('VERIFICATION_FAILED', `git clone: ${runDetail(clone)}`);

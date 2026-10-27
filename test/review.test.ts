@@ -52,6 +52,8 @@ async function attempt(opts: {
   beforeAttempt?: (repo: string) => void;
   agent?: (repo: string) => void;
   status?: 'completed' | 'blocked';
+  /** 共用的 Harness state dir（例如兩件 Work 共用同一個 verification HOME）。 */
+  state?: string;
 } = {}): Promise<Case> {
   const root = join(ROOT, `case-${++caseSeq}`);
   const repo = join(root, 'repo');
@@ -75,7 +77,7 @@ async function attempt(opts: {
   git(repo, 'commit', '-qm', 'init');
   opts.beforeAttempt?.(repo);
 
-  const state = join(root, 'state');
+  const state = opts.state ?? join(root, 'state');
   const policy: GlobalPolicy = {
     ...DEFAULT_POLICY, stateDir: state,
     agentHome: join(state, 'agent-home'), codexHome: join(state, 'codex-home'),
@@ -510,4 +512,47 @@ test('REVIEW_STALE → exit 3：審查期間 attempt 有變化，不保存成功
     },
   });
   assertFailed(c, await review(c, head), 3, 'REVIEW_STALE');
+});
+
+// ---------------------------------------------------------------- 第一輪審查的回歸測試
+
+/** 預設 agent 的變更，再加上把 check 腳本換成 agent 寫的內容。 */
+const agentWithCheck = (script: string) => (repo: string): void => {
+  writeFileSync(join(repo, 'src/a.txt'), 'ok\n');
+  writeFileSync(join(repo, 'src/new.txt'), 'new\n');
+  writeFileSync(join(repo, 'check.sh'), script);
+};
+const SCRIPT_CHECK = { ...CHECK, argv: ['sh', 'check.sh'] };
+const humanPaths = (stdout: string): string[] => (JSON.parse(stdout) as ReviewEnvelope).humanReview.map((file) => file.path);
+
+// 只在 HEAD 有 parent 的副本（review 的乾淨副本是 detached 的 candidate）把 candidate 換成 base 的 tree
+const REPLACE_CANDIDATE = `if git rev-parse -q --verify HEAD~1 >/dev/null 2>&1; then
+  fake=$(git -c user.name=x -c user.email=x@x commit-tree "HEAD~1^{tree}" -p HEAD~1 -m fake) && git replace HEAD "$fake"
+fi
+`;
+
+test('H2：work A 的 check 汙染共用的 verification HOME，work B 的 review 不受影響', { skip }, async () => {
+  const state = join(ROOT, 'shared-state');
+  const plant = `grep -q ok src/a.txt || exit 1
+mkdir -p "$HOME/hooks"
+printf '[core]\\n\\thooksPath = %s/hooks\\n' "$HOME" > "$HOME/.gitconfig"
+cat > "$HOME/hooks/post-checkout" <<'HOOK'
+#!/bin/sh
+echo "$PWD" >> "$HOME/hook-ran"
+${REPLACE_CANDIDATE}exit 0
+HOOK
+chmod +x "$HOME/hooks/post-checkout"
+`;
+  const a = await attempt({ state, checks: [SCRIPT_CHECK], files: { 'check.sh': 'grep -q ok src/a.txt\n' }, agent: agentWithCheck(plant) });
+  assert.equal(a.outcome, 'SUCCESS');
+  assert.ok(existsSync(join(a.policy.verificationHome, '.gitconfig')), 'work A 的 check 寫入了共用 HOME 的 .gitconfig');
+
+  const b = await attempt({ state });
+  assert.equal(b.outcome, 'SUCCESS');
+  const head = commit(b.repo);
+  docker.configure({ run: 'derive' });
+  const result = await review(b, head, ['--json']);
+  assert.equal(result.code, 5, result.stderr);
+  assert.deepEqual(humanPaths(result.stdout), ['src/a.txt', 'src/new.txt']);
+  assert.equal(existsSync(join(b.policy.verificationHome, 'hook-ran')), false, 'Harness 的 git 不得執行共用 HOME 裡的 hook');
 });
