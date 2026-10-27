@@ -91,7 +91,9 @@ docker CLI 只拿到白名單環境變數（不含任何 API key）；deadline �
   container 另加 `GIT_NO_REPLACE_OBJECTS=1`、`GIT_CONFIG_NOSYSTEM=1`、`GIT_CONFIG_GLOBAL=/dev/null`。
 - 強化的 git 環境（H2）：verification HOME 由同一個 state dir 的所有 Work 共用且可寫，某個 Work 的 check 寫入的
   `.gitconfig`／hook 會影響之後 Harness 的 git 呼叫。Harness 自己的 git 一律帶 `GIT_CONFIG_GLOBAL=/dev/null`、
-  `GIT_CONFIG_NOSYSTEM=1`、`GIT_NO_REPLACE_OBJECTS=1`，並以 command-line 層級設定 `core.hooksPath=/dev/null`、
+  `GIT_CONFIG_NOSYSTEM=1`、`GIT_NO_REPLACE_OBJECTS=1`、`XDG_CONFIG_HOME=/nonexistent`（git 讀
+  `$HOME/.config/git/{ignore,attributes}` 不經過任何設定檔，第二輪審查實測可讓受保護路徑的新檔從 path policy 消失），
+  並以 command-line 層級設定 `core.hooksPath=/dev/null`、
   `core.fsmonitor=false`（用 `GIT_CONFIG_COUNT`，`resultTree` 腳本裡的 git 也一併套用；`RunOptions.env` 只合併、
   不取代 verification 的環境白名單）。
 - 不做 schema migration：`resultTree` 放在既有 git_diff evidence 的 data JSON；原始報表與 envelope 是 artifact

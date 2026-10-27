@@ -13,10 +13,13 @@ import type { EvidenceRecord, GlobalPolicy, RepositoryContractSnapshot, WorkCont
  * .gitconfig 與 hook），使用者 repo 的 .git/config 也可能被 agent 改過：所以不讀全域與 system 設定、不採用 replace refs，
  * 並以 command-line 層級（與 `git -c` 相同，優先於 repo 設定）把 core.hooksPath 指到 /dev/null、關掉 core.fsmonitor。
  * 用 GIT_CONFIG_COUNT 而不是 argv 的 -c，resultTree 腳本裡的每個 git 才會一併套用。
+ * XDG_CONFIG_HOME 指到不存在的路徑：git 不經過任何設定檔就會讀 $XDG_CONFIG_HOME/git/{ignore,attributes}
+ *（未設定時是 $HOME/.config），GIT_CONFIG_GLOBAL 擋不住這兩個預設檔。
  */
 const HARDENED_GIT_ENV: Readonly<Record<string, string>> = {
   GIT_CONFIG_GLOBAL: '/dev/null',
   GIT_CONFIG_NOSYSTEM: '1',
+  XDG_CONFIG_HOME: '/nonexistent',
   GIT_NO_REPLACE_OBJECTS: '1',
   GIT_CONFIG_COUNT: '2',
   GIT_CONFIG_KEY_0: 'core.hooksPath', GIT_CONFIG_VALUE_0: '/dev/null',

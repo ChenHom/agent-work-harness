@@ -115,6 +115,33 @@ test('H2：git evidence 不採用共用 verification HOME 的全域設定，也�
   rmSync(home, { recursive: true, force: true });
 });
 
+test('H2：git evidence 也不採用共用 HOME 底下 XDG 預設位置的 ignore 與 attributes', { skip }, async () => {
+  const r = repo();
+  const home = mkdtempSync(join(tmpdir(), 'harness-git-home-'));
+  const policy = { ...DEFAULT_POLICY, verificationHome: home };
+  // git 讀 $HOME/.config/git/{ignore,attributes} 不經過任何設定檔，GIT_CONFIG_GLOBAL=/dev/null 擋不住
+  mkdirSync(join(home, '.config', 'git'), { recursive: true });
+  writeFileSync(join(home, '.config', 'git', 'ignore'), 'new.txt\n');
+  writeFileSync(join(home, '.config', 'git', 'attributes'), '* text eol=crlf\n');
+
+  const base = await baseRevision(policy, r);
+  writeFileSync(join(r, 'new.txt'), 'untracked\n');
+  writeFileSync(join(r, 'src/a.ts'), 'export const a = 2;\n');
+  const dirty = await snapshotDirty(policy, r);
+  const obs = await observeGit(policy, r, base, []);
+  assert.deepEqual(dirty.map((d) => d.path).sort(), ['new.txt', 'src/a.ts']);
+  assert.deepEqual(obs.changedPaths, ['new.txt', 'src/a.ts']);
+  assert.deepEqual(obs.probeErrors, []);
+
+  const neutral = ['-c', 'core.excludesFile=/dev/null', '-c', 'core.attributesFile=/dev/null', '-c', 'core.fsmonitor=false'];
+  execFileSync('git', [...neutral, 'add', '-A'], { cwd: r });
+  execFileSync('git', [...neutral, '-c', 'user.email=t@t', '-c', 'user.name=t', 'commit', '-qm', 'human'], { cwd: r });
+  assert.equal(obs.resultTree, execFileSync('git', ['rev-parse', 'HEAD^{tree}'], { cwd: r, encoding: 'utf8' }).trim(),
+    'resultTree 必須含 new.txt，且不被 eol=crlf 改寫');
+  rmSync(join(r, '..'), { recursive: true, force: true });
+  rmSync(home, { recursive: true, force: true });
+});
+
 test('L3：dirty 快照本身失敗時留下標記（不是空清單），讓 review fail closed', { skip }, async () => {
   const base = mkdtempSync(join(tmpdir(), 'harness-git-nonrepo-'));
   const dirty = await snapshotDirty(DEFAULT_POLICY, base);

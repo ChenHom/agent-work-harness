@@ -178,7 +178,8 @@ sha256、Reviewer image ID 與 revision、人工待辦清單，以及未選入�
   envelope 與輸出都這樣標示。
 - 乾淨副本只有 commit 進去的內容。依賴被 ignore 的本機檔案（例如 `node_modules`、`.env`）的 check 會失敗。
 - submodule、Git LFS、`.git` 是 gitfile 的 workspace（例如 `git worktree`）都未驗證。
-- `resultTree` 與 review 的 git 不採用你的全域 git 設定（例如 `core.excludesFile`、`core.autocrlf`、LFS 的 filter）。
+- `resultTree` 與 review 的 git 不採用你的全域 git 設定（例如 `core.excludesFile`、`core.autocrlf`、LFS 的 filter），
+  也不讀 `~/.config/git/ignore` 與 `~/.config/git/attributes`。
   這些設定會讓你 commit 的 tree 與 `resultTree` 不同，結果是 `CANDIDATE_TREE_MISMATCH`（fail closed，不會誤判通過）。
 - SHA-256 object format 的 repository 不支援 review：`resultTree` 只接受 40 位 hex，算不出來時 Attempt 仍可以是
   `SUCCESS`（git_diff evidence 只記下 probe error），之後的 `harness review` 回 `ATTEMPT_RESULT_UNRECORDED`。
