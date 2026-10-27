@@ -103,7 +103,9 @@ export async function runReviewer(reviewer: PreparedReviewer, input: {
   const name = `harness-review-${randomBytes(8).toString('hex')}`;
   const argv = [
     'run', '--rm', '--name', name, '--network', 'none', '--read-only', '--pull', 'never',
-    '--cap-drop', 'ALL', '--security-opt', 'no-new-privileges', '--user', `${reviewer.user.uid}:${reviewer.user.gid}`,
+    // 不加 --security-opt no-new-privileges：snap 版 Docker 會因此無法 exec image 的 entrypoint（D-42）。
+    // --cap-drop ALL 加非 root 的 --user，container 內即使有 setuid 程式也拿不到 capability。
+    '--cap-drop', 'ALL', '--user', `${reviewer.user.uid}:${reviewer.user.gid}`,
     '--tmpfs', '/tmp:rw,nosuid,size=256m',
     '-e', 'GIT_CONFIG_COUNT=1', '-e', 'GIT_CONFIG_KEY_0=safe.directory', '-e', 'GIT_CONFIG_VALUE_0=/target',
     '-v', `${input.repoDir}:/target:ro`, '-v', `${input.outputDir}:/output:rw`,

@@ -76,7 +76,7 @@ Attempt 記錄的 diff 做不到：untracked 只有路徑、沒有 `--binary`、
 **Docker runner（取捨）。** Reviewer 以 container 執行，而 Docker 無法在 bwrap 內啟動。
 `src/review/docker-runner.ts` 因此成為第三個可以 import `node:child_process` 的檔案（`eslint.config.js` 的例外）。
 限制：只執行 `docker`，argv 全部由程式固定組裝，`shell: false`；先 `image inspect` 取 image ID 與 revision label，
-之後只用 image ID 執行；`--network none`、`--read-only`、`--cap-drop ALL`、`no-new-privileges`、非 root 的 `--user`、
+之後只用 image ID 執行；`--network none`、`--read-only`、`--cap-drop ALL`、非 root 的 `--user`、
 候選副本 `:ro`；docker CLI 只拿到白名單環境變數（不含任何 API key）；deadline 時先 `docker kill` 再收掉 CLI，
 輸出只保留結尾而不因輸出過多殺掉 CLI（否則 `--rm` 的 container 會留在背景）。git 與 verification 仍然只走
 `runIsolated`，Docker socket 與 API key 不進 verification／agent 沙箱。
@@ -90,8 +90,9 @@ Attempt 記錄的 diff 做不到：untracked 只有路徑、沒有 `--binary`、
   無法 exec（`operation not permitted`，加 `apparmor=unconfined` 也一樣）。去掉這個旗標、保留 `--read-only`、
   `--cap-drop ALL`、`--user` 時，同一個 image 能啟動，並對以 stdin 傳入的 fixture repo 產生報表，該報表通過
   `validateReviewerReport`（未經 Harness 的 `-v` 掛載路徑）。
-  argv 依 M1 規格保留這個旗標，端到端腳本在這台機器上會得到 `REVIEW_RUNNER_FAILED`；要不要換 Docker 或
-  調整旗標，待決。
+  決定（2026-10-27）：argv 不加 `no-new-privileges`。它是 M1 規格自己加的強化項目，不在交接計畫定案的要求內；
+  `--cap-drop ALL` 加非 root 的 `--user` 已讓 container 內的 setuid 程式拿不到 capability。若之後改用支援這個旗標的
+  Docker，再評估加回。
 
 ## 契約與語意
 

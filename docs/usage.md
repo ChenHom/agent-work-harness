@@ -166,9 +166,9 @@ sha256、Reviewer image ID 與 revision、人工待辦清單，以及未選入�
   envelope 與輸出都這樣標示。
 - 乾淨副本只有 commit 進去的內容。依賴被 ignore 的本機檔案（例如 `node_modules`、`.env`）的 check 會失敗。
 - submodule、Git LFS、`.git` 是 gitfile 的 workspace（例如 `git worktree`）都未驗證。
-- 需要本機 Docker。本機 snap 版 Docker 29.8.0 實測：`--security-opt no-new-privileges` 會讓 Reviewer image
-  的 entrypoint 無法 exec（`operation not permitted`），審查會以 `REVIEW_RUNNER_FAILED` 結束；
-  而且 snap 的 `/tmp` 是私有的，state dir 放在 `/tmp` 底下時 container 看到的是空目錄。
+- 需要本機 Docker。container 以 `--network none`、`--read-only`、`--cap-drop ALL` 與非 root 的 `--user` 執行；
+  不加 `--security-opt no-new-privileges`，因為本機 snap 版 Docker 29.8.0 加了它就無法 exec image 的 entrypoint（D-42）。
+  snap 的 `/tmp` 是私有的：state dir 放在 `/tmp` 底下時，container 看到的是空目錄，請使用預設的 state dir。
 
 ### 受控 Plan 與 Logical Checkpoint（P2）
 

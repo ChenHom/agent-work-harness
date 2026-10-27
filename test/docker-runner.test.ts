@@ -70,7 +70,7 @@ test('run：argv 離線、唯讀、以 image ID 執行，不傳 ANTHROPIC 也不
   assert.match(name, /^harness-review-[0-9a-f]+$/);
   assert.deepEqual(argv, [
     'run', '--rm', '--name', name, '--network', 'none', '--read-only', '--pull', 'never',
-    '--cap-drop', 'ALL', '--security-opt', 'no-new-privileges', '--user', '1000:1000',
+    '--cap-drop', 'ALL', '--user', '1000:1000',
     '--tmpfs', '/tmp:rw,nosuid,size=256m',
     '-e', 'GIT_CONFIG_COUNT=1', '-e', 'GIT_CONFIG_KEY_0=safe.directory', '-e', 'GIT_CONFIG_VALUE_0=/target',
     '-v', `${repoDir}:/target:ro`, '-v', `${outputDir}:/output:rw`,
