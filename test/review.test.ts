@@ -575,3 +575,31 @@ chmod +x "$HOME/hooks/post-checkout"
   assert.deepEqual(humanPaths(result.stdout), ['src/a.txt', 'src/new.txt']);
   assert.equal(existsSync(join(b.policy.verificationHome, 'hook-ran')), false, 'Harness 的 git 不得執行共用 HOME 裡的 hook');
 });
+
+test('M1：使用者 repo 的 refs/replace 不能讓非 Attempt 結果的 candidate 通過 CANDIDATE_TREE_MISMATCH', { skip }, async () => {
+  const c = await attempt();
+  const good = commit(c.repo);
+  writeFileSync(join(c.repo, 'src/extra.txt'), 'not from the attempt\n');
+  const evil = commit(c.repo);
+  git(c.repo, 'replace', evil, good);
+  docker.configure({ run: 'derive' });
+  assertFailed(c, await review(c, evil), 2, 'CANDIDATE_TREE_MISMATCH');
+});
+
+test('M1：使用者 repo 的 grafts 讓非後代看起來從 baseRevision 長出來；副本裡重新檢查 → CANDIDATE_NOT_DESCENDANT', { skip }, async () => {
+  // GIT_NO_REPLACE_OBJECTS 不會停用 .git/info/grafts；副本由 Harness 建立，沒有 grafts
+  const c = await committedCase();
+  const orphan = git(c.repo, 'commit-tree', `${c.head}^{tree}`, '-m', 'orphan');
+  git(c.repo, 'branch', 'orphan', orphan);
+  writeFileSync(join(c.repo, '.git/info/grafts'), `${orphan} ${c.base}\n`);
+  try {
+    docker.reset();
+    docker.configure({ run: 'derive' });
+    const result = await review(c, orphan);
+    assertFailed(c, result, 2, 'CANDIDATE_NOT_DESCENDANT');
+    assert.deepEqual(docker.calls().map((call) => call.argv[0]), [], '前提不成立時不得執行 Reviewer');
+  } finally {
+    rmSync(join(c.repo, '.git/info/grafts'));
+    git(c.repo, 'branch', '-D', 'orphan');
+  }
+});

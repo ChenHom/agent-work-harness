@@ -110,12 +110,21 @@ async function checkCandidate(policy: GlobalPolicy, workspace: string, candidate
   }
   const exists = await git(policy, workspace, ['cat-file', '-e', `${candidate}^{commit}`]);
   if (!ok(exists)) throw blocked('CANDIDATE_NOT_FOUND', `commit ${candidate} is not in the repository (${runDetail(exists)})`);
-  const tree = await git(policy, workspace, ['rev-parse', '--verify', '--quiet', `${candidate}^{tree}`]);
+  await checkLineage(policy, workspace, { candidate, base, resultTree });
+}
+
+/**
+ * 前提 10～11：candidate 的 tree 等於 resultTree，且從 baseRevision 長出來。在使用者 workspace 與兩份副本上各檢查一次：
+ * 使用者 repo 的 .git/info/grafts 不受 GIT_NO_REPLACE_OBJECTS 影響，副本的 refs 與 grafts 則由 Harness 控制。
+ */
+async function checkLineage(policy: GlobalPolicy, dir: string, ids: { candidate: string; base: string; resultTree: string }): Promise<void> {
+  const { candidate, base, resultTree } = ids;
+  const tree = await git(policy, dir, ['rev-parse', '--verify', '--quiet', `${candidate}^{tree}`]);
   if (!ok(tree) || tree.stdout.trim() !== resultTree) {
     throw blocked('CANDIDATE_TREE_MISMATCH', `candidate tree ${tree.stdout.trim() || runDetail(tree)} != attempt resultTree ${resultTree}`);
   }
   if (!SHA.test(base)) throw blocked('CANDIDATE_NOT_DESCENDANT', `attempt baseRevision ${JSON.stringify(base)} is not a commit SHA`);
-  const mergeBase = await git(policy, workspace, ['merge-base', base, candidate]);
+  const mergeBase = await git(policy, dir, ['merge-base', base, candidate]);
   if (!ok(mergeBase) || mergeBase.stdout.trim() !== base) {
     throw blocked('CANDIDATE_NOT_DESCENDANT', `merge-base(${base}, ${candidate}) is ${mergeBase.stdout.trim() || 'none'}`);
   }
@@ -143,7 +152,10 @@ function frozenInput(store: Store, work: Work, attempt: Attempt): AttemptInputSn
  * 乾淨副本：--no-local 只帶 ref 可達的 objects；不用 --shared（container 讀不到 Host 的 alternates）、不用 worktree add。
  * 沙箱只看得到這份副本自己的目錄與唯讀的來源 workspace。
  */
-async function cloneCandidate(policy: GlobalPolicy, workspace: string, repo: string, candidate: string): Promise<string> {
+async function cloneCandidate(
+  policy: GlobalPolicy, workspace: string, repo: string, ids: { candidate: string; base: string; resultTree: string },
+): Promise<string> {
+  const { candidate } = ids;
   mkdirSync(repo);
   const clone = await runGit(policy, ['clone', '--no-local', '--no-checkout', '--quiet', workspace, repo], {
     workspace: repo, writable: true, readOnlyBinds: [workspace], timeoutMs: policy.verificationTimeoutMs,
@@ -151,6 +163,7 @@ async function cloneCandidate(policy: GlobalPolicy, workspace: string, repo: str
   if (!ok(clone)) throw failed('VERIFICATION_FAILED', `git clone: ${runDetail(clone)}`);
   const present = await git(policy, repo, ['cat-file', '-e', `${candidate}^{commit}`]);
   if (!ok(present)) throw blocked('CANDIDATE_NOT_FOUND', `commit ${candidate} is not reachable from any ref`);
+  await checkLineage(policy, repo, ids);
   const checkout = await git(policy, repo, ['checkout', '--quiet', '--detach', candidate], true);
   if (!ok(checkout)) throw failed('VERIFICATION_FAILED', `git checkout: ${runDetail(checkout)}`);
   return repo;
@@ -233,7 +246,8 @@ export async function reviewAttempt(
     mkdirSync(join(root, 'output'), { recursive: true });
     try {
       log(`review: clone ${input.candidate} → ${root}`);
-      const verifyRepo = await cloneCandidate(policy, work.workspace, join(root, 'verify'), input.candidate);
+      const lineage = { candidate: input.candidate, base: attempt.baseRevision, resultTree };
+      const verifyRepo = await cloneCandidate(policy, work.workspace, join(root, 'verify'), lineage);
       // 所有 BLOCKED 前提都已確認；在花時間重跑 checks 之前先確認凍結的輸入與 runner 可用。
       const frozen = frozenInput(store, work, attempt);
       const prepared = await prepareReviewer(policy.reviewerImage, currentUser());
@@ -241,7 +255,7 @@ export async function reviewAttempt(
       const ids = { workId: work.id, attemptId: attempt.id, baseRevision: attempt.baseRevision, candidate: input.candidate };
       const verification = await verifyCandidate(policy, frozen, verifyRepo, ids, attempt.baseline, log);
       // checks 可以改寫自己的副本（例如 git replace）；交給 Reviewer 的副本在 checks 跑完之後才重新 clone，從未暴露給 checks。
-      const repo = await cloneCandidate(policy, work.workspace, join(root, 'repo'), input.candidate);
+      const repo = await cloneCandidate(policy, work.workspace, join(root, 'repo'), lineage);
 
       log(`review: reviewer ${prepared.value.imageId} (revision ${prepared.value.revision})`);
       const run = await runReviewer(prepared.value, {
