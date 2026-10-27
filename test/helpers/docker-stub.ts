@@ -62,7 +62,7 @@ function derivedReport() {
   fs.writeFileSync(path.join(dir, 'derived.json'), JSON.stringify(paths));
   const files = paths.map((p) => ({
     path: p, status: 'M', contentHash: 'git:' + '0'.repeat(40), analyzed: true, decision: 'HUMAN_REVIEW_REQUIRED',
-    fallback: 'FULL', reasons: ['FILE_CHANGED'], facts: [], changedLines: [], track: 'ESCALATED', oneWayDoors: [],
+    fallback: 'FULL', reasons: ['FILE_CHANGED'], facts: [], changedLines: [], track: 'AI_TRACK', oneWayDoors: [],
     findings: [], needsHuman: true,
   }));
   const n = files.length;
@@ -73,7 +73,7 @@ function derivedReport() {
       status: n ? 'HUMAN_REVIEW_REQUIRED' : 'NOT_SELECTED_FOR_HUMAN_REVIEW', reasons: n ? ['FILE_CHANGED'] : ['NO_CHANGES'],
       files: n, notSelected: 0, targeted: 0, full: n,
     },
-    routing: { track: n ? 'ESCALATED' : 'AUTO_PASS', autoPass: 0, aiTrack: 0, escalated: n },
+    routing: { track: n ? 'AI_TRACK' : 'AUTO_PASS', autoPass: 0, aiTrack: n, escalated: 0 },
     ai: null, human: { required: n > 0, files: n, findings: 0, pendingFixes: 0 }, files,
   });
 }

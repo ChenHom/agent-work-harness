@@ -20,14 +20,14 @@ function valid(kind: ReportKind) {
 test('合法報表：HUMAN_REVIEW_REQUIRED、NOT_SELECTED、NO_CHANGES 都通過驗證', () => {
   const human = valid('human');
   assert.equal(human.status, 'HUMAN_REVIEW_REQUIRED');
-  assert.deepEqual(human.humanReview, [{ path: 'src/a.js', reasons: ['PUBLIC_API_CHANGED'] }]);
-  assert.deepEqual(human.notSelected, [{ path: 'docs/notes.md', reasons: [] }]);
+  assert.deepEqual(human.humanReview, [{ path: 'src/a.txt', reasons: ['PUBLIC_API_CHANGED'] }]);
+  assert.deepEqual(human.notSelected, [{ path: 'src/new.txt', reasons: [] }]);
   assert.equal(human.mergeBase, BASE);
 
   const notSelected = valid('not-selected');
   assert.equal(notSelected.status, 'NO_HUMAN_REVIEW');
   assert.deepEqual(notSelected.humanReview, []);
-  assert.equal(notSelected.notSelected.length, 1);
+  assert.equal(notSelected.notSelected.length, 2);
 
   const none = valid('no-changes');
   assert.equal(none.status, 'NO_CHANGES');
@@ -60,9 +60,9 @@ const MUTATIONS: Mutation[] = [
   ['計數加總與 files 矛盾', (r) => { r.decision.notSelected = 2; }, /add up/],
   ['decision.files 與 files.length 矛盾', (r) => { r.decision.files = 3; r.decision.notSelected = 2; }, /add up/],
   ['files 不是 array', (r) => { r.files = {} as never; }, /files is not an array/],
-  ['file 不是 object', (r) => { r.files[1] = 'docs/notes.md' as never; }, /files\[1\]/],
+  ['file 不是 object', (r) => { r.files[1] = 'src/new.txt' as never; }, /files\[1\]/],
   ['path 空字串', (r) => { r.files[0]!.path = ''; }, /files\[0\]\.path/],
-  ['path 重複', (r) => { r.files[1]!.path = 'src/a.js'; }, /duplicate path/],
+  ['path 重複', (r) => { r.files[1]!.path = 'src/a.txt'; }, /duplicate path/],
   ['file decision 未知', (r) => { r.files[1]!.decision = 'SKIPPED'; }, /files\[1\]\.decision/],
   ['needsHuman 不是 boolean', (r) => { r.files[0]!.needsHuman = 'yes' as never; }, /files\[0\]\.needsHuman/],
   ['file reasons 不是字串陣列', (r) => { r.files[0]!.reasons = 'PUBLIC_API_CHANGED' as never; }, /files\[0\]\.reasons/],
@@ -142,8 +142,8 @@ test('envelope 照 Reviewer 的決策分出人工待辦與未選入，並帶 DEV
   assert.equal(envelope.schemaVersion, 1);
   assert.equal(envelope.status, 'HUMAN_REVIEW_REQUIRED');
   assert.equal(envelope.mergeBase, BASE);
-  assert.deepEqual(envelope.humanReview, [{ path: 'src/a.js', reasons: ['PUBLIC_API_CHANGED'] }]);
-  assert.deepEqual(envelope.notSelected, [{ path: 'docs/notes.md', reasons: [] }]);
+  assert.deepEqual(envelope.humanReview, [{ path: 'src/a.txt', reasons: ['PUBLIC_API_CHANGED'] }]);
+  assert.deepEqual(envelope.notSelected, [{ path: 'src/new.txt', reasons: [] }]);
   assert.deepEqual(envelope.limitations, [DEV01_LIMITATION]);
   assert.match(DEV01_LIMITATION, /^DEV-01: .*not verified safe$/);
   assert.equal(envelope.createdAt, '2026-10-27T00:00:00.000Z');

@@ -214,8 +214,8 @@ test('exit 5：有人工待辦；envelope 綁定 attempt、candidate 與 image I
     [c.base, head, c.base, resultTree]);
   assert.deepEqual(envelope.reviewer, { imageId: STUB_IMAGE_ID, revision: STUB_REVISION });
   assert.equal(envelope.status, 'HUMAN_REVIEW_REQUIRED');
-  assert.deepEqual(envelope.humanReview, [{ path: 'src/a.js', reasons: ['PUBLIC_API_CHANGED'] }]);
-  assert.deepEqual(envelope.notSelected, [{ path: 'docs/notes.md', reasons: [] }]);
+  assert.deepEqual(envelope.humanReview, [{ path: 'src/a.txt', reasons: ['PUBLIC_API_CHANGED'] }]);
+  assert.deepEqual(envelope.notSelected, [{ path: 'src/new.txt', reasons: [] }]);
   assert.match(envelope.limitations[0] ?? '', /^DEV-01: /);
   assert.equal(envelope.verification.revision, head);
   assert.equal(envelope.verification.changedPaths, 2);
@@ -258,8 +258,8 @@ test('show：顯示 review 的 status、candidate、兩個 sha256、reviewer 與
   assert.match(block, new RegExp(`^envelope sha256: ${reviewed.envelopeSha256}$`, 'm'));
   assert.match(block, new RegExp(`^report sha256: ${reviewed.reportSha256}$`, 'm'));
   assert.match(block, new RegExp(`^reviewer: ${STUB_IMAGE_ID} revision=${STUB_REVISION}$`, 'm'));
-  assert.match(block, /^人工待辦（Reviewer 選入）:\n- src\/a\.js: PUBLIC_API_CHANGED$/m);
-  assert.match(block, /^機械審查未選入，fact layer 尚未接入（DEV-01）；不代表已驗證安全:\n- docs\/notes\.md$/m);
+  assert.match(block, /^人工待辦（Reviewer 選入）:\n- src\/a\.txt: PUBLIC_API_CHANGED$/m);
+  assert.match(block, /^機械審查未選入，fact layer 尚未接入（DEV-01）；不代表已驗證安全:\n- src\/new\.txt$/m);
 });
 
 test('show：envelope 被竄改、報表被刪除 → REVIEW_ARTIFACT_INVALID，不顯示成成功', { skip }, async () => {
@@ -296,7 +296,7 @@ test('exit 0：Reviewer 沒有選入人工待辦；未選入的檔案帶 DEV-01 
   assert.equal(result.code, 0, result.stderr);
   assert.match(result.stdout, /^status: NO_HUMAN_REVIEW$/m);
   assert.match(result.stdout, /^人工待辦（Reviewer 選入）:\n\(none\)$/m);
-  assert.match(result.stdout, /^機械審查未選入，fact layer 尚未接入（DEV-01）；不代表已驗證安全:\n- docs\/notes\.md$/m);
+  assert.match(result.stdout, /^機械審查未選入，fact layer 尚未接入（DEV-01）；不代表已驗證安全:\n- src\/a\.txt\n- src\/new\.txt$/m);
   assert.equal(reviewEvents(c, 'review.completed')[0]?.status, 'NO_HUMAN_REVIEW');
   const shown = await cli(c.policy, ['show', c.workId]);
   assert.match(shown.stdout, /^\[review\]\nstatus: NO_HUMAN_REVIEW$/m);
