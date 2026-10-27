@@ -56,6 +56,43 @@ repo 若能指定要 bind 進沙箱的路徑，等於能自行擴大讀取面（
 ### D-11 [取捨] Repository Contract 的 `verification.checks[].argv[0]` 禁止絕對路徑
 避免 repo 指向 worktree 外的執行檔。相對路徑（`vendor/bin/phpstan`）與 PATH 名稱（`npm`）都允許。
 
+### D-42 [實測／取捨] 審查交接：`resultTree` 證明 candidate，Docker runner 是第三個外部程序例外
+**`resultTree`（實測）。** HR-01 A2 由人 commit candidate，Harness 必須證明那個 commit 正是某個 Attempt 的結果。
+Attempt 記錄的 diff 做不到：untracked 只有路徑、沒有 `--binary`、既有修改混在一起。所以 `observeGit` 結束時
+多算一個 tree：在 `runIsolated`（workspace 唯讀）內執行固定的 sh 腳本，用暫存 index（從 `HEAD` 開始，保留
+已追蹤但符合 ignore 的檔案）與沙箱 `/tmp` 裡的暫存 object 目錄（原 repo 只當 alternates），跑
+`git read-tree HEAD`、`git add -A`、`git write-tree`。
+
+- M1 spike 在 bwrap 內 13/13：結果等於人 `git add -A && git commit` 的 `HEAD^{tree}`（修改、untracked、binary、
+  mode、symlink、刪除、`.gitignore`）；原 repo 的 object 數、index、status 不變。`test/result-tree.test.ts`
+  重現這些性質。
+- `skip-worktree` 隱藏的修改會算進 tree，但 `git status` 看不到，所以 Attempt 的 path policy 也看不到。
+  `harness review` 在 `base..candidate` 上重新評估 path policy，補上這個洞（`test/review.test.ts`）。
+- 只接受 40 位 hex。算不出來時不寫 `resultTree` 並加入 `probeErrors`，git_diff evidence 變成 `INCONCLUSIVE`，
+  Attempt 不會是 `SUCCESS`（fail closed）。
+- 不採用 `git stash create`（不含 untracked，而且會寫入使用者的 object DB），也不採用 `commit-tree`
+  （等於由 Harness 產生 commit）。
+
+**Docker runner（取捨）。** Reviewer 以 container 執行，而 Docker 無法在 bwrap 內啟動。
+`src/review/docker-runner.ts` 因此成為第三個可以 import `node:child_process` 的檔案（`eslint.config.js` 的例外）。
+限制：只執行 `docker`，argv 全部由程式固定組裝，`shell: false`；先 `image inspect` 取 image ID 與 revision label，
+之後只用 image ID 執行；`--network none`、`--read-only`、`--cap-drop ALL`、`no-new-privileges`、非 root 的 `--user`、
+候選副本 `:ro`；docker CLI 只拿到白名單環境變數（不含任何 API key）；deadline 時先 `docker kill` 再收掉 CLI，
+輸出只保留結尾而不因輸出過多殺掉 CLI（否則 `--rm` 的 container 會留在背景）。git 與 verification 仍然只走
+`runIsolated`，Docker socket 與 API key 不進 verification／agent 沙箱。
+
+- 乾淨副本用 `git clone --no-local --no-checkout`。`runIsolated` 新增 `RunOptions.readOnlyBinds`，讓來源 repo
+  唯讀可見、目的地可寫。不用 `--shared`（alternates 指向 Host 路徑，container 內讀不到），也不用
+  `git worktree add`（會改使用者 repo 的 metadata）。
+- 不做 schema migration：`resultTree` 放在既有 git_diff evidence 的 data JSON；原始報表與 envelope 是 artifact
+  （kind `review_report`、`review_envelope`）；結果是 `review.completed`／`review.failed` 事件。
+- 本機 snap 版 Docker 29.8.0 實測：`--security-opt no-new-privileges` 讓 `reviewer:m1-2d84ad6` 的 entrypoint
+  無法 exec（`operation not permitted`，加 `apparmor=unconfined` 也一樣）。去掉這個旗標、保留 `--read-only`、
+  `--cap-drop ALL`、`--user` 時，同一個 image 能啟動，並對以 stdin 傳入的 fixture repo 產生報表，該報表通過
+  `validateReviewerReport`（未經 Harness 的 `-v` 掛載路徑）。
+  argv 依 M1 規格保留這個旗標，端到端腳本在這台機器上會得到 `REVIEW_RUNNER_FAILED`；要不要換 Docker 或
+  調整旗標，待決。
+
 ## 契約與語意
 
 ### D-12 [取捨] 「可以改 X」不產生 `allowedPaths`，「只改 X」才會

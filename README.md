@@ -169,6 +169,7 @@ agent 改不了自己的驗收規則。
 | 輸入 | `work/parser`、`context/manifest`、`context/budget`、`prompt/compiler` | 需求 → pointers → 預算裁切 → 六區 prompt |
 | 執行 | `runtime/codex-driver`、`runtime/isolation`、`runtime/result` | prepare/run、bwrap 沙箱與 env、RuntimeResult 解析 |
 | 證據 | `evidence/{git,verification,exec,outcome}`、`repo/paths` | diff 觀察、隔離跑驗證指令、path policy → `OutcomeDecision` |
+| 審查交接 | `review/{review,report,docker-runner}` | candidate 綁定 Attempt（`resultTree`）、乾淨副本重跑驗證、離線 Docker Reviewer、報表驗證與 envelope |
 | 邊界 | `repo/contract`、`security/skills`、`policy` | `.harness/config.json` 凍結、skill hash 准入、authority 上限 |
 | 儲存 | `trace/store`、`budget/ledger.ts` | append-only 事件流、work/attempt/evidence 與整數 budget ledger |
 | 輸出 | `response`、`cli-format` | 給人看的字串，不參與決策 |

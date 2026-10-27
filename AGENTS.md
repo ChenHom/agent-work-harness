@@ -41,8 +41,9 @@ criterion 完成判定／校準／保留／備份還原。設計見 `agent-work-
    校準的標註只接受獨立來源（`human-review`、`fixture-author`），模型產生的標註不能當 oracle。
 3. **Operation `UNKNOWN` 只能 reconcile，不能重送。** 過了 idempotency 窗口就交給人（`WAITING_USER`）。
 4. **只用可抹除的 TypeScript 語法**：不能用 `enum`、constructor parameter properties（`tsconfig` 的 `erasableSyntaxOnly` 會擋）。
-5. **架構界線（ESLint 會擋）**：`node:child_process` 只能出現在 `src/evidence/exec.ts` 與 `src/runtime/codex-driver.ts`；
-   下層模組（context、evidence、prompt、repo、runtime、security、trace、work）不得 import `orchestrator.ts`。
+5. **架構界線（ESLint 會擋）**：`node:child_process` 只能出現在 `src/evidence/exec.ts`、`src/runtime/codex-driver.ts`
+   與 `src/review/docker-runner.ts`（只執行 `docker`，見 DECISIONS D-42）；
+   下層模組（context、evidence、prompt、repo、review、runtime、security、trace、work）不得 import `orchestrator.ts`。
 6. **Store 交易**：`withTransaction` 的 callback 必須同步、只做 DB 操作。唯一例外是 GC 與 redaction 在交易內 unlink，
    用寫鎖擋住不持有 execution lock 的 durable worker（見 `src/trace/retention.ts` 註解）；不要把這個例外擴大。
 7. **Artifact 是 content-addressed 檔案**：新檔名 `<sha256>.<ext>`，v7 以前的檔名是 `<sha256 前 16 hex>.<ext>`，兩者都要支援。

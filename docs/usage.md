@@ -84,6 +84,92 @@ harness retry W-xxx
 
 `answer` 只累積**決策**，不累積對話。既有的 deny 不會因為新的授權而消失。
 
+### 審查交接（`harness review`）
+
+Attempt `SUCCESS` 之後，Harness 不會替你 commit。看過 diff、自己 commit 之後，用 `harness review`
+證明這個 commit 正是那個 Attempt 的結果，並交給 Reviewer 做離線的機械審查：
+
+```bash
+git add -A && git commit -m "..."        # 人 commit；commit 前不要再改任何東西
+harness review W-xxx --attempt A-xxx --head "$(git rev-parse HEAD)"
+harness review W-xxx --attempt A-xxx --head <40 位 SHA> --json   # stdout 是 envelope JSON
+harness show W-xxx                        # [review] 段落：最新一次審查
+```
+
+`--attempt` 必須明確給，不會自動挑「最新成功」的 Attempt；`--head` 只接受完整的 40 位小寫 SHA。
+`review` 會寫入狀態，執行時取得 `execution.lock`。
+
+依序檢查，任一步不符就停：
+
+1. 前提（只讀 Harness 的紀錄）：Attempt 屬於這個 work、outcome 是 `SUCCESS`、開始前沒有既有修改、
+   記錄了 `resultTree`、Work Contract 版本沒變。
+2. candidate（git 在唯讀沙箱內執行）：workspace 是 repository 根目錄、commit 存在、
+   `<sha>^{tree}` 等於 `resultTree`、`merge-base(baseRevision, sha)` 等於 `baseRevision`。
+3. 乾淨副本：`git clone --no-local --no-checkout` 到 `<state dir>/review-work/<id>/`，checkout 該 SHA。
+   以 Attempt 開始時凍結的 Repository Contract，對 `baseRevision..sha` 的變更路徑重新評估 path policy，
+   並重跑 checks。暫存目錄結束時一律刪除。
+4. Reviewer：先 `docker image inspect` 取得 image ID 與 revision label，之後只用 image ID 執行。
+   `--network none`、`--read-only`、候選副本唯讀掛載、不傳任何 `ANTHROPIC_*`、不加 `--ai`。
+5. 驗證報表：審查的必須正是 `baseRevision..sha`，計數一致，`ai` 為 `null`。審查期間 Attempt 與
+   contract 都沒有變化，才把原始報表與 envelope 存成 artifact，並記一筆 `review.completed`。
+
+`resultTree` 是 Attempt 結束時工作樹的完整內容（含 untracked、binary、mode、symlink；不含被 ignore 的
+untracked 檔），等於你當下執行 `git add -A && git commit` 會得到的 tree。commit 前另外改了東西、
+只 commit 一部分，都會得到 `CANDIDATE_TREE_MISMATCH`，要重跑 Attempt。
+
+設定（Global Policy；`policy.json` 在 state dir，同時設定時優先於環境變數）：
+
+| 欄位 | 預設 | 說明 |
+|---|---|---|
+| `reviewerImage` | `HARNESS_REVIEWER_IMAGE` | Reviewer image 的 tag 或 ID，必須有 40 位 commit 的 `org.opencontainers.image.revision` label。未設定時審查失敗 |
+| `reviewTimeoutMs` | `600000`（10 分鐘） | 超過就 `docker kill` |
+| `maxReviewReportBytes` | `5242880`（5 MB） | 報表大小上限 |
+
+Harness 以 uid 0 執行時，拒絕啟動 Reviewer。
+
+| exit code | 意義 |
+|---|---|
+| 0 | 報表有效，沒有人工待辦（`NO_CHANGES` 或 `NO_HUMAN_REVIEW`） |
+| 5 | 報表有效，Reviewer 選入了需要人工 review 的檔案（`HUMAN_REVIEW_REQUIRED`）；不算失敗，也不算完成 |
+| 2 | stderr `BLOCKED <CODE>: detail`：前提不成立，沒有執行審查 |
+| 3 | stderr `<CODE>: detail`：審查執行失敗或報表不可用 |
+| 1 | 用法錯誤，或找不到 work／attempt |
+
+| 代碼 | exit | 什麼時候 |
+|---|---|---|
+| `CANDIDATE_NOT_SHA` | 2 | `--head` 不是完整的 40 位小寫 SHA（branch、`HEAD`、縮寫、大寫都不收） |
+| `WORK_NOT_FOUND`、`ATTEMPT_NOT_FOUND` | 1 | 找不到 |
+| `ATTEMPT_WORK_MISMATCH` | 2 | Attempt 不屬於這個 work |
+| `ATTEMPT_NOT_SUCCESS` | 2 | Attempt 的 outcome 不是 `SUCCESS` |
+| `PRE_EXISTING_DIRTY` | 2 | Attempt 開始前就有未提交的修改（第一版不支援） |
+| `ATTEMPT_RESULT_UNRECORDED` | 2 | Attempt 沒有記錄 `resultTree`（本功能之前的舊 Attempt） |
+| `CONTRACT_STALE` | 2 | Attempt 之後 Work Contract 改過版（`amend`） |
+| `WORKSPACE_NOT_GIT_ROOT` | 2 | workspace 不是 repository 根目錄（或沙箱內的 git 無法執行） |
+| `CANDIDATE_NOT_FOUND` | 2 | commit 不存在，或沒有被任何 branch／tag 指到（乾淨副本裡拿不到） |
+| `CANDIDATE_TREE_MISMATCH` | 2 | candidate 的 tree 不等於 `resultTree` |
+| `CANDIDATE_NOT_DESCENDANT` | 2 | candidate 不是從 `baseRevision` 長出來 |
+| `VERIFICATION_FAILED` | 3 | 乾淨副本上 required check 未通過、path policy 越界，或凍結的 contract 快照不可用 |
+| `REVIEW_RUNNER_FAILED` | 3 | 未設定 image、image 不存在或缺 revision label、uid 0、docker 失敗、container exit 非 0 |
+| `REVIEW_TIMEOUT` | 3 | 超過 `reviewTimeoutMs` |
+| `REVIEW_REPORT_INVALID` | 3 | 報表不存在、過大、不是一般檔案（例如 symlink）、不是 JSON，或內容不一致 |
+| `REVIEW_STALE` | 3 | 審查期間 Attempt、outcome、`resultTree` 或 Work Contract 版本有變化 |
+
+失敗時不保存任何 review artifact，只記一筆 `review.failed`（含 code）。
+
+`show` 的 `[review]` 段落顯示最新一筆 `review.completed`：status、candidate、envelope 與原始報表的
+sha256、Reviewer image ID 與 revision、人工待辦清單，以及未選入清單。顯示前會重新確認兩個 artifact
+都存在、hash 與紀錄相符；缺失或被改過時只印 `REVIEW_ARTIFACT_INVALID: …`，不會顯示成成功。
+
+限制（M1）：
+
+- **未選入不等於安全。** Reviewer 的 fact layer 尚未接入（DEV-01）。未選入的檔案只代表「機械審查沒有選入」，
+  envelope 與輸出都這樣標示。
+- 乾淨副本只有 commit 進去的內容。依賴被 ignore 的本機檔案（例如 `node_modules`、`.env`）的 check 會失敗。
+- submodule、Git LFS、`.git` 是 gitfile 的 workspace（例如 `git worktree`）都未驗證。
+- 需要本機 Docker。本機 snap 版 Docker 29.8.0 實測：`--security-opt no-new-privileges` 會讓 Reviewer image
+  的 entrypoint 無法 exec（`operation not permitted`），審查會以 `REVIEW_RUNNER_FAILED` 結束；
+  而且 snap 的 `/tmp` 是私有的，state dir 放在 `/tmp` 底下時 container 看到的是空目錄。
+
 ### 受控 Plan 與 Logical Checkpoint（P2）
 
 使用者要改原始目標時，用 `amend` 建立新版 immutable WorkContract。舊版本保留，既有
