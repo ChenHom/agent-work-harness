@@ -84,6 +84,14 @@ Attempt 記錄的 diff 做不到：untracked 只有路徑、沒有 `--binary`、
 - 乾淨副本用 `git clone --no-local --no-checkout`。`runIsolated` 新增 `RunOptions.readOnlyBinds`，讓來源 repo
   唯讀可見、目的地可寫。不用 `--shared`（alternates 指向 Host 路徑，container 內讀不到），也不用
   `git worktree add`（會改使用者 repo 的 metadata）。
+- 兩份副本（第一輪審查 H1）：required checks 可以改寫自己跑的副本（實測：`git replace` 把 candidate 換成 base 的 tree，
+  Reviewer 就回 `NO_CHANGES`、exit 0）。所以 checks 用 `verify/`，checks 跑完才重新 clone `repo/` 給 Reviewer。
+  container 另加 `GIT_NO_REPLACE_OBJECTS=1`、`GIT_CONFIG_NOSYSTEM=1`、`GIT_CONFIG_GLOBAL=/dev/null`。
+- 強化的 git 環境（H2）：verification HOME 由同一個 state dir 的所有 Work 共用且可寫，某個 Work 的 check 寫入的
+  `.gitconfig`／hook 會影響之後 Harness 的 git 呼叫。Harness 自己的 git 一律帶 `GIT_CONFIG_GLOBAL=/dev/null`、
+  `GIT_CONFIG_NOSYSTEM=1`、`GIT_NO_REPLACE_OBJECTS=1`，並以 command-line 層級設定 `core.hooksPath=/dev/null`、
+  `core.fsmonitor=false`（用 `GIT_CONFIG_COUNT`，`resultTree` 腳本裡的 git 也一併套用；`RunOptions.env` 只合併、
+  不取代 verification 的環境白名單）。
 - 不做 schema migration：`resultTree` 放在既有 git_diff evidence 的 data JSON；原始報表與 envelope 是 artifact
   （kind `review_report`、`review_envelope`）；結果是 `review.completed`／`review.failed` 事件。
 - 本機 snap 版 Docker 29.8.0 實測：`--security-opt no-new-privileges` 讓 `reviewer:m1-2d84ad6` 的 entrypoint

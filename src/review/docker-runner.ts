@@ -108,6 +108,8 @@ export async function runReviewer(reviewer: PreparedReviewer, input: {
     '--cap-drop', 'ALL', '--user', `${reviewer.user.uid}:${reviewer.user.gid}`,
     '--tmpfs', '/tmp:rw,nosuid,size=256m',
     '-e', 'GIT_CONFIG_COUNT=1', '-e', 'GIT_CONFIG_KEY_0=safe.directory', '-e', 'GIT_CONFIG_VALUE_0=/target',
+    // 副本裡即使有 replace refs 或 image 帶了 system／global 設定，Reviewer 看到的仍是 candidate 本身。
+    '-e', 'GIT_NO_REPLACE_OBJECTS=1', '-e', 'GIT_CONFIG_NOSYSTEM=1', '-e', 'GIT_CONFIG_GLOBAL=/dev/null',
     '-v', `${input.repoDir}:/target:ro`, '-v', `${input.outputDir}:/output:rw`,
     reviewer.imageId, 'node', 'bin/review.js', '--repo', '/target',
     '--base', input.baseRevision, '--head', input.candidate, '--out', '/output/report.json',

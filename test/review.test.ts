@@ -531,6 +531,25 @@ const REPLACE_CANDIDATE = `if git rev-parse -q --verify HEAD~1 >/dev/null 2>&1; 
 fi
 `;
 
+// 把 candidate 標成 shallow（沒有 parent）：GIT_NO_REPLACE_OBJECTS 擋不住，只有不共用副本才擋得住
+const SHALLOW_CANDIDATE = `if git rev-parse -q --verify HEAD~1 >/dev/null 2>&1; then git rev-parse HEAD > .git/shallow; fi
+`;
+
+for (const [name, tamper] of [['replace ref', REPLACE_CANDIDATE], ['.git/shallow', SHALLOW_CANDIDATE]] as const) {
+  test(`H1：required check 竄改自己的副本（${name}），交給 Reviewer 的副本仍是真正的 candidate`, { skip }, async () => {
+    const c = await attempt({
+      checks: [SCRIPT_CHECK], files: { 'check.sh': 'grep -q ok src/a.txt\n' },
+      agent: agentWithCheck(`grep -q ok src/a.txt || exit 1\n${tamper}`),
+    });
+    assert.equal(c.outcome, 'SUCCESS');
+    const head = commit(c.repo);
+    docker.configure({ run: 'derive' });
+    const result = await review(c, head, ['--json']);
+    assert.equal(result.code, 5, result.stderr);
+    assert.deepEqual(humanPaths(result.stdout), ['check.sh', 'src/a.txt', 'src/new.txt']);
+  });
+}
+
 test('H2：work A 的 check 汙染共用的 verification HOME，work B 的 review 不受影響', { skip }, async () => {
   const state = join(ROOT, 'shared-state');
   const plant = `grep -q ok src/a.txt || exit 1

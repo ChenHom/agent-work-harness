@@ -105,9 +105,12 @@ harness show W-xxx                        # [review] 段落：最新一次審查
    記錄了 `resultTree`、Work Contract 版本沒變。
 2. candidate（git 在唯讀沙箱內執行）：workspace 是 repository 根目錄、commit 存在、
    `<sha>^{tree}` 等於 `resultTree`、`merge-base(baseRevision, sha)` 等於 `baseRevision`。
-3. 乾淨副本：`git clone --no-local --no-checkout` 到 `<state dir>/review-work/<id>/`，checkout 該 SHA。
+3. 乾淨副本：`git clone --no-local --no-checkout` 到 `<state dir>/review-work/<id>/verify/`，checkout 該 SHA。
    以 Attempt 開始時凍結的 Repository Contract，對 `baseRevision..sha` 的變更路徑重新評估 path policy，
-   並重跑 checks。暫存目錄結束時一律刪除。
+   並重跑 checks。checks 跑完之後，才從 workspace 重新 clone 一份 `repo/` 交給 Reviewer；這份副本從未暴露給 checks。
+   暫存目錄結束時一律刪除。
+   Harness 自己的 git 呼叫（含 Attempt 的 git evidence 與 `resultTree`）一律不讀全域與 system 設定、不採用
+   replace refs、不執行 hook 與 fsmonitor：verification HOME 是共用且可寫的，checks 可以在裡面放 `.gitconfig`。
 4. Reviewer：先 `docker image inspect` 取得 image ID 與 revision label，之後只用 image ID 執行。
    `--network none`、`--read-only`、候選副本唯讀掛載、不傳任何 `ANTHROPIC_*`、不加 `--ai`。
 5. 驗證報表：審查的必須正是 `baseRevision..sha`，計數一致，`ai` 為 `null`。審查期間 Attempt 與
