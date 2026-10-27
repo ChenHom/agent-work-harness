@@ -67,8 +67,30 @@ export interface GitObservation {
   baseRevision: string;
   head: string;
   clean: boolean;
+  /** 工作樹內容（含 untracked、binary、mode、symlink）對應的 tree SHA；算不出來時為 undefined。 */
+  resultTree?: string;
   /** git observation 不完整時的原因；空陣列代表所有 probes 成功。 */
   probeErrors?: string[];
+}
+
+// 人 `git add -A && git commit` 會得到的 tree。暫存 index 從 HEAD 開始（保留已追蹤但符合 ignore 的檔案），
+// 新 object 寫進沙箱自己的 /tmp，原 repo 只當 alternates 讀取 —— 不碰使用者的 index、refs 與 object DB。
+// 固定常數：不接受任何外部輸入。實測見 DECISIONS D-42。
+const RESULT_TREE_SCRIPT = `set -eu
+objects=$(git rev-parse --path-format=absolute --git-path objects)
+tmp=$(mktemp -d)
+mkdir "$tmp/objects"
+export GIT_INDEX_FILE="$tmp/index" GIT_OBJECT_DIRECTORY="$tmp/objects" GIT_ALTERNATE_OBJECT_DIRECTORIES="$objects"
+git read-tree HEAD
+git add -A
+git write-tree`;
+
+async function resultTree(policy: GlobalPolicy, workspace: string): Promise<{ tree?: string; error?: string }> {
+  const run = await runIsolated(policy, ['sh', '-c', RESULT_TREE_SCRIPT], { workspace, timeoutMs: 120_000 });
+  const error = probeError('git write-tree', run);
+  if (error) return { error };
+  const tree = run.stdout.trim();
+  return /^[0-9a-f]{40}$/.test(tree) ? { tree } : { error: 'git write-tree: unexpected output' };
 }
 
 /** 觀察 worktree 相對 baseRevision 的實際變更（含 untracked）。 */
@@ -99,6 +121,8 @@ export async function observeGit(
   const diffRes = await runIsolated(policy, ['git', 'diff', '--no-ext-diff', '--no-textconv', base === 'UNKNOWN' ? 'HEAD' : base], { workspace, timeoutMs: 120_000 });
   const diffError = probeError('git diff', diffRes);
   if (diffError) probeErrors.push(diffError);
+  const tree = await resultTree(policy, workspace);
+  if (tree.error) probeErrors.push(tree.error);
   const all = [...new Set([...worktreePaths, ...committed])].sort();
 
   // attempt 開始前就髒、且內容至今未再變動的檔案，不算這次 attempt 的變更
@@ -113,7 +137,7 @@ export async function observeGit(
 
   return {
     changedPaths, preExistingUnchanged, diff: diffRes.stdout,
-    baseRevision: base, head, clean: changedPaths.length === 0, probeErrors,
+    baseRevision: base, head, clean: changedPaths.length === 0, resultTree: tree.tree, probeErrors,
   };
 }
 
@@ -125,6 +149,7 @@ export function gitDiffEvidence(workId: string, attemptId: string, obs: GitObser
     data: {
       changedPaths: obs.changedPaths, preExistingUnchanged: obs.preExistingUnchanged,
       baseRevision: obs.baseRevision, head: obs.head,
+      ...(obs.resultTree ? { resultTree: obs.resultTree } : {}),
       diffArtifactId, diffPreview: tail(obs.diff, 20), probeErrors,
     },
     observedAt: nowIso(),
