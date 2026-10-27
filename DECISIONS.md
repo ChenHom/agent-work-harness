@@ -68,8 +68,9 @@ Attempt 記錄的 diff 做不到：untracked 只有路徑、沒有 `--binary`、
   重現這些性質。
 - `skip-worktree` 隱藏的修改會算進 tree，但 `git status` 看不到，所以 Attempt 的 path policy 也看不到。
   `harness review` 在 `base..candidate` 上重新評估 path policy，補上這個洞（`test/review.test.ts`）。
-- 只接受 40 位 hex。算不出來時不寫 `resultTree` 並加入 `probeErrors`，git_diff evidence 變成 `INCONCLUSIVE`，
-  Attempt 不會是 `SUCCESS`（fail closed）。
+- 只接受 40 位 hex。算不出來時不寫 `resultTree` 並加入 `probeErrors`，但 git_diff evidence 的 status 不因此變成
+  `INCONCLUSIVE`：`resultTree` 只是 review 的前提，不是 Attempt 的變更觀察，否則 SHA-256 repo 的 Attempt 永遠不會是
+  `SUCCESS`（第一輪審查 L5，regression）。review 那一側仍 fail closed：沒有 `resultTree` 就是 `ATTEMPT_RESULT_UNRECORDED`。
 - 不採用 `git stash create`（不含 untracked，而且會寫入使用者的 object DB），也不採用 `commit-tree`
   （等於由 Harness 產生 commit）。
 

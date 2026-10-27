@@ -91,6 +91,11 @@ export interface GitObservation {
   resultTree?: string;
   /** git observation 不完整時的原因；空陣列代表所有 probes 成功。 */
   probeErrors?: string[];
+  /**
+   * resultTree 算不出來的原因（也列在 probeErrors）。它只是 `harness review` 的前提，不是 Attempt 的變更觀察：
+   * 不讓 git_diff evidence 變成 INCONCLUSIVE，之後的 review 回 ATTEMPT_RESULT_UNRECORDED（fail closed）。
+   */
+  resultTreeError?: string;
 }
 
 // 人 `git add -A && git commit` 會得到的 tree。暫存 index 從 HEAD 開始（保留已追蹤但符合 ignore 的檔案），
@@ -158,14 +163,16 @@ export async function observeGit(
   return {
     changedPaths, preExistingUnchanged, diff: diffRes.stdout,
     baseRevision: base, head, clean: changedPaths.length === 0, resultTree: tree.tree, probeErrors,
+    ...(tree.error ? { resultTreeError: tree.error } : {}),
   };
 }
 
 export function gitDiffEvidence(workId: string, attemptId: string, obs: GitObservation, diffArtifactId: string): EvidenceRecord {
   const probeErrors = obs.probeErrors ?? [];
+  const observationErrors = probeErrors.filter((error) => error !== obs.resultTreeError);
   return {
     id: newId('EV'), workId, attemptId, type: 'git_diff', label: 'git diff',
-    status: probeErrors.length ? 'INCONCLUSIVE' : 'PASS',
+    status: observationErrors.length ? 'INCONCLUSIVE' : 'PASS',
     data: {
       changedPaths: obs.changedPaths, preExistingUnchanged: obs.preExistingUnchanged,
       baseRevision: obs.baseRevision, head: obs.head,

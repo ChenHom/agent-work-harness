@@ -54,6 +54,8 @@ async function attempt(opts: {
   status?: 'completed' | 'blocked';
   /** 共用的 Harness state dir（例如兩件 Work 共用同一個 verification HOME）。 */
   state?: string;
+  /** `git init` 的額外參數（例如 --object-format=sha256）。 */
+  init?: string[];
 } = {}): Promise<Case> {
   const root = join(ROOT, `case-${++caseSeq}`);
   const repo = join(root, 'repo');
@@ -72,7 +74,7 @@ async function attempt(opts: {
     mkdirSync(join(repo, path, '..'), { recursive: true });
     writeFileSync(join(repo, path), content);
   }
-  git(repo, 'init', '-q');
+  git(repo, 'init', '-q', ...opts.init ?? []);
   git(repo, 'add', '-A');
   git(repo, 'commit', '-qm', 'init');
   opts.beforeAttempt?.(repo);
@@ -701,4 +703,15 @@ test('M5：非預期的例外 → exit 3 REVIEW_INTERNAL_ERROR，並記錄 revie
   } finally {
     rmSync(dir);
   }
+});
+
+test('L5：resultTree 算不出來（SHA-256 repo）時 Attempt 仍可 SUCCESS，之後的 review 回 ATTEMPT_RESULT_UNRECORDED', { skip }, async () => {
+  const c = await attempt({ init: ['--object-format=sha256'] });
+  assert.equal(c.outcome, 'SUCCESS', 'resultTree 只是 review 的前提，不是 Attempt 的 evidence');
+  const [diff] = withStore(c, (store) => store.listEvidence(c.attemptId).filter((evidence) => evidence.type === 'git_diff'));
+  assert.equal(diff?.status, 'PASS');
+  assert.equal('resultTree' in (diff?.data as object), false);
+  assert.deepEqual((diff?.data as { probeErrors: string[] }).probeErrors, ['git write-tree: unexpected output']);
+  commit(c.repo);
+  assertFailed(c, await review(c, 'a'.repeat(40)), 2, 'ATTEMPT_RESULT_UNRECORDED');
 });

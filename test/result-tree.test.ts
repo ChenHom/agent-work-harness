@@ -100,3 +100,22 @@ test('resultTree 算不出來時不寫入 evidence，並留下 probe error', { s
   assert.equal(evidence.status, 'INCONCLUSIVE');
   rmSync(dir, { recursive: true, force: true });
 });
+
+test('只有 resultTree 算不出來時，git_diff evidence 仍是 PASS（probe error 照樣留下）', { skip }, async () => {
+  const base = mkdtempSync(join(tmpdir(), 'harness-result-tree-sha256-'));
+  const r = join(base, 'repo');
+  execFileSync('git', ['init', '-q', '--object-format=sha256', r]);
+  writeFileSync(join(r, 'a.txt'), 'a\n');
+  git(r, 'add', '-A');
+  git(r, 'commit', '-qm', 'init');
+  const head = await baseRevision(DEFAULT_POLICY, r);
+  writeFileSync(join(r, 'a.txt'), 'changed\n');
+  const obs = await observeGit(DEFAULT_POLICY, r, head, []);
+  assert.deepEqual(obs.changedPaths, ['a.txt']);
+  assert.equal(obs.resultTree, undefined, '64 位的 SHA-256 tree 不是 40 位 hex');
+  assert.deepEqual(obs.probeErrors, ['git write-tree: unexpected output']);
+  const evidence = gitDiffEvidence('W', 'A', obs, 'AR-diff');
+  assert.equal(evidence.status, 'PASS');
+  assert.deepEqual((evidence.data as { probeErrors: string[] }).probeErrors, ['git write-tree: unexpected output']);
+  rmSync(base, { recursive: true, force: true });
+});
