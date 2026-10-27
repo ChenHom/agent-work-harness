@@ -127,17 +127,19 @@ test('H2：git evidence 也不採用共用 HOME 底下 XDG 預設位置的 ignor
   const base = await baseRevision(policy, r);
   writeFileSync(join(r, 'new.txt'), 'untracked\n');
   writeFileSync(join(r, 'src/a.ts'), 'export const a = 2;\n');
+  // 植入的 `* text` 會讓 git add 把 CRLF 正規化成 LF；沒有它時 tree 原樣保存 CRLF
+  writeFileSync(join(r, 'src/crlf.txt'), 'one\r\ntwo\r\n');
   const dirty = await snapshotDirty(policy, r);
   const obs = await observeGit(policy, r, base, []);
-  assert.deepEqual(dirty.map((d) => d.path).sort(), ['new.txt', 'src/a.ts']);
-  assert.deepEqual(obs.changedPaths, ['new.txt', 'src/a.ts']);
+  assert.deepEqual(dirty.map((d) => d.path).sort(), ['new.txt', 'src/a.ts', 'src/crlf.txt']);
+  assert.deepEqual(obs.changedPaths, ['new.txt', 'src/a.ts', 'src/crlf.txt']);
   assert.deepEqual(obs.probeErrors, []);
 
   const neutral = ['-c', 'core.excludesFile=/dev/null', '-c', 'core.attributesFile=/dev/null', '-c', 'core.fsmonitor=false'];
   execFileSync('git', [...neutral, 'add', '-A'], { cwd: r });
   execFileSync('git', [...neutral, '-c', 'user.email=t@t', '-c', 'user.name=t', 'commit', '-qm', 'human'], { cwd: r });
   assert.equal(obs.resultTree, execFileSync('git', ['rev-parse', 'HEAD^{tree}'], { cwd: r, encoding: 'utf8' }).trim(),
-    'resultTree 必須含 new.txt，且不被 eol=crlf 改寫');
+    'resultTree 必須含 new.txt，且 src/crlf.txt 不被植入的 attributes 正規化');
   rmSync(join(r, '..'), { recursive: true, force: true });
   rmSync(home, { recursive: true, force: true });
 });

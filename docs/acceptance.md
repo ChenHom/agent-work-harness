@@ -176,6 +176,42 @@ unknown age p50 5,000 ms／p95 86,401,001 ms（離線超過 dedupe 窗口）、S
 exit 0，407 pass、0 fail、0 skip、0 cancelled，lint/typecheck/Knip 全部通過；
 `npm audit --audit-level=moderate` 為 0 vulnerabilities。
 
+## 2026-10-28：M1 審查交接（`harness review`）
+
+Harness／Reviewer 審查交接計畫的中程目標 M1。計畫在 Reviewer repo 的
+`docs/tasks/2026-10-23-harness-reviewer-integration-and-monorepo.md`。分支 `feat/m1-review-handoff`，從 `master` `a85089f` 開出。
+
+- 功能：
+  - Attempt 結束時記錄 `resultTree`。
+  - `harness review <workId> --attempt <id> --head <40 位 SHA>` 依序完成以下步驟：
+    1. 以 resultTree、merge-base 與 contract 版本，證明人 commit 的 candidate 屬於該 Attempt。
+    2. 在 verify clone 以凍結的 contract 重跑 required checks 與 path policy。
+    3. 另建一份從未暴露給 checks 的 review clone，交給離線、唯讀的 Reviewer container（以 image ID 執行，`--network none`）。
+    4. 驗證報表並產生 envelope（`schemaVersion` 1）。
+    5. 存成 artifact；`show` 顯示時會驗證 hash。
+- 完整 `npm run check` exit 0：518 pass、0 fail、0 skip；lint、typecheck、Knip 通過。基準 `a85089f` 為 416。
+- 端到端：`HARNESS_REVIEWER_IMAGE=reviewer:m1-2d84ad6 bash scripts/review-e2e.sh` exit 0，8/8 PASS。
+  - image ID 為 `sha256:6338ffb0…`，revision label 為 Reviewer `master` 的 `2d84ad6`。
+  - 使用真實的 git、bwrap、snap 版 Docker 29.8.0 與假的 codex。
+  - 各情境：
+    - S1：exit 5，`HUMAN_REVIEW_REQUIRED`，`show` 顯示 envelope 與原始報表的 sha256。
+    - S2：exit 0，`NO_CHANGES`。
+    - N1：exit 2，`CANDIDATE_TREE_MISMATCH`。
+    - N2：exit 2，`PRE_EXISTING_DIRTY`。
+    - N3：exit 2，`CANDIDATE_NOT_SHA`。
+    - N4：exit 3，`REVIEW_RUNNER_FAILED`。
+    - 每次 review 前後，fixture repo 的 HEAD、refs、status、index 與 object 數都不變。
+- 獨立審查共三輪。
+  - 第一輪：7 項中等以上 finding，其中 H1、H2 為高嚴重度。H1：checks 能竄改交給 Reviewer 的副本。H2：共用的 verification HOME 能污染之後的 git 呼叫。兩者都會造成偽 `NO_CHANGES`。
+  - 第二輪：1 項中等 finding，`~/.config/git/{ignore,attributes}` 能讓受保護路徑的新檔從 path policy 消失。
+  - 第三輪：0 項。
+  - 每項修正都先寫出在舊程式上失敗的測試，並以手動突變確認測試有效。
+- 已知限制見 `docs/usage.md`「審查交接」一節與 D-42：
+  - 不加 `no-new-privileges`，因為 snap 版 Docker 不相容。
+  - 不支援 submodule／LFS／SHA-256 的 repo。
+  - 不採用使用者的全域 git 設定。
+  - 未選入的檔案只代表機械審查未選入（DEV-01）。
+
 ## 2026-10-27：五波目標結案重驗
 
 在 `a156e9a` 基礎上重新核對五波後續處理計畫、目前實作與回歸測試：恢復／EPIPE、取消後派發阻擋、
