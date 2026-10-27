@@ -101,7 +101,8 @@ harness show W-xxx                        # [review] 段落：最新一次審查
 
 依序檢查，任一步不符就停：
 
-1. 前提（只讀 Harness 的紀錄）：Attempt 屬於這個 work、outcome 是 `SUCCESS`、開始前沒有既有修改、
+1. 前提（只讀 Harness 的紀錄）：Attempt 屬於這個 work、outcome 是 `SUCCESS`、開始前沒有既有修改
+   （開始時的 dirty 快照失敗也視同有，`PRE_EXISTING_DIRTY`）、
    記錄了 `resultTree`、Work Contract 版本沒變。
 2. candidate（git 在唯讀沙箱內執行）：workspace 是 repository 根目錄、commit 存在、
    `<sha>^{tree}` 等於 `resultTree`、`merge-base(baseRevision, sha)` 等於 `baseRevision`。
@@ -148,7 +149,7 @@ Harness 以 uid 0 執行時，拒絕啟動 Reviewer。
 | `WORK_NOT_FOUND`、`ATTEMPT_NOT_FOUND` | 1 | 找不到 |
 | `ATTEMPT_WORK_MISMATCH` | 2 | Attempt 不屬於這個 work |
 | `ATTEMPT_NOT_SUCCESS` | 2 | Attempt 的 outcome 不是 `SUCCESS` |
-| `PRE_EXISTING_DIRTY` | 2 | Attempt 開始前就有未提交的修改（第一版不支援） |
+| `PRE_EXISTING_DIRTY` | 2 | Attempt 開始前就有未提交的修改（第一版不支援），或開始時的 dirty 快照失敗（無法確認） |
 | `ATTEMPT_RESULT_UNRECORDED` | 2 | Attempt 沒有記錄 `resultTree`（本功能之前的舊 Attempt） |
 | `CONTRACT_STALE` | 2 | Attempt 之後 Work Contract 改過版（`amend`） |
 | `WORKSPACE_NOT_GIT_ROOT` | 2 | workspace 不是 repository 根目錄（或沙箱內的 git 無法執行） |

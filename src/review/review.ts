@@ -90,7 +90,9 @@ function checkAttempt(store: Store, input: { workId: string; attemptId: string; 
     throw blocked('ATTEMPT_NOT_SUCCESS', `attempt ${attempt.id} outcome is ${outcomes.join('/') || 'not decided'}`);
   }
   if (attempt.preExistingDirty?.length) {
-    throw blocked('PRE_EXISTING_DIRTY', `attempt started with uncommitted changes: ${attempt.preExistingDirty.map((d) => d.path).join(', ')}`);
+    const failure = attempt.preExistingDirty.find((d) => d.error !== undefined);
+    throw blocked('PRE_EXISTING_DIRTY', failure ? `dirty snapshot at attempt start failed: ${failure.error}`
+      : `attempt started with uncommitted changes: ${attempt.preExistingDirty.map((d) => d.path).join(', ')}`);
   }
   const resultTree = recordedResultTree(store, attempt.id);
   if (!resultTree) throw blocked('ATTEMPT_RESULT_UNRECORDED', `attempt ${attempt.id} has no recorded resultTree`);

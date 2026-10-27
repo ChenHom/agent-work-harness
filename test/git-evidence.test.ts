@@ -114,3 +114,12 @@ test('H2：git evidence 不採用共用 verification HOME 的全域設定，也�
   rmSync(join(r, '..'), { recursive: true, force: true });
   rmSync(home, { recursive: true, force: true });
 });
+
+test('L3：dirty 快照本身失敗時留下標記（不是空清單），讓 review fail closed', { skip }, async () => {
+  const base = mkdtempSync(join(tmpdir(), 'harness-git-nonrepo-'));
+  const dirty = await snapshotDirty(DEFAULT_POLICY, base);
+  assert.equal(dirty.length, 1);
+  assert.deepEqual([dirty[0]?.path, dirty[0]?.hash], ['', null]);
+  assert.match(dirty[0]?.error ?? '', /^git status: exit 128/);
+  rmSync(base, { recursive: true, force: true });
+});

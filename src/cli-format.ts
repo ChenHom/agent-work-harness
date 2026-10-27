@@ -29,7 +29,8 @@ export function workListEntry(
 export function formatPreExistingDirty(attempt: Attempt): string {
   const dirty = attempt.preExistingDirty ?? [];
   if (!dirty.length) return '    preExistingDirty: -';
-  return `    preExistingDirty: ${dirty.map(({ path, hash }) => `${path} (hash=${hash ?? 'null'})`).join(', ')}`;
+  return `    preExistingDirty: ${dirty.map(({ path, hash, error }) => error !== undefined ? `(snapshot failed: ${error})`
+    : `${path} (hash=${hash ?? 'null'})`).join(', ')}`;
 }
 
 export function formatContextDropped(attempt: Attempt): string {

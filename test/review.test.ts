@@ -770,3 +770,23 @@ test('L1：show 顯示最新一筆 review 事件：失敗時顯示代碼；contr
   const stale = await block();
   assert.match(stale, /^\[review\]\nSTALE: work contract is now v2; this review is for v1\nstatus: NO_HUMAN_REVIEW$/m);
 });
+
+test('L3：Attempt 開始時 dirty 快照失敗（git status 錯誤）→ review 視同 PRE_EXISTING_DIRTY', { skip }, async () => {
+  let index: Buffer | undefined;
+  const c = await attempt({
+    beforeAttempt: (repo) => {
+      index = readFileSync(join(repo, '.git/index'));
+      writeFileSync(join(repo, '.git/index'), 'not an index');   // 讓開始時的 git status 失敗
+    },
+    agent: (repo) => {
+      writeFileSync(join(repo, '.git/index'), index!);
+      writeFileSync(join(repo, 'src/a.txt'), 'ok\n');
+      writeFileSync(join(repo, 'src/new.txt'), 'new\n');
+    },
+  });
+  assert.equal(c.outcome, 'SUCCESS');
+  docker.configure({ run: 'report', reportText: reportText('human') });
+  const result = await review(c, commit(c.repo));
+  assertFailed(c, result, 2, 'PRE_EXISTING_DIRTY');
+  assert.match(result.stderr, /dirty snapshot at attempt start failed: git status: exit 128/);
+});

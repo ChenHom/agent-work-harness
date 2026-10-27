@@ -34,7 +34,12 @@ export async function baseRevision(policy: GlobalPolicy, workspace: string): Pro
   return revision || 'UNKNOWN';
 }
 
-export interface DirtyEntry { path: string; hash: string | null }
+export interface DirtyEntry {
+  path: string;
+  hash: string | null;
+  /** 快照本身失敗（git status 錯誤、逾時、輸出截斷）時的唯一一筆標記：path 為空字串，hash 為 null。 */
+  error?: string;
+}
 
 function probeError(label: string, run: IsolatedRun): string | undefined {
   if (run.timedOut) return `${label}: timeout`;
@@ -61,6 +66,9 @@ function contentHash(workspace: string, rel: string): string | null {
  */
 export async function snapshotDirty(policy: GlobalPolicy, workspace: string): Promise<DirtyEntry[]> {
   const status = await statusPaths(policy, workspace);
+  // 不知道開始前髒不髒，就不能當成乾淨：留下標記，review 視同 PRE_EXISTING_DIRTY（fail closed）。
+  // 標記的空 path 不會等於任何 git 回報的路徑，不影響 observeGit 對既有修改的扣除。
+  if (status.error) return [{ path: '', hash: null, error: status.error }];
   return status.paths.map((p) => ({ path: p, hash: contentHash(workspace, p) }));
 }
 
