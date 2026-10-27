@@ -7,7 +7,7 @@
 # 用法：HARNESS_REVIEWER_IMAGE=reviewer:m1-2d84ad6 bash scripts/review-e2e.sh
 #   HARNESS_REVIEWER_IMAGE  必填；本腳本不 build、不 pull
 #   HARNESS_E2E_OUT         工作目錄，預設 ${XDG_CACHE_HOME:-$HOME/.cache}/harness-review-e2e/<時間戳記>
-#                           不要放在 /tmp：snap 版 Docker 的 /tmp 是私有的，-v 掛進去會是空目錄
+#                           不要放在 /tmp：snap 版 Docker 的 /tmp 是私有的，--mount 找不到來源
 # 每個情境印 PASS／FAIL；全部通過 exit 0，任何 FAIL 或缺前提 exit 1。
 # 結束時保留 OUT，只刪掉其中的 codex-home（Harness 會把操作者的 ~/.codex/auth.json 複製進去）。
 set -uo pipefail

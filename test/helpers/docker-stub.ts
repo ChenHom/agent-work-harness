@@ -84,6 +84,7 @@ if (argv[0] === 'image' && argv[1] === 'inspect') {
   process.stdout.write(${JSON.stringify(STUB_IMAGE_ID)} + '|' + (cfg.inspect === 'no-label' ? '<no value>' : ${JSON.stringify(STUB_REVISION)}) + '\\n');
   process.exit(0);
 }
+if (argv[0] === 'rm') process.exit(0);
 if (argv[0] === 'kill') {
   const pidFile = path.join(dir, 'run-' + argv[1] + '.pid');
   if (fs.existsSync(pidFile)) process.kill(Number(fs.readFileSync(pidFile, 'utf8')), 'SIGTERM');

@@ -130,7 +130,7 @@ untracked 檔），等於你當下執行 `git add -A && git commit` 會得到的
 | 欄位 | 預設 | 說明 |
 |---|---|---|
 | `reviewerImage` | `HARNESS_REVIEWER_IMAGE` | Reviewer image 的 tag 或 ID，必須有 40 位 commit 的 `org.opencontainers.image.revision` label。未設定時審查失敗 |
-| `reviewTimeoutMs` | `600000`（10 分鐘） | 超過就 `docker kill` |
+| `reviewTimeoutMs` | `600000`（10 分鐘） | 超過就 `docker kill`，再 best-effort `docker rm -f` |
 | `maxReviewReportBytes` | `5242880`（5 MB） | 報表大小上限 |
 
 Harness 以 uid 0 執行時，拒絕啟動 Reviewer。
@@ -184,7 +184,8 @@ sha256、Reviewer image ID 與 revision、人工待辦清單，以及未選入�
   `SUCCESS`（git_diff evidence 只記下 probe error），之後的 `harness review` 回 `ATTEMPT_RESULT_UNRECORDED`。
 - 需要本機 Docker。container 以 `--network none`、`--read-only`、`--cap-drop ALL` 與非 root 的 `--user` 執行；
   不加 `--security-opt no-new-privileges`，因為本機 snap 版 Docker 29.8.0 加了它就無法 exec image 的 entrypoint（D-42）。
-  snap 的 `/tmp` 是私有的：state dir 放在 `/tmp` 底下時，container 看到的是空目錄，請使用預設的 state dir。
+  snap 的 `/tmp` 是私有的：state dir 放在 `/tmp` 底下時，docker 找不到掛載來源（`bind source path does not exist`），
+  審查以 `REVIEW_RUNNER_FAILED` 結束，請使用預設的 state dir。
 
 端到端驗證（M1 的完成證據）：`scripts/review-e2e.sh` 以真實的 git、bwrap、Docker 與 Reviewer image
 從零跑一遍 `harness review`，不呼叫真實的 codex 或任何 AI（腳本自己寫兩支假 codex：一支改檔、一支不改）。

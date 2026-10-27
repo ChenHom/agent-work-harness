@@ -78,7 +78,8 @@ Attempt 記錄的 diff 做不到：untracked 只有路徑、沒有 `--binary`、
 `src/review/docker-runner.ts` 因此成為第三個可以 import `node:child_process` 的檔案（`eslint.config.js` 的例外）。
 限制：只執行 `docker`，argv 全部由程式固定組裝，`shell: false`；先 `image inspect` 取 image ID 與 revision label，
 之後只用 image ID 執行；`--network none`、`--read-only`、`--cap-drop ALL`、非 root 的 `--user`、
-候選副本 `:ro`；docker CLI 只拿到白名單環境變數（不含任何 API key）；deadline 時先 `docker kill` 再收掉 CLI，
+候選副本以 `--mount type=bind,…,readonly` 唯讀掛載（不用 `-v`：來源不存在時 `-v` 會自動建立空目錄，`--mount` 直接報錯）；
+docker CLI 只拿到白名單環境變數（不含任何 API key）；deadline 時先 `docker kill`、再 best-effort `docker rm -f`，最後收掉 CLI，
 輸出只保留結尾而不因輸出過多殺掉 CLI（否則 `--rm` 的 container 會留在背景）。git 與 verification 仍然只走
 `runIsolated`，Docker socket 與 API key 不進 verification／agent 沙箱。
 

@@ -74,7 +74,7 @@ test('run：argv 離線、唯讀、以 image ID 執行，不傳 ANTHROPIC 也不
     '--tmpfs', '/tmp:rw,nosuid,size=256m',
     '-e', 'GIT_CONFIG_COUNT=1', '-e', 'GIT_CONFIG_KEY_0=safe.directory', '-e', 'GIT_CONFIG_VALUE_0=/target',
     '-e', 'GIT_NO_REPLACE_OBJECTS=1', '-e', 'GIT_CONFIG_NOSYSTEM=1', '-e', 'GIT_CONFIG_GLOBAL=/dev/null',
-    '-v', `${repoDir}:/target:ro`, '-v', `${outputDir}:/output:rw`,
+    '--mount', `type=bind,src=${repoDir},dst=/target,readonly`, '--mount', `type=bind,src=${outputDir},dst=/output`,
     STUB_IMAGE_ID, 'node', 'bin/review.js', '--repo', '/target', '--base', BASE, '--head', HEAD,
     '--out', '/output/report.json',
   ]);
@@ -92,7 +92,7 @@ test('run：container exit 非 0 → REVIEW_RUNNER_FAILED，附 stderr 結尾', 
   assert.match(result.ok ? '' : result.detail, /exit 2.*OPTION_MISSING:--base/s);
 });
 
-test('run：超過 deadline 以 docker kill 終止 → REVIEW_TIMEOUT', async () => {
+test('run：超過 deadline 以 docker kill 終止，再 best-effort docker rm -f → REVIEW_TIMEOUT', async () => {
   const reviewer = await prepared();
   stub.reset();
   stub.configure({ run: 'hang' });
@@ -101,15 +101,17 @@ test('run：超過 deadline 以 docker kill 終止 → REVIEW_TIMEOUT', async ()
   const result = await runReviewer(reviewer, { repoDir, outputDir, baseRevision: BASE, candidate: HEAD, timeoutMs: 300 });
   assert.equal(result.ok ? null : result.code, 'REVIEW_TIMEOUT');
   assert.ok(Date.now() - started < 20_000);
-  const [run, kill] = stub.calls();
-  const name = run!.argv[run!.argv.indexOf('--name') + 1];
+  const [run, kill, rm, ...rest] = stub.calls();
+  const name = run!.argv[run!.argv.indexOf('--name') + 1]!;
   assert.deepEqual(kill?.argv, ['kill', name]);
+  assert.deepEqual(rm?.argv, ['rm', '-f', name]);
+  assert.deepEqual(rest, []);
 });
 
-test('run：掛載路徑含 : 或換行時拒絕執行，不呼叫 docker', async () => {
+test('run：掛載路徑含 :、, 或換行時拒絕執行，不呼叫 docker', async () => {
   const reviewer = await prepared();
   stub.reset();
-  for (const bad of ['/tmp/a:b', '/tmp/a\nb']) {
+  for (const bad of ['/tmp/a:b', '/tmp/a\nb', '/tmp/a,dst=/x']) {
     const result = await runReviewer(reviewer, {
       repoDir: bad, outputDir: '/tmp/out', baseRevision: BASE, candidate: HEAD, timeoutMs: 1_000,
     });

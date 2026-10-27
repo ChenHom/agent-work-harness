@@ -229,8 +229,8 @@ test('exit 5：有人工待辦；envelope 綁定 attempt、candidate 與 image I
   assert.deepEqual(calls.map((call) => call.argv[0]), ['image', 'run']);
   const run = calls[1]!.argv;
   assert.equal(run[run.indexOf('--network') + 1], 'none');
-  const target = run.find((arg) => arg.endsWith(':/target:ro'));
-  assert.ok(target?.startsWith(join(c.policy.stateDir, 'review-work')), target ?? 'no /target mount');
+  const target = run.find((arg, index) => run[index - 1] === '--mount' && arg.endsWith(',dst=/target,readonly'));
+  assert.match(target ?? '', new RegExp(`^type=bind,src=${join(c.policy.stateDir, 'review-work')}/[0-9a-f-]+/repo,dst=/target,readonly$`));
   assert.equal(run[run.indexOf('node') - 1], STUB_IMAGE_ID);
   assert.ok(!run.includes('reviewer:test'));
   assert.deepEqual(run.slice(run.indexOf('--base')), ['--base', c.base, '--head', head, '--out', '/output/report.json']);
@@ -485,7 +485,7 @@ test('REVIEW_TIMEOUT → exit 3：超過 reviewTimeoutMs 以 docker kill 終止'
   docker.reset();
   docker.configure({ run: 'hang' });
   assertFailed(c, await review(c, c.head, [], { ...c.policy, reviewTimeoutMs: 300 }), 3, 'REVIEW_TIMEOUT');
-  assert.deepEqual(docker.calls().map((call) => call.argv[0]), ['image', 'run', 'kill']);
+  assert.deepEqual(docker.calls().map((call) => call.argv[0]), ['image', 'run', 'kill', 'rm']);
 });
 
 test('REVIEW_REPORT_INVALID → exit 3：malformed、不存在、審錯 head、過大、symlink', { skip }, async () => {

@@ -52,11 +52,13 @@ function docker(args: readonly string[], timeoutMs: number, onTimeout?: () => Pr
     let stderr = '';
     let timedOut = false;
     let done = false;
+    // timeout 時的清理（kill、rm -f）跑完才回傳：CLI 可能在 kill 之後就結束了，rm 還沒送出。
+    let cleanup: Promise<void> = Promise.resolve();
     const finish = (run: Pick<DockerRun, 'exitCode' | 'signal' | 'spawnError'>): void => {
       if (done) return;
       done = true;
       clearTimeout(timer);
-      resolve({ ...run, stdout, stderr, timedOut });
+      void cleanup.catch(() => {}).then(() => { resolve({ ...run, stdout, stderr, timedOut }); });
     };
     const child = spawn('docker', args, { shell: false, env: dockerEnv(), stdio: ['ignore', 'pipe', 'pipe'] });
     child.stdout.setEncoding('utf8').on('data', (chunk: string) => { stdout = (stdout + chunk).slice(-OUTPUT_TAIL_CHARS); });
@@ -64,7 +66,7 @@ function docker(args: readonly string[], timeoutMs: number, onTimeout?: () => Pr
     const timer = setTimeout(() => {
       timedOut = true;
       // 先停 container，再收掉 CLI；只殺 CLI 的話 --rm 的 container 會繼續跑。
-      void (onTimeout?.() ?? Promise.resolve()).finally(() => { child.kill('SIGKILL'); });
+      cleanup = (onTimeout?.() ?? Promise.resolve()).finally(() => { child.kill('SIGKILL'); });
     }, timeoutMs);
     child.on('error', (error) => { finish({ exitCode: null, signal: null, spawnError: error.message }); });
     child.on('close', (exitCode, signal) => { finish({ exitCode, signal }); });
@@ -96,9 +98,9 @@ export async function prepareReviewer(
 export async function runReviewer(reviewer: PreparedReviewer, input: {
   repoDir: string; outputDir: string; baseRevision: string; candidate: string; timeoutMs: number;
 }): Promise<RunnerResult<void>> {
-  // `-v src:dst:mode` 以 : 分隔；路徑含 : 或換行時無法安全表達。
-  if ([input.repoDir, input.outputDir].some((path) => /[:\n]/.test(path))) {
-    return failed('mount path contains ":" or a newline');
+  // --mount 以 , 分隔欄位；state dir 的路徑本來就不得含 : 或換行（M1 規格 §3）。
+  if ([input.repoDir, input.outputDir].some((path) => /[:,\n]/.test(path))) {
+    return failed('mount path contains ":", "," or a newline');
   }
   const name = `harness-review-${randomBytes(8).toString('hex')}`;
   const argv = [
@@ -110,11 +112,16 @@ export async function runReviewer(reviewer: PreparedReviewer, input: {
     '-e', 'GIT_CONFIG_COUNT=1', '-e', 'GIT_CONFIG_KEY_0=safe.directory', '-e', 'GIT_CONFIG_VALUE_0=/target',
     // 副本裡即使有 replace refs 或 image 帶了 system／global 設定，Reviewer 看到的仍是 candidate 本身。
     '-e', 'GIT_NO_REPLACE_OBJECTS=1', '-e', 'GIT_CONFIG_NOSYSTEM=1', '-e', 'GIT_CONFIG_GLOBAL=/dev/null',
-    '-v', `${input.repoDir}:/target:ro`, '-v', `${input.outputDir}:/output:rw`,
+    // --mount（不用 -v）：來源不存在時 docker 直接報錯，不會自動建立一個空目錄掛進去。
+    '--mount', `type=bind,src=${input.repoDir},dst=/target,readonly`, '--mount', `type=bind,src=${input.outputDir},dst=/output`,
     reviewer.imageId, 'node', 'bin/review.js', '--repo', '/target',
     '--base', input.baseRevision, '--head', input.candidate, '--out', '/output/report.json',
   ];
-  const run = await docker(argv, input.timeoutMs, async () => { await docker(['kill', name], KILL_TIMEOUT_MS); });
+  // timeout：先 kill，再 best-effort rm -f（--rm 在 CLI 被收掉、或 kill 失敗時，container 可能還留著）。
+  const run = await docker(argv, input.timeoutMs, async () => {
+    await docker(['kill', name], KILL_TIMEOUT_MS);
+    await docker(['rm', '-f', name], KILL_TIMEOUT_MS);
+  });
   if (run.timedOut) return { ok: false, code: 'REVIEW_TIMEOUT', detail: `reviewer exceeded ${input.timeoutMs} ms; killed ${name}` };
   if (run.spawnError) return failed(`docker run: ${run.spawnError}`);
   if (run.exitCode !== 0) return failed(`reviewer container exit ${run.exitCode ?? run.signal}: ${tailOf(run.stderr)}`);
