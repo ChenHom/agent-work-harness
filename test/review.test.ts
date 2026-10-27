@@ -15,6 +15,8 @@ import { Orchestrator, type RuntimeDriver } from '../src/orchestrator.ts';
 import { DEFAULT_POLICY } from '../src/policy.ts';
 import { CONTRACT_REL_PATH } from '../src/repo/contract.ts';
 import type { ReviewEnvelope } from '../src/review/report.ts';
+import { reviewAttempt } from '../src/review/review.ts';
+import type { ExecutionOwnership } from '../src/runtime/ownership.ts';
 import { Store } from '../src/trace/store.ts';
 import type { GlobalPolicy, Outcome } from '../src/types.ts';
 import { installDockerStub, STUB_IMAGE_ID, STUB_REVISION } from './helpers/docker-stub.ts';
@@ -789,4 +791,130 @@ test('L3：Attempt 開始時 dirty 快照失敗（git status 錯誤）→ review
   const result = await review(c, commit(c.repo));
   assertFailed(c, result, 2, 'PRE_EXISTING_DIRTY');
   assert.match(result.stderr, /dirty snapshot at attempt start failed: git status: exit 128/);
+});
+
+// ---------------------------------------------------------------- L7：審查實驗裡存活的突變
+
+function writeStore(c: Case, write: (store: Store) => void): void {
+  const store = new Store(c.policy.stateDir);
+  try { write(store); } finally { store.close(); }
+}
+
+test('L7（M01）：git_diff evidence 不只一筆 → ATTEMPT_RESULT_UNRECORDED', { skip }, async () => {
+  const c = await attempt();
+  const head = commit(c.repo);
+  writeStore(c, (store) => store.db.prepare(`insert into evidence select 'EV-duplicate', work_id, attempt_id, type, label, status,
+    data, observed_at from evidence where attempt_id = ? and type = 'git_diff'`).run(c.attemptId));
+  docker.configure({ run: 'report', reportText: reportText('human') });
+  assertFailed(c, await review(c, head), 2, 'ATTEMPT_RESULT_UNRECORDED');
+});
+
+test('L7（M02）：較早一筆 outcome 不是 SUCCESS（最後一筆是）→ ATTEMPT_NOT_SUCCESS', { skip }, async () => {
+  const c = await attempt();
+  const head = commit(c.repo);
+  writeStore(c, (store) => store.db.prepare(`insert into outcomes(id, work_id, attempt_id, outcome, reasons, evidence_ids, created_at)
+    values ('OUT-earlier', ?, ?, 'BLOCKED', '[]', '[]', '1970-01-01T00:00:00.000Z')`).run(c.workId, c.attemptId));
+  assert.deepEqual(withStore(c, (store) => store.attemptOutcomes(c.attemptId)), ['BLOCKED', 'SUCCESS']);
+  docker.configure({ run: 'report', reportText: reportText('human') });
+  assertFailed(c, await review(c, head), 2, 'ATTEMPT_NOT_SUCCESS');
+});
+
+type FrozenInput = { attemptId: string; workId: string; repository: { contract: { verification: { checks: unknown[] } } } };
+for (const [name, change] of [
+  // 改掉 contract 但留著原本的 repository.hash：只有重新計算 hash 才擋得住（M03）
+  ['repository contract 被換掉', (snapshot: FrozenInput) => {
+    snapshot.repository.contract.verification.checks = [{ ...CHECK, argv: ['true'] }];
+  }],
+  ['attemptId 不符', (snapshot: FrozenInput) => { snapshot.attemptId = 'A-other'; }],   // M04
+  ['workId 不符', (snapshot: FrozenInput) => { snapshot.workId = 'W-other'; }],          // M04
+] as const) {
+  test(`L7（M03／M04）：凍結的輸入快照${name} → VERIFICATION_FAILED`, { skip }, async () => {
+    const c = await attempt();
+    const head = commit(c.repo);
+    writeStore(c, (store) => {
+      const artifact = store.readVerifiedArtifact(store.getAttempt(c.attemptId)!.inputSnapshotArtifactId!);
+      assert.equal(artifact.status, 'verified');
+      const snapshot = JSON.parse(artifact.status === 'verified' ? artifact.content.toString('utf8') : '{}') as FrozenInput;
+      change(snapshot);
+      const stored = store.putArtifact('attempt_input', JSON.stringify(snapshot, null, 2), 'json');
+      store.db.prepare("update attempts set json = json_set(json, '$.inputSnapshotArtifactId', ?) where id = ?").run(stored.id, c.attemptId);
+    });
+    docker.configure({ run: 'report', reportText: reportText('human') });
+    const result = await review(c, head);
+    assertFailed(c, result, 3, 'VERIFICATION_FAILED');
+    assert.match(result.stderr, /input snapshot does not match the attempt/);
+  });
+}
+
+for (const [name, statement] of [
+  ['resultTree 被改寫（M05）', (c: Case) => `update evidence set data = json_set(data, '$.resultTree', '${'0'.repeat(40)}')
+    where attempt_id = '${c.attemptId}' and type = 'git_diff'`],
+  ['多了一筆非 SUCCESS 的 outcome（M06）', (c: Case) => `insert into outcomes(id, work_id, attempt_id, outcome, reasons, evidence_ids,
+    created_at) values ('OUT-later', '${c.workId}', '${c.attemptId}', 'BLOCKED', '[]', '[]', '9999-01-01T00:00:00.000Z')`],
+  ['Work Contract 改版（M07）', (c: Case) => `update works set current_contract_version = 2 where id = '${c.workId}'`],
+] as const) {
+  test(`L7：審查期間${name} → REVIEW_STALE`, { skip }, async () => {
+    const c = await attempt();
+    const head = commit(c.repo);
+    docker.configure({
+      run: 'report', reportText: reportText('human'),
+      sql: { db: join(c.policy.stateDir, 'harness.db'), statement: statement(c) },
+    });
+    assertFailed(c, await review(c, head), 3, 'REVIEW_STALE');
+  });
+}
+
+test('L7（M08）：審查期間失去 execution ownership → REVIEW_STALE', { skip }, async () => {
+  const c = await attempt();
+  const head = commit(c.repo);
+  docker.configure({ run: 'report', reportText: reportText('human') });
+  const store = new Store(c.policy.stateDir);
+  try {
+    const lost = { validate: () => false } as unknown as ExecutionOwnership;
+    const result = await reviewAttempt(c.policy, store, { workId: c.workId, attemptId: c.attemptId, candidate: head }, { ownership: lost });
+    assert.deepEqual([result.exitCode, 'code' in result ? result.code : null], [3, 'REVIEW_STALE']);
+  } finally { store.close(); }
+  assert.deepEqual(reviewEvents(c, 'review.completed'), []);
+  assert.deepEqual(reviewArtifacts(c), []);
+  assert.equal(reviewEvents(c, 'review.failed').at(-1)?.code, 'REVIEW_STALE');
+});
+
+test('L7（M09／M10／M11）：review.completed 記錄的 status、envelope sha256、報表與 envelope 不一致 → REVIEW_ARTIFACT_INVALID', { skip }, async () => {
+  const c = await attempt();
+  const head = commit(c.repo);
+  docker.configure({ run: 'report', reportText: reportText('human') });
+  assert.equal((await review(c, head)).code, 5);
+  const original = withStore(c, (store) => store.events(c.workId).find((event) => event.type === 'review.completed')!.data);
+  let other = { id: '', hash: '' };
+  writeStore(c, (store) => { other = store.putArtifact('review_report', '{"another":"report"}', 'json'); });
+  for (const [name, patch, reason] of [
+    ['status', { status: 'NO_HUMAN_REVIEW' }, /envelope does not match the review\.completed event/],                           // M10
+    ['envelope sha256', { envelopeSha256: 'f'.repeat(64) }, /envelope artifact sha256 [0-9a-f]{64} != recorded f{64}/],         // M11
+    ['另一份真的報表', { reportArtifactId: other.id, reportSha256: other.hash }, /envelope does not match the review\.completed event/], // M09
+  ] as const) {
+    writeStore(c, (store) => store.db.prepare("update events set data = ? where work_id = ? and type = 'review.completed'")
+      .run(JSON.stringify({ ...JSON.parse(original) as object, ...patch }), c.workId));
+    const shown = await cli(c.policy, ['show', c.workId]);
+    const block = shown.stdout.slice(shown.stdout.indexOf('[review]'));
+    assert.match(block, /^\[review\]\nREVIEW_ARTIFACT_INVALID: /m, name);
+    assert.match(block, reason, name);
+    assert.doesNotMatch(block, /^status: /m, name);
+  }
+  writeStore(c, (store) => store.db.prepare("update events set data = ? where work_id = ? and type = 'review.completed'")
+    .run(original, c.workId));
+  assert.match((await cli(c.policy, ['show', c.workId])).stdout, /^\[review\]\nstatus: HUMAN_REVIEW_REQUIRED$/m);
+});
+
+test('L7（M17）：git 回報的 toplevel 不是 workspace（core.worktree 指向子目錄）→ WORKSPACE_NOT_GIT_ROOT', { skip }, async () => {
+  const c = await attempt();
+  const head = commit(c.repo);
+  git(c.repo, 'config', 'core.worktree', join(c.repo, 'src'));
+  try {
+    docker.configure({ run: 'report', reportText: reportText('human') });
+    const result = await review(c, head);
+    assertFailed(c, result, 2, 'WORKSPACE_NOT_GIT_ROOT');
+    assert.match(result.stderr, new RegExp(`git toplevel is ${join(c.repo, 'src')}, workspace is ${c.repo}`));
+  } finally {
+    git(c.repo, 'config', '--unset', 'core.worktree');
+  }
 });

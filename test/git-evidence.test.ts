@@ -123,3 +123,26 @@ test('L3：dirty 快照本身失敗時留下標記（不是空清單），讓 re
   assert.match(dirty[0]?.error ?? '', /^git status: exit 128/);
   rmSync(base, { recursive: true, force: true });
 });
+
+test('H2：agent 用 replace ref 把自己的 commit 換成 base，git evidence 仍看得到被 commit 的變更', { skip }, async () => {
+  const r = repo();
+  const git = (...args: string[]): string =>
+    execFileSync('git', ['-c', 'user.email=t@t', '-c', 'user.name=t', ...args], { cwd: r, encoding: 'utf8' }).trim();
+  const base = await baseRevision(DEFAULT_POLICY, r);
+  mkdirSync(join(r, 'secret'));
+  writeFileSync(join(r, 'secret/key.txt'), 'k\n');
+  git('add', '-A');
+  git('commit', '-qm', 'agent commit');
+  const head = git('rev-parse', 'HEAD');
+  // HEAD 換成 base；index 與工作樹也回到 base。採用 replace refs 時 git status 與 base..HEAD 都是空的
+  git('replace', head, base);
+  git('read-tree', 'HEAD');
+  rmSync(join(r, 'secret'), { recursive: true });
+  assert.equal(git('status', '--porcelain'), '', '採用 replace refs 的 git 看不到這個 commit');
+
+  const obs = await observeGit(DEFAULT_POLICY, r, base, []);
+  assert.equal(obs.head, head);
+  assert.deepEqual(obs.changedPaths, ['secret/key.txt']);
+  assert.deepEqual(obs.probeErrors, []);
+  rmSync(join(r, '..'), { recursive: true, force: true });
+});
