@@ -176,6 +176,31 @@ unknown age p50 5,000 ms／p95 86,401,001 ms（離線超過 dedupe 窗口）、S
 exit 0，407 pass、0 fail、0 skip、0 cancelled，lint/typecheck/Knip 全部通過；
 `npm audit --audit-level=moderate` 為 0 vulnerabilities。
 
+## 2026-10-27：五波目標結案重驗
+
+在 `a156e9a` 基礎上重新核對五波後續處理計畫、目前實作與回歸測試：恢復／EPIPE、取消後派發阻擋、
+operation／compensation CAS、SQLite busy timeout、無 parent checkpoint 的 stale 傳播、retry milestone、
+含空白與中文的 worker 路徑，以及 D-34 的重新驗證語意均有對應實作與測試。共用函式整理、
+人工解決 WAITING_USER、獨立 authority 與 12 筆人工審閱標註亦已納入；原提交 `3746a26` 是目前 HEAD 的祖先。
+
+安全重驗發現四項傳遞依賴的新公告弱點（2 high、2 moderate）。僅更新 fast-uri 3.1.8 → 3.1.9、
+smol-toml 1.8.0 → 1.9.1、source-map-js 1.2.1 → 1.2.2、zod 4.4.3 → 4.6.7；
+diff review 確認無其他套件更新、無新增依賴、無應用程式邏輯或 schema 變更，更新後 npm audit 為 0 vulnerabilities。
+另核對人工解決的 authority 驗證、receipt／budget 拒絕與交易路徑，以及對應負向測試。
+
+完整 `npm run check` exit 0：416 pass、0 fail、0 skip、0 cancelled，lint／typecheck／Knip 通過。
+第一次完整檢查為 415 pass／1 fail，原因是取消測試的 Temporal ephemeral server 下載／啟動回報
+`No such file or directory`，未進入業務斷言；該案例單獨重驗 1/1 通過，更新後完整檢查亦通過。
+這不構成已修正 Temporal 測試環境偶發問題的宣稱。
+
+本機 recovery-v1（seed 1，64 runs，Node v24.19.0）：latency p50 6.23 ms／p99 23.46 ms；
+32/40 unknown 已解決、24/40 在 SLA 內解決、8 未解、16 人工處理；重複效果與限制違反均為 0。
+成本 224 spent／80 reserved units，independently accepted 為 32/64。此量測使用 fake provider，
+不能推論真實服務表現。既有 GC／備份規模量測保留原日期，本次未重跑。
+
+使用範圍依使用者確認為每台主機獨立的本機操作；異地備份、共享服務、跨主機接手與排程屬未來營運前提，
+不列為本次五波結案的待部署工作。
+
 ## 2026-09-29 至 2026-10-03：三次限時人工試行
 
 此輪是人工、evidence-driven 的三個新案例，不重跑 `docs/dogfood.md` 或既有 watch list。每次僅使用
