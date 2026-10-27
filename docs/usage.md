@@ -164,9 +164,12 @@ Harness 以 uid 0 執行時，拒絕啟動 Reviewer。
 
 失敗時不保存任何 review artifact，只記一筆 `review.failed`（含 code）。
 
-`show` 的 `[review]` 段落顯示最新一筆 `review.completed`：status、candidate、envelope 與原始報表的
-sha256、Reviewer image ID 與 revision、人工待辦清單，以及未選入清單。顯示前會重新確認兩個 artifact
+`show` 的 `[review]` 段落顯示最新一筆 review 事件。最新一筆是失敗時印 `FAILED <code> (exit <n>): …`，
+較早的成功結果不會蓋過它。最新一筆是 `review.completed` 時顯示 status、candidate、envelope 與原始報表的
+sha256、Reviewer image ID 與 revision、人工待辦清單，以及未選入清單；Work Contract 之後改版時，前面多一行
+`STALE: work contract is now v<n>; this review is for v<m>`。顯示前會重新確認兩個 artifact
 都存在、hash 與紀錄相符；缺失或被改過時只印 `REVIEW_ARTIFACT_INVALID: …`，不會顯示成成功。
+來自報表與外部程序的字串（path、reasons、錯誤 detail）中的控制字元（C0、DEL、C1，含 ESC 與換行）印成 `\xNN`。
 
 限制（M1）：
 

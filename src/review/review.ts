@@ -376,19 +376,30 @@ export async function reviewAttempt(
 export type LatestReview =
   | { status: 'none' }
   | { status: 'invalid'; reason: string }
-  | { status: 'valid'; envelope: ReviewEnvelope; envelopeSha256: string; reportSha256: string };
+  | { status: 'failed'; code: string; exitCode: number | null; detail: string }
+  | {
+    status: 'valid'; envelope: ReviewEnvelope; envelopeSha256: string; reportSha256: string;
+    /** Work 目前的 contract 版本已不是這次審查的版本。 */
+    stale?: { current: number | null; reviewed: number };
+  };
 
 /**
- * `show` 用：最新一筆 review.completed。envelope 與原始報表都必須存在、hash 與 event 記錄的一致，
- * 且 envelope 綁定的正是那份報表；任何一項不符都是 REVIEW_ARTIFACT_INVALID，不得顯示成成功。
+ * `show` 用：最新一筆 review 事件（review.completed 或 review.failed）。較早的成功不得蓋過最新的失敗。
+ * 成功時，envelope 與原始報表都必須存在、hash 與 event 記錄的一致，且 envelope 綁定的正是那份報表；
+ * 任何一項不符都是 REVIEW_ARTIFACT_INVALID，不得顯示成成功。
  */
 export function latestReview(store: Store, workId: string): LatestReview {
-  const event = store.events(workId).filter((e) => e.type === 'review.completed').at(-1);
+  const event = store.events(workId).filter((e) => e.type === 'review.completed' || e.type === 'review.failed').at(-1);
   if (!event) return { status: 'none' };
   const invalid = (reason: string): LatestReview => ({ status: 'invalid', reason });
   let data: Record<string, unknown>;
-  try { data = JSON.parse(event.data) as Record<string, unknown>; } catch { return invalid('review.completed event is not JSON'); }
+  try { data = JSON.parse(event.data) as Record<string, unknown>; } catch { return invalid(`${event.type} event is not JSON`); }
   const field = (key: string): string | null => typeof data[key] === 'string' ? data[key] : null;
+  if (event.type === 'review.failed') {
+    const code = field('code');
+    if (!code) return invalid('review.failed event has no code');
+    return { status: 'failed', code, exitCode: typeof data.exitCode === 'number' ? data.exitCode : null, detail: field('detail') ?? '' };
+  }
 
   const verify = (label: string, idKey: string, hashKey: string): Buffer | string => {
     const id = field(idKey);
@@ -413,5 +424,9 @@ export function latestReview(store: Store, workId: string): LatestReview {
     || !Array.isArray(envelope.humanReview) || !Array.isArray(envelope.notSelected)) {
     return invalid('envelope does not match the review.completed event');
   }
-  return { status: 'valid', envelope, envelopeSha256: field('envelopeSha256')!, reportSha256: field('reportSha256')! };
+  const current = store.getWork(workId)?.currentContractVersion ?? null;
+  return {
+    status: 'valid', envelope, envelopeSha256: field('envelopeSha256')!, reportSha256: field('reportSha256')!,
+    ...(current !== envelope.contractVersion ? { stale: { current, reviewed: envelope.contractVersion } } : {}),
+  };
 }

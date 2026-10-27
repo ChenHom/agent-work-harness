@@ -715,3 +715,58 @@ test('L5：resultTree 算不出來（SHA-256 repo）時 Attempt 仍可 SUCCESS�
   commit(c.repo);
   assertFailed(c, await review(c, 'a'.repeat(40)), 2, 'ATTEMPT_RESULT_UNRECORDED');
 });
+
+test('L2：人看的 review 輸出與 show 跳脫報表字串裡的控制字元（C0、DEL、C1，含 ESC 與換行）', { skip }, async () => {
+  const odd = 'src/\x1b[31mred.txt';
+  const c = await attempt({ agent: (repo) => {
+    writeFileSync(join(repo, 'src/a.txt'), 'ok\n');
+    writeFileSync(join(repo, odd), 'x\n');
+  } });
+  assert.equal(c.outcome, 'SUCCESS');
+  const head = commit(c.repo);
+  const report = reviewerReportFor([
+    { path: 'src/a.txt', human: true, reasons: ['X\x1b[2K\r\n(none)\x7f\u009b'] },
+    { path: odd, human: false, reasons: [] },
+  ], { base: '__BASE__', head: '__HEAD__' });
+  docker.configure({ run: 'report', reportText: JSON.stringify(report) });
+  const result = await review(c, head);
+  assert.equal(result.code, 5, result.stderr);
+  const shown = await cli(c.policy, ['show', c.workId]);
+  for (const output of [result.stdout, shown.stdout.slice(shown.stdout.indexOf('[review]'))]) {
+    assert.match(output, /^- src\/a\.txt: X\\x1b\[2K\\x0d\\x0a\(none\)\\x7f\\x9b$/m);
+    assert.match(output, /^- src\/\\x1b\[31mred\.txt$/m);
+    assert.doesNotMatch(output, /[\x00-\x09\x0b-\x1f\x7f-\x9f]/, '除了行尾的換行，不得有任何控制字元');
+  }
+
+  // 失敗時 stderr 的 detail（例如 container stderr 的結尾）也一樣
+  docker.configure({ run: 'exit', exitCode: 2, stderr: 'boom\x1b[2K\x9b\n' });
+  const failed = await review(c, head);
+  assert.equal(failed.code, 3);
+  assert.match(failed.stderr, /^REVIEW_RUNNER_FAILED: reviewer container exit 2: boom\\x1b\[2K\\x9b$/m);
+});
+
+test('L1：show 顯示最新一筆 review 事件：失敗時顯示代碼；contract 改版後的成功結果標 STALE', { skip }, async () => {
+  const c = await attempt();
+  const head = commit(c.repo);
+  const block = async (): Promise<string> => {
+    const shown = await cli(c.policy, ['show', c.workId]);
+    return shown.stdout.slice(shown.stdout.indexOf('[review]'));
+  };
+  docker.configure({ run: 'report', reportText: reportText('human') });
+  assert.equal((await review(c, head)).code, 5);
+  assert.match(await block(), /^\[review\]\nstatus: HUMAN_REVIEW_REQUIRED$/m);
+
+  docker.configure({ run: 'hang' });
+  assert.equal((await review(c, head, [], { ...c.policy, reviewTimeoutMs: 300 })).code, 3);
+  const failed = await block();
+  assert.match(failed, /^\[review\]\nFAILED REVIEW_TIMEOUT \(exit 3\): reviewer exceeded 300 ms/m);
+  assert.doesNotMatch(failed, /^status: /m, '較早的成功結果不得蓋過最新的失敗');
+
+  docker.configure({ run: 'report', reportText: reportText('not-selected') });
+  assert.equal((await review(c, head)).code, 0);
+  assert.match(await block(), /^\[review\]\nstatus: NO_HUMAN_REVIEW$/m);
+
+  assert.equal((await cli(c.policy, ['amend', c.workId, '改成另一個目標'])).code, 0);
+  const stale = await block();
+  assert.match(stale, /^\[review\]\nSTALE: work contract is now v2; this review is for v1\nstatus: NO_HUMAN_REVIEW$/m);
+});

@@ -4,6 +4,7 @@ import type {
 } from './types.ts';
 import type { DurableWorkflowSnapshot } from './durable/contracts.ts';
 import type { ReviewEnvelope, ReviewedFile } from './review/report.ts';
+import type { LatestReview } from './review/review.ts';
 
 export function formatWorkListRow(work: Work, outcome: Outcome | null): string {
   return `${work.id}  ${work.state.padEnd(12)} ${work.repositoryId.padEnd(16)} ${work.title}  outcome=${outcome ?? '-'}`;
@@ -87,10 +88,19 @@ export function formatDurableSnapshot(snapshot: DurableWorkflowSnapshot): string
 
 const reviewedFile = (file: ReviewedFile): string => `- ${file.path}${file.reasons.length ? `: ${file.reasons.join(', ')}` : ''}`;
 
+/**
+ * 來自報表、repository 或外部程序的字串：C0、DEL、C1 控制字元（含 ESC 與換行）改成 `\xNN`，
+ * 終端機不會執行它們，一筆資料也不會偽裝成好幾行輸出。
+ */
+const CONTROL = /[\u0000-\u001f\u007f-\u009f]/g;
+export function escapeControl(text: string): string {
+  return text.replace(CONTROL, (char) => `\\x${char.charCodeAt(0).toString(16).padStart(2, '0')}`);
+}
+
 /** `harness review` 與 `show` 共用。未選入的檔案一律帶 DEV-01 標示，不寫成已驗證安全（C7）。 */
 export function formatReview(envelope: ReviewEnvelope, hashes: { envelopeSha256: string; reportSha256: string }): string[] {
   const checks = envelope.verification.checks.map((check) => `${check.checkId}=${check.status}`).join(', ') || '(no checks)';
-  return [
+  const lines = [
     `status: ${envelope.status}`,
     `candidate: ${envelope.candidate}  attempt: ${envelope.attemptId}`,
     `base: ${envelope.baseRevision}  resultTree: ${envelope.resultTree}`,
@@ -103,4 +113,18 @@ export function formatReview(envelope: ReviewEnvelope, hashes: { envelopeSha256:
     '機械審查未選入，fact layer 尚未接入（DEV-01）；不代表已驗證安全:',
     ...(envelope.notSelected.length ? envelope.notSelected.map(reviewedFile) : ['(none)']),
   ];
+  return lines.map(escapeControl);
+}
+
+/** `show` 的 [review] 段落：最新一筆 review 事件。 */
+export function formatLatestReview(review: LatestReview): string[] {
+  switch (review.status) {
+    case 'none': return ['(none)'];
+    case 'invalid': return [escapeControl(`REVIEW_ARTIFACT_INVALID: ${review.reason}`)];
+    case 'failed': return [escapeControl(`FAILED ${review.code} (exit ${review.exitCode ?? '?'}): ${review.detail}`)];
+    case 'valid': return [
+      ...(review.stale ? [`STALE: work contract is now v${review.stale.current ?? '?'}; this review is for v${review.stale.reviewed}`] : []),
+      ...formatReview(review.envelope, review),
+    ];
+  }
 }

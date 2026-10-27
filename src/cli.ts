@@ -19,7 +19,7 @@ import { runIsolated } from './evidence/exec.ts';
 import {
   formatContextDropped, formatPreExistingDirty, formatRecoverySession, formatWorkListRow,
   formatBudget, formatCheckpoint, formatCompensation, formatMilestone, formatOperation, formatPlan,
-  formatDurableSnapshot, formatReview, workListEntry,
+  formatDurableSnapshot, escapeControl, formatLatestReview, formatReview, workListEntry,
 } from './cli-format.ts';
 import { latestReview, reviewAttempt } from './review/review.ts';
 import { formatPromptChars } from './response.ts';
@@ -218,7 +218,7 @@ export async function main(
       const result = await reviewAttempt(policy, store!, { workId, attemptId: values.attempt, candidate: values.head },
         { ownership, log });
       if (!('envelope' in result)) {
-        console.error(`${result.exitCode === 2 ? 'BLOCKED ' : ''}${result.code}: ${result.detail}`);
+        console.error(`${result.exitCode === 2 ? 'BLOCKED ' : ''}${result.code}: ${escapeControl(result.detail)}`);
         return result.exitCode;
       }
       if (values.json) console.log(result.envelopeText);
@@ -353,10 +353,7 @@ export async function main(
         for (const session of recoverySessions) console.log(formatRecoverySession(session));
       }
       console.log('\n[review]');
-      const review = latestReview(store!, work.id);
-      if (review.status === 'none') console.log('(none)');
-      else if (review.status === 'invalid') console.log(`REVIEW_ARTIFACT_INVALID: ${review.reason}`);
-      else for (const line of formatReview(review.envelope, review)) console.log(line);
+      for (const line of formatLatestReview(latestReview(store!, work.id))) console.log(line);
       return 0;
     }
 
